@@ -19,36 +19,6 @@ CommandLineHandler.prototype = {
   /* nsICommandLineHandler */
 
   handle: function(cmdLine) {
-    var printDir;
-    while ((printDir = cmdLine.handleFlagWithParam("print-xpcom-dir", false))) {
-      var out = "print-xpcom-dir(\"" + printDir + "\"): ";
-      try {
-        out += Services.dirsvc.get(printDir, Ci.nsIFile).path;
-      }
-      catch (e) {
-        out += "<Not Provided>";
-      }
-
-      dump(out + "\n");
-      Cu.reportError(out);
-    }
-
-    var printDirList;
-    while ((printDirList = cmdLine.handleFlagWithParam("print-xpcom-dirlist", false))) {
-      out = "print-xpcom-dirlist(\"" + printDirList + "\"): ";
-      try {
-        var list = Services.dirsvc.get(printDirList, Ci.nsISimpleEnumerator);
-        while (list.hasMoreElements())
-          out += list.getNext().QueryInterface(Ci.nsIFile).path + ";";
-      }
-      catch (e) {
-        out += "<Not Provided>";
-      }
-
-      dump(out + "\n");
-      Cu.reportError(out);
-    }
-
     // Firefox, in nsBrowserContentHandler, has a more robust handler
     // for the --chrome flag, which tries to correct typos in the URL
     // being loaded.  But we only need to handle loading devtools in a separate
