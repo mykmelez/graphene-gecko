@@ -1,0 +1,3 @@
+component {dd20d954-f2a9-11e5-aeae-782bcb9e2c3f} CommandLineHandler.js
+contract @mozilla.org/graphene/clh;1 {dd20d954-f2a9-11e5-aeae-782bcb9e2c3f}
+category command-line-handler x-graphene @mozilla.org/graphene/clh;1
