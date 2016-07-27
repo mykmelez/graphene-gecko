@@ -8,9 +8,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 
 this.EXPORTED_SYMBOLS = ["Runtime"];
 
-this.Runtime = function Runtime() {};
-
-Runtime.prototype = {
+this.Runtime = {
   start: function(uri) {
     let features = [
       "chrome",
@@ -24,7 +22,7 @@ Runtime.prototype = {
       "titlebar=no",
     ];
 
-    let window = Services.ww.openWindow(null, appURI.spec, "_blank", features.join(","), null);
+    let window = Services.ww.openWindow(null, uri.spec, "_blank", features.join(","), null);
 
     window.addEventListener("mozContentEvent", function(event) {
       switch (event.detail.type) {
@@ -39,6 +37,5 @@ Runtime.prototype = {
         break;
       }
     }, false);
-
   },
 };
