@@ -4,6 +4,7 @@
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
+const { console } = Cu.import("resource://gre/modules/Console.jsm", {});
 Cu.import("resource://gre/modules/Services.jsm");
 
 this.EXPORTED_SYMBOLS = ["Runtime"];
@@ -31,10 +32,19 @@ this.Runtime = {
           break;
         case "minimize-native-window":
           window.minimize();
-        break;
+          break;
         case "toggle-fullscreen-native-window":
           window.fullScreen = !window.fullScreen;
-        break;
+          break;
+        // Warn if we receive an event that isn't supported.  This handles
+        // both named events that Browser.html is known to generate and others
+        // that we don't know about.
+        case "restart":
+        case "clear-cache-and-restart":
+        case "clear-cache-and-reload":
+        default:
+          console.warn(event.detail.type + " event not supported");
+          break;
       }
     }, false);
   },
