@@ -10,15 +10,15 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 function CommandLineHandler() { }
 CommandLineHandler.prototype = {
-  classID: Components.ID("{dd20d954-f2a9-11e5-aeae-782bcb9e2c3f}"),
+  classID: Components.ID("{236b79c3-ab58-446f-abba-4caba4deb337}"),
 
-  /* Ci.nsISupports */
+  /* nsISupports */
 
-  QueryInterface : XPCOMUtils.generateQI([Ci.nsICommandLineHandler]),
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsICommandLineHandler]),
 
-  /* Ci.nsICommandLineHandler */
+  /* nsICommandLineHandler */
 
-  handle : function clh_handle(cmdLine) {
+  handle: function(cmdLine) {
     var printDir;
     while ((printDir = cmdLine.handleFlagWithParam("print-xpcom-dir", false))) {
       var out = "print-xpcom-dir(\"" + printDir + "\"): ";
@@ -141,7 +141,7 @@ CommandLineHandler.prototype = {
     }, false);
   },
 
-  helpInfo : "",
+  helpInfo: "",
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([CommandLineHandler]);
