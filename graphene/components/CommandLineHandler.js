@@ -36,7 +36,7 @@ CommandLineHandler.prototype = {
           return localSchemes.has(uri.scheme);
         };
         if (isLocal(resolvedURI)) {
-          // If the URI is local, we are sure it won't wrongly inherit chrome privs
+          // If the URI is local, we are sure it won't wrongly inherit chrome privs.
           let features = "chrome,dialog=no,all";
           // For the "all" feature to be applied correctly, you must pass an
           // args array with at least one element.
@@ -60,42 +60,31 @@ CommandLineHandler.prototype = {
       appPath = cmdLine.getArgument(0);
     } catch (e) {
       if (e.result == Cr.NS_ERROR_INVALID_ARG) {
-        dump("no app provided\n");
+        dump("error: no app provided\n");
+        Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
+        return;
       } else {
-        dump("found exception " + e + "\n");
+        throw e;
       }
-      Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
-      return;
     }
 
     let appURI = Services.io.newURI(appPath, null, Services.io.newFileURI(cmdLine.workingDirectory));
     dump("Loading app at " + appPath + " with URI " + appURI.spec + "\n");
 
-    // let appBaseDir = cmdLine.resolveFile(appPath);
-    // if (!appBaseDir || !appBaseDir.exists()) {
-    //   dump("App at '" + appPath + "' does not exist!\n");
-    // Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
-
-    //   return;
-    // }
-
-    let url = appURI.spec;
-
-    const DEFAULT_WINDOW_FEATURES = [
-      'chrome',
-      'close',
-      'dialog=no',
-      'extrachrome',
-      'resizable',
-      'scrollbars',
-      'width=1024',
-      'height=740',
-      'titlebar=no',
+    let features = [
+      "chrome",
+      "close",
+      "dialog=no",
+      "extrachrome",
+      "resizable",
+      "scrollbars",
+      "width=1024",
+      "height=740",
+      "titlebar=no",
     ];
 
-    let features = DEFAULT_WINDOW_FEATURES.slice();
+    let window = Services.ww.openWindow(null, appURI.spec, "_blank", features.join(","), null);
 
-    let window = Services.ww.openWindow(null, url, '_blank', features.join(','), null);
     window.addEventListener("mozContentEvent", function(event) {
       switch (event.detail.type) {
         case "shutdown-application":
