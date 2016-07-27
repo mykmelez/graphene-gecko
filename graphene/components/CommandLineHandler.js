@@ -1,14 +1,15 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- /
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
+Cu.import("resource:///modules/Runtime.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-function CommandLineHandler() { }
+function CommandLineHandler() {}
+
 CommandLineHandler.prototype = {
   classID: Components.ID("{236b79c3-ab58-446f-abba-4caba4deb337}"),
 
@@ -17,6 +18,8 @@ CommandLineHandler.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsICommandLineHandler]),
 
   /* nsICommandLineHandler */
+
+  helpInfo: "",
 
   handle: function(cmdLine) {
     // Firefox, in nsBrowserContentHandler, has a more robust handler
@@ -71,36 +74,8 @@ CommandLineHandler.prototype = {
     let appURI = Services.io.newURI(appPath, null, Services.io.newFileURI(cmdLine.workingDirectory));
     dump("Loading app at " + appPath + " with URI " + appURI.spec + "\n");
 
-    let features = [
-      "chrome",
-      "close",
-      "dialog=no",
-      "extrachrome",
-      "resizable",
-      "scrollbars",
-      "width=1024",
-      "height=740",
-      "titlebar=no",
-    ];
-
-    let window = Services.ww.openWindow(null, appURI.spec, "_blank", features.join(","), null);
-
-    window.addEventListener("mozContentEvent", function(event) {
-      switch (event.detail.type) {
-        case "shutdown-application":
-          Services.startup.quit(Services.startup.eAttemptQuit);
-          break;
-        case "minimize-native-window":
-          window.minimize();
-        break;
-        case "toggle-fullscreen-native-window":
-          window.fullScreen = !window.fullScreen;
-        break;
-      }
-    }, false);
+    Runtime.start(appURI);
   },
-
-  helpInfo: "",
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([CommandLineHandler]);
