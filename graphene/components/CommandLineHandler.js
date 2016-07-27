@@ -8,17 +8,6 @@ const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const windowWatcher = Cc['@mozilla.org/embedcomp/window-watcher;1'].getService(Ci.nsIWindowWatcher);
-
-function getDirectoryService() {
-  return Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
-}
-
-function quit() {
-  let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup);
-  appStartup.quit(Ci.nsIAppStartup.eForceQuit);
-}
-
 function CommandLineHandler() { }
 CommandLineHandler.prototype = {
   classID: Components.ID("{dd20d954-f2a9-11e5-aeae-782bcb9e2c3f}"),
@@ -34,7 +23,7 @@ CommandLineHandler.prototype = {
     while ((printDir = cmdLine.handleFlagWithParam("print-xpcom-dir", false))) {
       var out = "print-xpcom-dir(\"" + printDir + "\"): ";
       try {
-        out += getDirectoryService().get(printDir, Ci.nsIFile).path;
+        out += Services.dirsvc.get(printDir, Ci.nsIFile).path;
       }
       catch (e) {
         out += "<Not Provided>";
@@ -48,7 +37,7 @@ CommandLineHandler.prototype = {
     while ((printDirList = cmdLine.handleFlagWithParam("print-xpcom-dirlist", false))) {
       out = "print-xpcom-dirlist(\"" + printDirList + "\"): ";
       try {
-        var list = getDirectoryService().get(printDirList, Ci.nsISimpleEnumerator);
+        var list = Services.dirsvc.get(printDirList, Ci.nsISimpleEnumerator);
         while (list.hasMoreElements())
           out += list.getNext().QueryInterface(Ci.nsIFile).path + ";";
       }
@@ -105,7 +94,7 @@ CommandLineHandler.prototype = {
       } else {
         dump("found exception " + e + "\n");
       }
-      quit();
+      Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
       return;
     }
 
@@ -115,7 +104,8 @@ CommandLineHandler.prototype = {
     // let appBaseDir = cmdLine.resolveFile(appPath);
     // if (!appBaseDir || !appBaseDir.exists()) {
     //   dump("App at '" + appPath + "' does not exist!\n");
-    //   quit();
+    // Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
+
     //   return;
     // }
 
@@ -135,7 +125,7 @@ CommandLineHandler.prototype = {
 
     let features = DEFAULT_WINDOW_FEATURES.slice();
 
-    let window = windowWatcher.openWindow(null, url, '_blank', features.join(','), null);
+    let window = Services.ww.openWindow(null, url, '_blank', features.join(','), null);
     window.addEventListener("mozContentEvent", function(event) {
       switch (event.detail.type) {
         case "shutdown-application":
