@@ -5,78 +5,59 @@
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-const windowWatcher = Cc['@mozilla.org/embedcomp/window-watcher;1'].
-                      getService(Ci.nsIWindowWatcher);
+const windowWatcher = Cc['@mozilla.org/embedcomp/window-watcher;1'].getService(Ci.nsIWindowWatcher);
 
-const nsISupports              = Components.interfaces.nsISupports;
-
-const nsIAppStartup            = Components.interfaces.nsIAppStartup;
-const nsICommandLine           = Components.interfaces.nsICommandLine;
-const nsICommandLineHandler    = Components.interfaces.nsICommandLineHandler;
-const nsISupportsString        = Components.interfaces.nsISupportsString;
-const nsIProperties            = Components.interfaces.nsIProperties;
-const nsIFile                  = Components.interfaces.nsIFile;
-const nsISimpleEnumerator      = Components.interfaces.nsISimpleEnumerator;
-
-const NS_ERROR_INVALID_ARG     = Components.results.NS_ERROR_INVALID_ARG;
-
-function getDirectoryService()
-{
-  return Components.classes["@mozilla.org/file/directory_service;1"]
-                   .getService(nsIProperties);
+function getDirectoryService() {
+  return Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
 }
 
-function quit()
-{
-  let appStartup = Components.classes["@mozilla.org/toolkit/app-startup;1"]
-                             .getService(nsIAppStartup);
-  appStartup.quit(nsIAppStartup.eForceQuit);
+function quit() {
+  let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup);
+  appStartup.quit(Ci.nsIAppStartup.eForceQuit);
 }
 
 function CommandLineHandler() { }
 CommandLineHandler.prototype = {
   classID: Components.ID("{dd20d954-f2a9-11e5-aeae-782bcb9e2c3f}"),
 
-  /* nsISupports */
+  /* Ci.nsISupports */
 
-  QueryInterface : XPCOMUtils.generateQI([nsICommandLineHandler]),
+  QueryInterface : XPCOMUtils.generateQI([Ci.nsICommandLineHandler]),
 
-  /* nsICommandLineHandler */
+  /* Ci.nsICommandLineHandler */
 
   handle : function clh_handle(cmdLine) {
     var printDir;
     while ((printDir = cmdLine.handleFlagWithParam("print-xpcom-dir", false))) {
       var out = "print-xpcom-dir(\"" + printDir + "\"): ";
       try {
-        out += getDirectoryService().get(printDir, nsIFile).path;
+        out += getDirectoryService().get(printDir, Ci.nsIFile).path;
       }
       catch (e) {
         out += "<Not Provided>";
       }
 
       dump(out + "\n");
-      Components.utils.reportError(out);
+      Cu.reportError(out);
     }
 
     var printDirList;
-    while ((printDirList = cmdLine.handleFlagWithParam("print-xpcom-dirlist",
-                                                       false))) {
+    while ((printDirList = cmdLine.handleFlagWithParam("print-xpcom-dirlist", false))) {
       out = "print-xpcom-dirlist(\"" + printDirList + "\"): ";
       try {
-        var list = getDirectoryService().get(printDirList,
-                                             nsISimpleEnumerator);
+        var list = getDirectoryService().get(printDirList, Ci.nsISimpleEnumerator);
         while (list.hasMoreElements())
-          out += list.getNext().QueryInterface(nsIFile).path + ";";
+          out += list.getNext().QueryInterface(Ci.nsIFile).path + ";";
       }
       catch (e) {
         out += "<Not Provided>";
       }
 
       dump(out + "\n");
-      Components.utils.reportError(out);
+      Cu.reportError(out);
     }
 
     // Firefox, in nsBrowserContentHandler, has a more robust handler
@@ -100,8 +81,7 @@ CommandLineHandler.prototype = {
           let features = "chrome,dialog=no,all";
           // For the "all" feature to be applied correctly, you must pass an
           // args array with at least one element.
-          var args = Components.classes["@mozilla.org/supports-array;1"]
-                               .createInstance(Components.interfaces.nsISupportsArray);
+          var args = Cc["@mozilla.org/supports-array;1"].createInstance(Ci.nsISupportsArray);
           args.AppendElement(null);
           Services.ww.openWindow(null, resolvedURI.spec, "_blank", features, args);
           cmdLine.preventDefault = true;
@@ -120,7 +100,7 @@ CommandLineHandler.prototype = {
     try {
       appPath = cmdLine.getArgument(0);
     } catch (e) {
-      if (e.result == NS_ERROR_INVALID_ARG) {
+      if (e.result == Cr.NS_ERROR_INVALID_ARG) {
         dump("no app provided\n");
       } else {
         dump("found exception " + e + "\n");
