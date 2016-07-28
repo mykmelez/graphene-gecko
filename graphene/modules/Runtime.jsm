@@ -46,6 +46,6 @@ this.Runtime = {
           console.warn(event.detail.type + " event not supported");
           break;
       }
-    }, false);
+    }, false, true);
   },
 };
