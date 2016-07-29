@@ -1,4 +1,4 @@
 /*.app/***
 /*.dylib
-/graphene
+/embedding/graphene
 /XUL

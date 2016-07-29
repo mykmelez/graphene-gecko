@@ -607,7 +607,7 @@ imply_option('--enable-project', application)
 def default_project(build_env, help):
     if build_env.topobjdir.endswith('/js/src'):
         return 'js'
-    return 'graphene'
+    return 'embedding/graphene'
 
 option('--enable-project', nargs=1, default=default_project,
        help='Project to build')
