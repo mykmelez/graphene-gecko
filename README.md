@@ -1,7 +1,7 @@
 This is an experimental, B2G-independent reimplementation of Graphene on Gecko.
 
 ```bash
-git clone https://github.com/mykmelez/graphene-gecko
+git clone https://github.com/mykmelez/graphene-gecko.git
 cd graphene-gecko
 
 # If you don't already have the Mozilla build toolchain:
