@@ -23,6 +23,7 @@ this.Runtime = {
       "titlebar=no",
     ];
 
+    this._maybeEnableBrowserElementForURI(uri);
     let window = Services.ww.openWindow(null, uri.spec, "_blank", features.join(","), null);
 
     window.addEventListener("mozContentEvent", function(event) {
@@ -48,4 +49,19 @@ this.Runtime = {
       }
     }, false, true);
   },
+
+  _maybeEnableBrowserElementForURI: function(uri) {
+    if (uri.scheme !== 'https' && uri.scheme !== 'file') {
+      console.warn(`not enabling mozbrowser for non-https/file URL ${uri.spec}`);
+      return;
+    }
+
+    console.log(`enabling mozbrowser for https/file URL ${uri.spec}`);
+    Services.perms.add(uri, "browser", Services.perms.ALLOW_ACTION);
+
+    // TODO: remove permission once BrowserWindow is closed?
+    // Otherwise, if the app gets updated to a version that no longer opens
+    // a BrowserWindow to the URL, the permission will persist unnecessarily.
+  },
+
 };
