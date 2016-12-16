@@ -83,6 +83,11 @@ public:
         return result.succeed();
     }
 
+    static bool getBuiltinClass(JSContext* cx, JS::HandleObject wrapper, const js::Wrapper& baseInstance,
+                                js::ESClass* cls) {
+        return baseInstance.getBuiltinClass(cx, wrapper, cls);
+    }
+
     static const char* className(JSContext* cx, JS::HandleObject wrapper, const js::Wrapper& baseInstance) {
         return baseInstance.className(cx, wrapper);
     }
@@ -101,6 +106,11 @@ public:
     JSObject* getExpandoChain(JS::HandleObject obj);
     bool setExpandoChain(JSContext* cx, JS::HandleObject obj, JS::HandleObject chain);
     bool cloneExpandoChain(JSContext* cx, JS::HandleObject dst, JS::HandleObject src);
+
+protected:
+    // Get the JSClass we should use for our expando object.
+    virtual const JSClass* getExpandoClass(JSContext* cx,
+                                           JS::HandleObject target) const;
 
 private:
     bool expandoObjectMatchesConsumer(JSContext* cx, JS::HandleObject expandoObject,
@@ -186,6 +196,9 @@ public:
     virtual bool resolveOwnProperty(JSContext* cx, const js::Wrapper& jsWrapper, JS::HandleObject wrapper,
                                     JS::HandleObject holder, JS::HandleId id,
                                     JS::MutableHandle<JS::PropertyDescriptor> desc) override;
+
+    bool delete_(JSContext* cx, JS::HandleObject wrapper, JS::HandleId id, JS::ObjectOpResult& result);
+
     bool defineProperty(JSContext* cx, JS::HandleObject wrapper, JS::HandleId id,
                         JS::Handle<JS::PropertyDescriptor> desc,
                         JS::Handle<JS::PropertyDescriptor> existingDesc,
@@ -206,6 +219,10 @@ public:
     virtual JSObject* createHolder(JSContext* cx, JSObject* wrapper) override;
 
     static DOMXrayTraits singleton;
+
+protected:
+    virtual const JSClass* getExpandoClass(JSContext* cx,
+                                           JS::HandleObject target) const override;
 };
 
 class JSXrayTraits : public XrayTraits
@@ -260,12 +277,12 @@ public:
         JS::RootedObject holder(cx, ensureHolder(cx, wrapper));
         JSProtoKey key = getProtoKey(holder);
         if (isPrototype(holder)) {
-            JSProtoKey parentKey = js::ParentKeyForStandardClass(key);
-            if (parentKey == JSProto_Null) {
+            JSProtoKey protoKey = js::InheritanceProtoKeyForStandardClass(key);
+            if (protoKey == JSProto_Null) {
                 protop.set(nullptr);
                 return true;
             }
-            key = parentKey;
+            key = protoKey;
         }
 
         {
@@ -390,6 +407,12 @@ public:
         return JS_WrapObject(cx, protop);
     }
 
+    static bool getBuiltinClass(JSContext* cx, JS::HandleObject wrapper, const js::Wrapper& baseInstance,
+                                js::ESClass* cls) {
+        *cls = js::ESClass::Other;
+        return true;
+    }
+
     static const char* className(JSContext* cx, JS::HandleObject wrapper, const js::Wrapper& baseInstance) {
         return "Opaque";
     }
@@ -458,6 +481,7 @@ class XrayWrapper : public Base {
     virtual bool getOwnEnumerablePropertyKeys(JSContext* cx, JS::Handle<JSObject*> wrapper,
                                               JS::AutoIdVector& props) const override;
 
+    virtual bool getBuiltinClass(JSContext* cx, JS::HandleObject wapper, js::ESClass* cls) const override;
     virtual const char* className(JSContext* cx, JS::HandleObject proxy) const override;
 
     static const XrayWrapper singleton;
@@ -495,7 +519,14 @@ class XrayWrapper : public Base {
 #define SecurityXrayDOM xpc::XrayWrapper<js::CrossCompartmentSecurityWrapper, xpc::DOMXrayTraits>
 #define PermissiveXrayJS xpc::XrayWrapper<js::CrossCompartmentWrapper, xpc::JSXrayTraits>
 #define PermissiveXrayOpaque xpc::XrayWrapper<js::CrossCompartmentWrapper, xpc::OpaqueXrayTraits>
-#define SCSecurityXrayXPCWN xpc::XrayWrapper<js::SameCompartmentSecurityWrapper, xpc::XPCWrappedNativeXrayTraits>
+
+extern template class PermissiveXrayXPCWN;
+extern template class SecurityXrayXPCWN;
+extern template class PermissiveXrayDOM;
+extern template class SecurityXrayDOM;
+extern template class PermissiveXrayJS;
+extern template class PermissiveXrayOpaque;
+extern template class PermissiveXrayXPCWN;
 
 class SandboxProxyHandler : public js::Wrapper {
 public:
@@ -553,6 +584,36 @@ public:
 extern const SandboxCallableProxyHandler sandboxCallableProxyHandler;
 
 class AutoSetWrapperNotShadowing;
+
+/*
+ * Slots for Xray expando objects.  See comments in XrayWrapper.cpp for details
+ * of how these get used; we mostly want the value of JSSLOT_EXPANDO_COUNT here.
+ */
+enum ExpandoSlots {
+    JSSLOT_EXPANDO_NEXT = 0,
+    JSSLOT_EXPANDO_ORIGIN,
+    JSSLOT_EXPANDO_EXCLUSIVE_GLOBAL,
+    JSSLOT_EXPANDO_PROTOTYPE,
+    JSSLOT_EXPANDO_COUNT
+};
+
+extern const JSClassOps XrayExpandoObjectClassOps;
+
+/*
+ * Clear the given slot on all Xray expandos for the given object.
+ *
+ * No-op when called on non-main threads (where Xrays don't exist).
+ */
+void
+ClearXrayExpandoSlots(JSObject* target, size_t slotIndex);
+
+/*
+ * Ensure the given wrapper has an expando object and return it.  This can
+ * return null on failure.  Will only be called when "wrapper" is an Xray for a
+ * DOM object.
+ */
+JSObject*
+EnsureXrayExpandoObject(JSContext* cx, JS::HandleObject wrapper);
 
 } // namespace xpc
 

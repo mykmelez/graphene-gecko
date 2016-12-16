@@ -6,13 +6,9 @@
 
 "use strict";
 
-var Services = require("Services");
 var EventEmitter = require("devtools/shared/event-emitter");
 var Telemetry = require("devtools/client/shared/telemetry");
 var { Task } = require("devtools/shared/task");
-/* eslint-disable mozilla/reject-some-requires */
-var { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
-/* eslint-enable mozilla/reject-some-requires */
 
 /**
  * This object represents replacement for ToolSidebar
@@ -70,12 +66,7 @@ ToolSidebar.prototype = {
   },
 
   get InspectorTabPanel() {
-    if (!this._InspectorTabPanel) {
-      this._InspectorTabPanel =
-        this.React.createFactory(this.browserRequire(
-        "devtools/client/inspector/components/inspector-tab-panel"));
-    }
-    return this._InspectorTabPanel;
+    return this._toolPanel.InspectorTabPanel;
   },
 
   // Rendering
@@ -85,37 +76,67 @@ ToolSidebar.prototype = {
       "devtools/client/shared/components/tabs/tabbar"));
 
     let sidebar = Tabbar({
+      toolbox: this._toolPanel._toolbox,
+      showAllTabsMenu: true,
       onSelect: this.handleSelectionChange.bind(this),
     });
 
     this._tabbar = this.ReactDOM.render(sidebar, this._tabbox);
   },
 
-  addExistingTab: function (id, title, selected) {
-    this._tabbar.addTab(id, title, selected, this.InspectorTabPanel);
-
+  /**
+   * Register a side-panel tab.
+   *
+   * @param {string} tab uniq id
+   * @param {string} title tab title
+   * @param {React.Component} panel component. See `InspectorPanelTab` as an example.
+   * @param {boolean} selected true if the panel should be selected
+   */
+  addTab: function (id, title, panel, selected) {
+    this._tabbar.addTab(id, title, selected, panel);
     this.emit("new-tab-registered", id);
   },
 
   /**
-   * Register a tab. A tab is a document.
+   * Helper API for adding side-panels that use existing DOM nodes
+   * (defined within inspector.xhtml) as the content.
+   *
+   * @param {string} tab uniq id
+   * @param {string} title tab title
+   * @param {boolean} selected true if the panel should be selected
+   */
+  addExistingTab: function (id, title, selected) {
+    let panel = this.InspectorTabPanel({
+      id: id,
+      idPrefix: this.TABPANEL_ID_PREFIX,
+      key: id,
+      title: title,
+    });
+
+    this.addTab(id, title, panel, selected);
+  },
+
+  /**
+   * Helper API for adding side-panels that use existing <iframe> nodes
+   * (defined within inspector.xhtml) as the content.
    * The document must have a title, which will be used as the name of the tab.
    *
    * @param {string} tab uniq id
+   * @param {string} title tab title
    * @param {string} url
+   * @param {boolean} selected true if the panel should be selected
    */
   addFrameTab: function (id, title, url, selected) {
     let panel = this.InspectorTabPanel({
       id: id,
+      idPrefix: this.TABPANEL_ID_PREFIX,
       key: id,
       title: title,
       url: url,
       onMount: this.onSidePanelMounted.bind(this),
     });
 
-    this._tabbar.addTab(id, title, selected, panel);
-
-    this.emit("new-tab-registered", id);
+    this.addTab(id, title, panel, selected);
   },
 
   onSidePanelMounted: function (content, props) {
@@ -302,21 +323,3 @@ ToolSidebar.prototype = {
     this._toolPanel = null;
   })
 };
-
-XPCOMUtils.defineLazyGetter(this, "l10n", function () {
-  let bundle = Services.strings.createBundle(
-    "chrome://devtools/locale/toolbox.properties");
-
-  let l10n = function (name, ...args) {
-    try {
-      if (args.length == 0) {
-        return bundle.GetStringFromName(name);
-      }
-      return bundle.formatStringFromName(name, args, args.length);
-    } catch (err) {
-      console.error(err);
-    }
-    return null;
-  };
-  return l10n;
-});

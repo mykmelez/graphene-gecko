@@ -1,4 +1,6 @@
-
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 <!DOCTYPE HTML>
 <html>
 <!--
@@ -39,7 +41,7 @@ window.onload = Task.async(function* () {
 
     // Test rendering
     const renderedComponent = renderComponent(StyleSheet.rep, { object: gripStub });
-    is(renderedComponent.textContent, "StyleSheet styles.css", "StyleSheet rep has expected text content");
+    is(renderedComponent.textContent, "StyleSheet https://example.com/styles.css", "StyleSheet rep has expected text content");
   } catch(e) {
     ok(false, "Got an error: " + DevToolsUtils.safeErrorString(e));
   } finally {

@@ -2,13 +2,13 @@
 // Selects "open link in new container tab" from the context menu.
 
 function getReferrerTest(aTestNumber) {
-  let test = _referrerTests[aTestNumber];
-  if (test) {
+  let testCase = _referrerTests[aTestNumber];
+  if (testCase) {
     // We want all the referrer tests to fail!
-    test.result = "";
+    testCase.result = "";
   }
 
-  return test;
+  return testCase;
 }
 
 function startNewTabTestCase(aTestNumber) {
@@ -33,7 +33,7 @@ function startNewTabTestCase(aTestNumber) {
 
       let firstContext = menupopup.firstChild;
       is(firstContext.nodeType, Node.ELEMENT_NODE, "We have a first container entry.");
-      ok(firstContext.hasAttribute("usercontextid"), "We have a usercontextid value.");
+      ok(firstContext.hasAttribute("data-usercontextid"), "We have a usercontextid value.");
 
       aContextMenu.addEventListener("popuphidden", function onPopupHidden() {
         aContextMenu.removeEventListener("popuphidden", onPopupHidden);

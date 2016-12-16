@@ -107,36 +107,6 @@ NS_DEFINE_CID(kCategoryManagerCID, NS_CATEGORYMANAGER_CID);
 
 #define UID_STRING_LENGTH 39
 
-#ifdef MOZ_B2G_LOADER
-typedef nsDataHashtable<nsCStringHashKey, bool> XPTIInfosBookType;
-static XPTIInfosBookType* sXPTIInfosBook = nullptr;
-
-static XPTIInfosBookType*
-GetXPTIInfosBook()
-{
-  if (!sXPTIInfosBook) {
-    sXPTIInfosBook = new XPTIInfosBookType;
-  }
-  return sXPTIInfosBook;
-}
-
-static bool
-IsRegisteredXPTIInfo(FileLocation& aFile)
-{
-  nsAutoCString uri;
-  aFile.GetURIString(uri);
-  return GetXPTIInfosBook()->Get(uri);
-}
-
-static void
-MarkRegisteredXPTIInfo(FileLocation& aFile)
-{
-  nsAutoCString uri;
-  aFile.GetURIString(uri);
-  GetXPTIInfosBook()->Put(uri, true);
-}
-#endif /* MOZ_B2G_LOADER */
-
 nsresult
 nsGetServiceFromCategory::operator()(const nsIID& aIID,
                                      void** aInstancePtr) const
@@ -373,11 +343,6 @@ nsComponentManagerImpl::Init()
 
   InitializeStaticModules();
 
-  nsresult rv = mNativeModuleLoader.Init();
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   nsCategoryManager::GetSingleton()->SuppressNotifications(true);
 
   RegisterModule(&kXPCOMModule, nullptr);
@@ -386,46 +351,49 @@ nsComponentManagerImpl::Init()
     RegisterModule((*sStaticModules)[i], nullptr);
   }
 
-  // The overall order in which chrome.manifests are expected to be treated
-  // is the following:
-  // - greDir
-  // - greDir's omni.ja
-  // - appDir
-  // - appDir's omni.ja
+  bool loadChromeManifests = (XRE_GetProcessType() != GeckoProcessType_GPU);
+  if (loadChromeManifests) {
+    // The overall order in which chrome.manifests are expected to be treated
+    // is the following:
+    // - greDir
+    // - greDir's omni.ja
+    // - appDir
+    // - appDir's omni.ja
 
-  InitializeModuleLocations();
-  ComponentLocation* cl = sModuleLocations->AppendElement();
-  nsCOMPtr<nsIFile> lf = CloneAndAppend(greDir,
-                                        NS_LITERAL_CSTRING("chrome.manifest"));
-  cl->type = NS_APP_LOCATION;
-  cl->location.Init(lf);
-
-  RefPtr<nsZipArchive> greOmnijar =
-    mozilla::Omnijar::GetReader(mozilla::Omnijar::GRE);
-  if (greOmnijar) {
-    cl = sModuleLocations->AppendElement();
+    InitializeModuleLocations();
+    ComponentLocation* cl = sModuleLocations->AppendElement();
+    nsCOMPtr<nsIFile> lf = CloneAndAppend(greDir,
+                                          NS_LITERAL_CSTRING("chrome.manifest"));
     cl->type = NS_APP_LOCATION;
-    cl->location.Init(greOmnijar, "chrome.manifest");
-  }
-
-  bool equals = false;
-  appDir->Equals(greDir, &equals);
-  if (!equals) {
-    cl = sModuleLocations->AppendElement();
-    cl->type = NS_APP_LOCATION;
-    lf = CloneAndAppend(appDir, NS_LITERAL_CSTRING("chrome.manifest"));
     cl->location.Init(lf);
-  }
 
-  RefPtr<nsZipArchive> appOmnijar =
-    mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
-  if (appOmnijar) {
-    cl = sModuleLocations->AppendElement();
-    cl->type = NS_APP_LOCATION;
-    cl->location.Init(appOmnijar, "chrome.manifest");
-  }
+    RefPtr<nsZipArchive> greOmnijar =
+      mozilla::Omnijar::GetReader(mozilla::Omnijar::GRE);
+    if (greOmnijar) {
+      cl = sModuleLocations->AppendElement();
+      cl->type = NS_APP_LOCATION;
+      cl->location.Init(greOmnijar, "chrome.manifest");
+    }
 
-  RereadChromeManifests(false);
+    bool equals = false;
+    appDir->Equals(greDir, &equals);
+    if (!equals) {
+      cl = sModuleLocations->AppendElement();
+      cl->type = NS_APP_LOCATION;
+      lf = CloneAndAppend(appDir, NS_LITERAL_CSTRING("chrome.manifest"));
+      cl->location.Init(lf);
+    }
+
+    RefPtr<nsZipArchive> appOmnijar =
+      mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
+    if (appOmnijar) {
+      cl = sModuleLocations->AppendElement();
+      cl->type = NS_APP_LOCATION;
+      cl->location.Init(appOmnijar, "chrome.manifest");
+    }
+
+    RereadChromeManifests(false);
+  }
 
   nsCategoryManager::GetSingleton()->SuppressNotifications(false);
 
@@ -459,11 +427,36 @@ nsComponentManagerImpl::Init()
   return NS_OK;
 }
 
+static bool
+ProcessSelectorMatches(Module::ProcessSelector aSelector)
+{
+  GeckoProcessType type = XRE_GetProcessType();
+  if (type == GeckoProcessType_GPU) {
+    return !!(aSelector & Module::ALLOW_IN_GPU_PROCESS);
+  }
+
+  if (aSelector & Module::MAIN_PROCESS_ONLY) {
+    return type == GeckoProcessType_Default;
+  }
+  if (aSelector & Module::CONTENT_PROCESS_ONLY) {
+    return type == GeckoProcessType_Content;
+  }
+  return true;
+}
+
+static const int kModuleVersionWithSelector = 51;
+
 void
 nsComponentManagerImpl::RegisterModule(const mozilla::Module* aModule,
                                        FileLocation* aFile)
 {
   mLock.AssertNotCurrentThreadOwns();
+
+  if (aModule->mVersion >= kModuleVersionWithSelector &&
+      !ProcessSelectorMatches(aModule->selector))
+  {
+    return;
+  }
 
   {
     // Scope the monitor so that we don't hold it while calling into the
@@ -506,24 +499,6 @@ nsComponentManagerImpl::RegisterModule(const mozilla::Module* aModule,
       nsCategoryManager::GetSingleton()->AddCategoryEntry(entry->category,
                                                           entry->entry,
                                                           entry->value);
-  }
-}
-
-static bool
-ProcessSelectorMatches(Module::ProcessSelector aSelector)
-{
-  if (aSelector == Module::ANY_PROCESS) {
-    return true;
-  }
-
-  GeckoProcessType type = XRE_GetProcessType();
-  switch (aSelector) {
-    case Module::MAIN_PROCESS_ONLY:
-      return type == GeckoProcessType_Default;
-    case Module::CONTENT_PROCESS_ONLY:
-      return type == GeckoProcessType_Content;
-    default:
-      MOZ_CRASH("invalid process aSelector");
   }
 }
 
@@ -652,42 +627,14 @@ nsComponentManagerImpl::ManifestBinaryComponent(ManifestProcessingContext& aCx,
                                                 int aLineNo,
                                                 char* const* aArgv)
 {
-  if (aCx.mFile.IsZip()) {
-    NS_WARNING("Cannot load binary components from a jar.");
-    LogMessageWithContext(aCx.mFile, aLineNo,
-                          "Cannot load binary components from a jar.");
-    return;
-  }
-
-  FileLocation f(aCx.mFile, aArgv[0]);
-  nsCString uri;
-  f.GetURIString(uri);
-
-  if (mKnownModules.Get(uri)) {
-    NS_WARNING("Attempting to register a binary component twice.");
-    LogMessageWithContext(aCx.mFile, aLineNo,
-                          "Attempting to register a binary component twice.");
-    return;
-  }
-
-  const mozilla::Module* m = mNativeModuleLoader.LoadModule(f);
-  // The native module loader should report an error here, we don't have to
-  if (!m) {
-    return;
-  }
-
-  RegisterModule(m, &f);
+  LogMessageWithContext(aCx.mFile, aLineNo,
+                        "Binary XPCOM components are no longer supported.");
+  return;
 }
 
 static void
 DoRegisterXPT(FileLocation& aFile)
 {
-#ifdef MOZ_B2G_LOADER
-  if (IsRegisteredXPTIInfo(aFile)) {
-    return;
-  }
-#endif
-
   uint32_t len;
   FileLocation::Data data;
   UniquePtr<char[]> buf;
@@ -701,9 +648,6 @@ DoRegisterXPT(FileLocation& aFile)
   }
   if (NS_SUCCEEDED(rv)) {
     XPTInterfaceInfoManager::GetSingleton()->RegisterBuffer(buf.get(), len);
-#ifdef MOZ_B2G_LOADER
-    MarkRegisteredXPTIInfo(aFile);
-#endif
   } else {
     nsCString uri;
     aFile.GetURIString(uri);
@@ -777,7 +721,7 @@ nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
   *permanentCID = cid;
 
   PL_ARENA_ALLOCATE(place, &mArena, sizeof(mozilla::Module::CIDEntry));
-  mozilla::Module::CIDEntry* e = new (place) mozilla::Module::CIDEntry();
+  auto* e = new (place) mozilla::Module::CIDEntry();
   e->cid = permanentCID;
 
   f = new nsFactoryEntry(e, km);
@@ -911,13 +855,6 @@ nsresult nsComponentManagerImpl::Shutdown(void)
 
   delete sStaticModules;
   delete sModuleLocations;
-#ifdef MOZ_B2G_LOADER
-  delete sXPTIInfosBook;
-  sXPTIInfosBook = nullptr;
-#endif
-
-  // Unload libraries
-  mNativeModuleLoader.UnloadLibraries();
 
   // delete arena for strings and small objects
   PL_FinishArenaPool(&mArena);
@@ -1754,7 +1691,7 @@ nsComponentManagerImpl::EnumerateCIDs(nsISimpleEnumerator** aEnumerator)
 NS_IMETHODIMP
 nsComponentManagerImpl::EnumerateContractIDs(nsISimpleEnumerator** aEnumerator)
 {
-  nsTArray<nsCString>* array = new nsTArray<nsCString>;
+  auto* array = new nsTArray<nsCString>;
   for (auto iter = mContractIDs.Iter(); !iter.Done(); iter.Next()) {
     const nsACString& contract = iter.Key();
     array->AppendElement(contract);
@@ -1800,10 +1737,12 @@ NS_IMETHODIMP
 nsComponentManagerImpl::CollectReports(nsIHandleReportCallback* aHandleReport,
                                        nsISupports* aData, bool aAnonymize)
 {
-  return MOZ_COLLECT_REPORT("explicit/xpcom/component-manager",
-                            KIND_HEAP, UNITS_BYTES,
-                            SizeOfIncludingThis(ComponentManagerMallocSizeOf),
-                            "Memory used for the XPCOM component manager.");
+  MOZ_COLLECT_REPORT(
+    "explicit/xpcom/component-manager", KIND_HEAP, UNITS_BYTES,
+    SizeOfIncludingThis(ComponentManagerMallocSizeOf),
+    "Memory used for the XPCOM component manager.");
+
+  return NS_OK;
 }
 
 size_t
@@ -1842,7 +1781,6 @@ nsComponentManagerImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
   // - mMon
   // - sStaticModules' entries
   // - sModuleLocations' entries
-  // - mNativeModuleLoader
   // - mKnownStaticModules' entries?
   // - mKnownModules' keys and values?
 
@@ -1865,8 +1803,8 @@ nsFactoryEntry::nsFactoryEntry(const nsCID& aCID, nsIFactory* aFactory)
   , mModule(nullptr)
   , mFactory(aFactory)
 {
-  mozilla::Module::CIDEntry* e = new mozilla::Module::CIDEntry();
-  nsCID* cid = new nsCID;
+  auto* e = new mozilla::Module::CIDEntry();
+  auto* cid = new nsCID;
   *cid = aCID;
   e->cid = cid;
   mCIDEntry = e;
@@ -2018,7 +1956,6 @@ nsComponentManagerImpl::RemoveBootstrappedManifestLocation(nsIFile* aLocation)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIFile> manifest;
   nsString path;
   nsresult rv = aLocation->GetPath(path);
   if (NS_FAILED(rv)) {
@@ -2071,52 +2008,6 @@ nsComponentManagerImpl::GetManifestLocations(nsIArray** aLocations)
   locations.forget(aLocations);
   return NS_OK;
 }
-
-#ifdef MOZ_B2G_LOADER
-
-/* static */
-void
-nsComponentManagerImpl::XPTOnlyManifestManifest(
-    XPTOnlyManifestProcessingContext&  aCx, int aLineNo, char* const* aArgv)
-{
-  char* file = aArgv[0];
-  FileLocation f(aCx.mFile, file);
-
-  DoRegisterManifest(NS_APP_LOCATION, f, false, true);
-}
-
-/* static */
-void
-nsComponentManagerImpl::XPTOnlyManifestXPT(
-    XPTOnlyManifestProcessingContext& aCx, int aLineNo, char* const* aArgv)
-{
-  FileLocation f(aCx.mFile, aArgv[0]);
-  DoRegisterXPT(f);
-}
-
-/**
- * To load XPT Interface Information before the component manager is ready.
- *
- * With this function, B2G loader could XPT interface info. as earier
- * as possible to gain benefit of shared memory model of the kernel.
- */
-/* static */ void
-nsComponentManagerImpl::PreloadXPT(nsIFile* aFile)
-{
-  MOZ_ASSERT(!nsComponentManagerImpl::gComponentManager);
-  FileLocation location(aFile, "chrome.manifest");
-
-  DoRegisterManifest(NS_APP_LOCATION, location,
-                     false, true /* aXPTOnly */);
-}
-
-void
-PreloadXPT(nsIFile* aOmnijarFile)
-{
-  nsComponentManagerImpl::PreloadXPT(aOmnijarFile);
-}
-
-#endif /* MOZ_B2G_LOADER */
 
 EXPORT_XPCOM_API(nsresult)
 XRE_AddManifestLocation(NSLocationType aType, nsIFile* aLocation)

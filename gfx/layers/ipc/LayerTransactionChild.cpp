@@ -7,7 +7,7 @@
 
 #include "LayerTransactionChild.h"
 #include "mozilla/gfx/Logging.h"
-#include "mozilla/layers/CompositableClient.h"  // for CompositableChild
+#include "mozilla/layers/CompositableChild.h"
 #include "mozilla/layers/PCompositableChild.h"  // for PCompositableChild
 #include "mozilla/layers/PLayerChild.h"  // for PLayerChild
 #include "mozilla/layers/PImageContainerChild.h"
@@ -34,8 +34,6 @@ LayerTransactionChild::Destroy()
   // When it happens, IPCOpen() is still true.
   // See bug 1004191.
   mDestroyed = true;
-  MOZ_ASSERT(0 == ManagedPLayerChild().Count(),
-             "layers should have been cleaned up by now");
 
   SendShutdown();
 }
@@ -45,7 +43,7 @@ PLayerChild*
 LayerTransactionChild::AllocPLayerChild()
 {
   // we always use the "power-user" ctor
-  NS_RUNTIMEABORT("not reached");
+  MOZ_CRASH("not reached");
   return nullptr;
 }
 
@@ -60,28 +58,20 @@ PCompositableChild*
 LayerTransactionChild::AllocPCompositableChild(const TextureInfo& aInfo)
 {
   MOZ_ASSERT(!mDestroyed);
-  return CompositableClient::CreateIPDLActor();
+  return CompositableChild::CreateActor();
 }
 
 bool
 LayerTransactionChild::DeallocPCompositableChild(PCompositableChild* actor)
 {
-  return CompositableClient::DestroyIPDLActor(actor);
+  CompositableChild::DestroyActor(actor);
+  return true;
 }
 
 void
 LayerTransactionChild::ActorDestroy(ActorDestroyReason why)
 {
   mDestroyed = true;
-#ifdef MOZ_B2G
-  // Due to poor lifetime management of gralloc (and possibly shmems) we will
-  // crash at some point in the future when we get destroyed due to abnormal
-  // shutdown. Its better just to crash here. On desktop though, we have a chance
-  // of recovering.
-  if (why == AbnormalShutdown) {
-    NS_RUNTIMEABORT("ActorDestroy by IPC channel failure at LayerTransactionChild");
-  }
-#endif
 }
 
 } // namespace layers

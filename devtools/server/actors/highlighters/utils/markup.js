@@ -34,9 +34,14 @@ exports.getCSSStyleRules = (...args) =>
   lazyContainer.DOMUtils.getCSSStyleRules(...args);
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const STYLESHEET_URI = "resource://devtools/server/actors/" +
                        "highlighters.css";
+// How high is the infobar (px).
+const INFOBAR_HEIGHT = 34;
+// What's the size of the infobar arrow (px).
+const INFOBAR_ARROW_SIZE = 9;
 
 const _tokens = Symbol("classList/tokens");
 
@@ -117,18 +122,25 @@ function installHelperSheet(win, source, type = "agent") {
 }
 exports.installHelperSheet = installHelperSheet;
 
-function isNodeValid(node) {
-  // Is it null or dead?
+/**
+ * Returns true if a DOM node is "valid", where "valid" means that the node isn't a dead
+ * object wrapper, is still attached to a document, and is of a given type.
+ * @param {DOMNode} node
+ * @param {Number} nodeType Optional, defaults to ELEMENT_NODE
+ * @return {Boolean}
+ */
+function isNodeValid(node, nodeType = Ci.nsIDOMNode.ELEMENT_NODE) {
+  // Is it still alive?
   if (!node || Cu.isDeadWrapper(node)) {
     return false;
   }
 
-  // Is it an element node
-  if (node.nodeType !== node.ELEMENT_NODE) {
+  // Is it of the right type?
+  if (node.nodeType !== nodeType) {
     return false;
   }
 
-  // Is the document inaccessible?
+  // Is its document accessible?
   let doc = node.ownerDocument;
   if (!doc || !doc.defaultView) {
     return false;
@@ -170,8 +182,7 @@ exports.createSVGNode = createSVGNode;
  * @param {Window} This window's document will be used to create the element
  * @param {Object} Options for the node include:
  * - nodeType: the type of node, defaults to "div".
- * - namespace: if passed, doc.createElementNS will be used instead of
- *   doc.creatElement.
+ * - namespace: the namespace to use to create the node, defaults to XHTML namespace.
  * - attributes: a {name:value} object to be used as attributes for the node.
  * - prefix: a string that will be used to prefix the values of the id and class
  *   attributes.
@@ -180,13 +191,9 @@ exports.createSVGNode = createSVGNode;
  */
 function createNode(win, options) {
   let type = options.nodeType || "div";
+  let namespace = options.namespace || XHTML_NS;
 
-  let node;
-  if (options.namespace) {
-    node = win.document.createElementNS(options.namespace, type);
-  } else {
-    node = win.document.createElement(type);
-  }
+  let node = win.document.createElementNS(namespace, type);
 
   for (let name in options.attributes || {}) {
     let value = options.attributes[name];
@@ -231,10 +238,15 @@ function CanvasFrameAnonymousContentHelper(highlighterEnv, nodeBuilder) {
   this.anonymousContentGlobal = Cu.getGlobalForObject(
                                 this.anonymousContentDocument);
 
-  this._insert();
+  // Only try to create the highlighter when the document is loaded,
+  // otherwise, wait for the window-ready event to fire.
+  let doc = this.highlighterEnv.document;
+  if (doc.documentElement && doc.readyState != "uninitialized") {
+    this._insert();
+  }
 
-  this._onNavigate = this._onNavigate.bind(this);
-  this.highlighterEnv.on("navigate", this._onNavigate);
+  this._onWindowReady= this._onWindowReady.bind(this);
+  this.highlighterEnv.on("window-ready", this._onWindowReady);
 
   this.listeners = new Map();
 }
@@ -248,7 +260,7 @@ CanvasFrameAnonymousContentHelper.prototype = {
       // If the current window isn't the one the content was inserted into, this
       // will fail, but that's fine.
     }
-    this.highlighterEnv.off("navigate", this._onNavigate);
+    this.highlighterEnv.off("window-ready", this._onWindowReady);
     this.highlighterEnv = this.nodeBuilder = this._content = null;
     this.anonymousContentDocument = null;
     this.anonymousContentGlobal = null;
@@ -257,13 +269,18 @@ CanvasFrameAnonymousContentHelper.prototype = {
   },
 
   _insert: function () {
-    // Insert the content node only if the page isn't in a XUL window, and if
-    // the document still exists.
-    if (!this.highlighterEnv.document.documentElement ||
-        isXUL(this.highlighterEnv.window)) {
+    let doc = this.highlighterEnv.document;
+    // Wait for DOMContentLoaded before injecting the anonymous content.
+    if (doc.readyState != "interactive" && doc.readyState != "complete") {
+      doc.addEventListener("DOMContentLoaded", this._insert.bind(this),
+                           { once: true });
       return;
     }
-    let doc = this.highlighterEnv.document;
+    // Reject XUL documents. Check that after DOMContentLoaded as we query
+    // documentElement which is only available after this event.
+    if (isXUL(this.highlighterEnv.window)) {
+      return;
+    }
 
     // For now highlighters.css is injected in content as a ua sheet because
     // <style scoped> doesn't work inside anonymous content (see bug 1086532).
@@ -281,7 +298,7 @@ CanvasFrameAnonymousContentHelper.prototype = {
     this._content = doc.insertAnonymousContent(node);
   },
 
-  _onNavigate: function (e, {isTopLevel}) {
+  _onWindowReady: function (e, {isTopLevel}) {
     if (isTopLevel) {
       this._removeAllListeners();
       this._insert();
@@ -517,3 +534,74 @@ CanvasFrameAnonymousContentHelper.prototype = {
   }
 };
 exports.CanvasFrameAnonymousContentHelper = CanvasFrameAnonymousContentHelper;
+
+/**
+ * Move the infobar to the right place in the highlighter. This helper method is utilized
+ * in both css-grid.js and box-model.js to help position the infobar in an appropriate
+ * space over the highlighted node element or grid area. The infobar is used to display
+ * relevant information about the highlighted item (ex, node or grid name and dimensions).
+ *
+ * This method will first try to position the infobar to top or bottom of the container
+ * such that it has enough space for the height of the infobar. Afterwards, it will try
+ * to horizontally center align with the container element if possible.
+ *
+ * @param  {DOMNode} container
+ *         The container element which will be used to position the infobar.
+ * @param  {Object} bounds
+ *         The content bounds of the container element.
+ * @param  {Window} win
+ *         The window object.
+ */
+function moveInfobar(container, bounds, win) {
+  let winHeight = win.innerHeight * getCurrentZoom(win);
+  let winWidth = win.innerWidth * getCurrentZoom(win);
+  let winScrollY = win.scrollY;
+
+  // Ensure that containerBottom and containerTop are at least zero to avoid
+  // showing tooltips outside the viewport.
+  let containerBottom = Math.max(0, bounds.bottom) + INFOBAR_ARROW_SIZE;
+  let containerTop = Math.min(winHeight, bounds.top);
+
+  // Can the bar be above the node?
+  let top;
+  if (containerTop < INFOBAR_HEIGHT) {
+    // No. Can we move the bar under the node?
+    if (containerBottom + INFOBAR_HEIGHT > winHeight) {
+      // No. Let's move it inside. Can we show it at the top of the element?
+      if (containerTop < winScrollY) {
+        // No. Window is scrolled past the top of the element.
+        top = 0;
+      } else {
+        // Yes. Show it at the top of the element
+        top = containerTop;
+      }
+      container.setAttribute("position", "overlap");
+    } else {
+      // Yes. Let's move it under the node.
+      top = containerBottom;
+      container.setAttribute("position", "bottom");
+    }
+  } else {
+    // Yes. Let's move it on top of the node.
+    top = containerTop - INFOBAR_HEIGHT;
+    container.setAttribute("position", "top");
+  }
+
+  // Align the bar with the box's center if possible.
+  let left = bounds.right - bounds.width / 2;
+  // Make sure the while infobar is visible.
+  let buffer = 100;
+  if (left < buffer) {
+    left = buffer;
+    container.setAttribute("hide-arrow", "true");
+  } else if (left > winWidth - buffer) {
+    left = winWidth - buffer;
+    container.setAttribute("hide-arrow", "true");
+  } else {
+    container.removeAttribute("hide-arrow");
+  }
+
+  let style = "top:" + top + "px;left:" + left + "px;";
+  container.setAttribute("style", style);
+}
+exports.moveInfobar = moveInfobar;

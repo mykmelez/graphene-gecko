@@ -56,9 +56,17 @@ namespace IPC {
 //
 // When creating a child subprocess, the parent side of the fork
 // arranges it such that the initial control channel ends up on the
-// magic file descriptor kClientChannelFd in the child.  Future
+// magic file descriptor gClientChannelFd in the child.  Future
 // connections (file descriptors) can then be passed via that
 // connection via sendmsg().
+//
+// On Android, child processes are created as a service instead of
+// forking the parent process. The Android Binder service is used to
+// transport the IPC channel file descriptor to the child process.
+// So rather than re-mapping the file descriptor to a known value,
+// the received channel file descriptor is set by calling
+// SetClientChannelFd before gecko has been initialized and started
+// in the child process.
 
 //------------------------------------------------------------------------------
 namespace {
@@ -66,7 +74,7 @@ namespace {
 // The PipeMap class works around this quirk related to unit tests:
 //
 // When running as a server, we install the client socket in a
-// specific file descriptor number (@kClientChannelFd). However, we
+// specific file descriptor number (@gClientChannelFd). However, we
 // also have to support the case where we are running unittests in the
 // same process.  (We do not support forking without execing.)
 //
@@ -74,7 +82,7 @@ namespace {
 //   The IPC server object will install a mapping in PipeMap from the
 //   name which it was given to the client pipe. When forking the client, the
 //   GetClientFileDescriptorMapping will ensure that the socket is installed in
-//   the magic slot (@kClientChannelFd). The client will search for the
+//   the magic slot (@gClientChannelFd). The client will search for the
 //   mapping, but it won't find any since we are in a new process. Thus the
 //   magic fd number is returned. Once the client connects, the server will
 //   close its copy of the client socket and remove the mapping.
@@ -133,7 +141,14 @@ class PipeMap {
 
 // This is the file descriptor number that a client process expects to find its
 // IPC socket.
-static const int kClientChannelFd = 3;
+static int gClientChannelFd =
+#if defined(MOZ_WIDGET_ANDROID)
+// On android the fd is set at the time of child creation.
+-1
+#else
+3
+#endif // defined(MOZ_WIDGET_ANDROID)
+;
 
 // Used to map a channel name to the equivalent FD # in the client process.
 int ChannelNameToClientFD(const std::string& channel_id) {
@@ -144,7 +159,7 @@ int ChannelNameToClientFD(const std::string& channel_id) {
 
   // If we don't find an entry, we assume that the correct value has been
   // inserted in the magic slot.
-  return kClientChannelFd;
+  return gClientChannelFd;
 }
 
 //------------------------------------------------------------------------------
@@ -165,6 +180,12 @@ bool SetCloseOnExec(int fd) {
 }  // namespace
 //------------------------------------------------------------------------------
 
+#if defined(MOZ_WIDGET_ANDROID)
+void Channel::SetClientChannelFd(int fd) {
+  gClientChannelFd = fd;
+}
+#endif // defined(MOZ_WIDGET_ANDROID)
+
 Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id, Mode mode,
                                   Listener* listener)
     : factory_(this) {
@@ -175,7 +196,11 @@ Channel::ChannelImpl::ChannelImpl(const std::wstring& channel_id, Mode mode,
     CHROMIUM_LOG(WARNING) << "Unable to create pipe named \"" << channel_id <<
                              "\" in " << (mode == MODE_SERVER ? "server" : "client") <<
                              " mode error(" << strerror(errno) << ").";
+    closed_ = true;
+    return;
   }
+
+  EnqueueHelloMessage();
 }
 
 Channel::ChannelImpl::ChannelImpl(int fd, Mode mode, Listener* listener)
@@ -216,11 +241,13 @@ bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
   if (mode == MODE_SERVER) {
     int pipe_fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipe_fds) != 0) {
+      mozilla::ipc::AnnotateCrashReportWithErrno("IpcCreatePipeSocketPairErrno", errno);
       return false;
     }
     // Set both ends to be non-blocking.
     if (fcntl(pipe_fds[0], F_SETFL, O_NONBLOCK) == -1 ||
         fcntl(pipe_fds[1], F_SETFL, O_NONBLOCK) == -1) {
+      mozilla::ipc::AnnotateCrashReportWithErrno("IpcCreatePipeFcntlErrno", errno);
       HANDLE_EINTR(close(pipe_fds[0]));
       HANDLE_EINTR(close(pipe_fds[1]));
       return false;
@@ -228,6 +255,7 @@ bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
 
     if (!SetCloseOnExec(pipe_fds[0]) ||
         !SetCloseOnExec(pipe_fds[1])) {
+      mozilla::ipc::AnnotateCrashReportWithErrno("IpcCreatePipeCloExecErrno", errno);
       HANDLE_EINTR(close(pipe_fds[0]));
       HANDLE_EINTR(close(pipe_fds[1]));
       return false;
@@ -245,8 +273,7 @@ bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
     waiting_connect_ = false;
   }
 
-  // Create the Hello message to be sent when Connect is called
-  return EnqueueHelloMessage();
+  return true;
 }
 
 /**
@@ -260,8 +287,7 @@ void Channel::ChannelImpl::ResetFileDescriptor(int fd) {
 
 bool Channel::ChannelImpl::EnqueueHelloMessage() {
   mozilla::UniquePtr<Message> msg(new Message(MSG_ROUTING_NONE,
-                                              HELLO_MESSAGE_TYPE,
-                                              IPC::Message::PRIORITY_NORMAL));
+                                              HELLO_MESSAGE_TYPE));
   if (!msg->WriteInt(base::GetCurrentProcId())) {
     Close();
     return false;
@@ -497,8 +523,7 @@ bool Channel::ChannelImpl::ProcessIncomingMessages() {
         // Send a message to the other side, indicating that we are now
         // responsible for closing the descriptor.
         Message *fdAck = new Message(MSG_ROUTING_NONE,
-                                     RECEIVED_FDS_MESSAGE_TYPE,
-                                     IPC::Message::PRIORITY_NORMAL);
+                                     RECEIVED_FDS_MESSAGE_TYPE);
         DCHECK(m.fd_cookie() != 0);
         fdAck->set_fd_cookie(m.fd_cookie());
         OutputQueuePush(fdAck);
@@ -576,7 +601,12 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
         int[FileDescriptorSet::MAX_DESCRIPTORS_PER_MESSAGE]));
     char buf[tmp];
 
-    if (partial_write_iter_.isNothing() &&
+    if (partial_write_iter_.isNothing()) {
+      Pickle::BufferList::IterImpl iter(msg->Buffers());
+      partial_write_iter_.emplace(iter);
+    }
+
+    if (partial_write_iter_.value().Data() == msg->Buffers().Start() &&
         !msg->file_descriptor_set()->empty()) {
       // This is the first chunk of a message which has descriptors to send
       struct cmsghdr *cmsg;
@@ -607,11 +637,6 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
     struct iovec iov[kMaxIOVecSize];
     size_t iov_count = 0;
     size_t amt_to_write = 0;
-
-    if (partial_write_iter_.isNothing()) {
-      Pickle::BufferList::IterImpl iter(msg->Buffers());
-      partial_write_iter_.emplace(iter);
-    }
 
     // How much of this message have we written so far?
     Pickle::BufferList::IterImpl iter = partial_write_iter_.value();
@@ -758,7 +783,7 @@ void Channel::ChannelImpl::GetClientFileDescriptorMapping(int *src_fd,
                                                           int *dest_fd) const {
   DCHECK(mode_ == MODE_SERVER);
   *src_fd = client_pipe_;
-  *dest_fd = kClientChannelFd;
+  *dest_fd = gClientChannelFd;
 }
 
 void Channel::ChannelImpl::CloseClientFileDescriptor() {
@@ -800,12 +825,6 @@ void Channel::ChannelImpl::CloseDescriptors(uint32_t pending_fd_id)
 
 void Channel::ChannelImpl::OutputQueuePush(Message* msg)
 {
-#ifdef MOZ_TASK_TRACER
-  // Save the current TaskTracer info into the message header.
-  GetCurTraceInfo(&msg->header()->source_event_id,
-                  &msg->header()->parent_task_id,
-                  &msg->header()->source_event_type);
-#endif
   output_queue_.push(msg);
   output_queue_length_++;
 }

@@ -3,7 +3,13 @@ const DIRECTORY_PATH = "/browser/toolkit/components/passwordmgr/test/browser/";
 Cu.import("resource://testing-common/LoginTestUtils.jsm", this);
 Cu.import("resource://testing-common/ContentTaskUtils.jsm", this);
 
+add_task(function* common_initialize() {
+  yield SpecialPowers.pushPrefEnv({"set": [["signon.rememberSignons", true]]});
+});
+
 registerCleanupFunction(function* cleanup_removeAllLoginsAndResetRecipes() {
+  yield SpecialPowers.popPrefEnv();
+
   Services.logins.removeAllLogins();
 
   let recipeParent = LoginTestUtils.recipes.getRecipeParent();
@@ -11,7 +17,7 @@ registerCleanupFunction(function* cleanup_removeAllLoginsAndResetRecipes() {
     // No need to reset the recipes if the recipe module wasn't even loaded.
     return;
   }
-  yield recipeParent.then(recipeParent => recipeParent.reset());
+  yield recipeParent.then(recipeParentResult => recipeParentResult.reset());
 });
 
 /**
@@ -67,7 +73,7 @@ function checkOnlyLoginWasUsedTwice({ justChanged }) {
 // Begin popup notification (doorhanger) functions //
 
 const REMEMBER_BUTTON = 0;
-const NEVER_BUTTON = 1;
+const NEVER_BUTTON = 2;
 
 const CHANGE_BUTTON = 0;
 const DONT_CHANGE_BUTTON = 1;
@@ -88,7 +94,7 @@ function getCaptureDoorhanger(aKind, popupNotifications = PopupNotifications) {
     if (aKind == "password-change") {
       is(notification.mainAction.label, "Update", "Main action label matches update doorhanger.");
     } else if (aKind == "password-save") {
-      is(notification.mainAction.label, "Remember", "Main action label matches save doorhanger.");
+      is(notification.mainAction.label, "Save", "Main action label matches save doorhanger.");
     }
   }
   return notification;
@@ -112,10 +118,29 @@ function clickDoorhangerButton(aPopup, aButtonIndex) {
   if (aButtonIndex == 0) {
     ok(true, "Triggering main action");
     notification.button.doCommand();
+  } else if (aButtonIndex == 1) {
+    ok(true, "Triggering secondary action");
+    notification.secondaryButton.doCommand();
   } else if (aButtonIndex <= aPopup.secondaryActions.length) {
     ok(true, "Triggering secondary action " + aButtonIndex);
-    notification.childNodes[aButtonIndex].doCommand();
+    notification.childNodes[aButtonIndex - 1].doCommand();
   }
+}
+
+/**
+ * Checks the doorhanger's username and password.
+ *
+ * @param {String} username The username.
+ * @param {String} password The password.
+ */
+function* checkDoorhangerUsernamePassword(username, password) {
+  yield BrowserTestUtils.waitForCondition(() => {
+    return document.getElementById("password-notification-username").value == username;
+  }, "Wait for nsLoginManagerPrompter writeDataToUI()");
+  is(document.getElementById("password-notification-username").value, username,
+     "Check doorhanger username");
+  is(document.getElementById("password-notification-password").value, password,
+     "Check doorhanger password");
 }
 
 // End popup notification (doorhanger) functions //

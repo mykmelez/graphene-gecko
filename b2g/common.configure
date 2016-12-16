@@ -9,6 +9,7 @@
 option(env='MOZTTDIR', nargs=1, help='Path to truetype fonts for B2G')
 
 @depends('MOZTTDIR')
+@imports('os')
 def mozttdir(value):
     if value:
         path = value[0]
@@ -25,5 +26,7 @@ def package_moztt(value):
 
 set_define('PACKAGE_MOZTT', package_moztt)
 
+imply_option('MOZ_ENABLE_WARNINGS_AS_ERRORS',
+             depends(target)(lambda t: t.os == 'Android'), reason='--target')
 
 include('../toolkit/moz.configure')

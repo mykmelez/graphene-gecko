@@ -11,7 +11,6 @@
    * (eg. using ctrl+shift+X) */
   margin-inline-start: -23px;
   margin-inline-end: -16px;
-  padding: 1px;
 }
 
 .autocomplete-textbox-container {
@@ -124,21 +123,46 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
 }
 
 .search-panel-current-engine {
-  border-top: none !important;
   -moz-box-align: center;
 }
 
+/**
+ * The borders of the various elements are specified as follows.
+ *
+ * The current engine always has a bottom border.
+ * The search results never have a border.
+ *
+ * When the search results are not collapsed:
+ * - The elements underneath the search results all have a top border.
+ *
+ * When the search results are collapsed:
+ * - The elements underneath the search results all have a bottom border, except
+ *   the lowest one: search-setting-button.
+ */
+
 .search-panel-current-engine {
-  border-bottom: none;
+  border-top: none !important;
+  border-bottom: 1px solid var(--panel-separator-color) !important;
 }
 
-.search-panel-tree {
-  border-top: 1px solid #ccc !important;
+.search-panel-tree[collapsed=true] + .search-one-offs > .search-panel-header,
+.search-panel-tree[collapsed=true] + .search-one-offs > .search-panel-one-offs,
+.search-panel-tree[collapsed=true] + .search-one-offs > vbox > .addengine-item:first-of-type {
+  border-top: none !important;
+}
+
+.search-panel-tree[collapsed=true] + .search-one-offs > .searchbar-engine-one-off-item,
+.search-panel-tree[collapsed=true] + .search-one-offs > .search-panel-current-input,
+.search-panel-tree[collapsed=true] + .search-one-offs > .search-panel-one-offs,
+.search-panel-tree[collapsed=true] + .search-one-offs > vbox > .addengine-item:last-of-type {
+  border-bottom: 1px solid var(--panel-separator-color) !important;
 }
 
 .search-panel-header {
   font-weight: normal;
-  border-top: 1px solid rgba(0, 0, 0, 0.2);
+  background-color: var(--arrowpanel-dimmed);
+  border: none;
+  border-top: 1px solid var(--panel-separator-color);
   padding: 3px 5px;
   color: GrayText;
 }
@@ -153,12 +177,12 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
 }
 
 .search-panel-input-value {
-  color: Highlight;
+  color: -moz-fieldtext;
 }
 
 .search-panel-one-offs {
-  margin: 0 -1px !important;
-  border-top: 1px solid rgba(0, 0, 0, 0.2);
+  margin: 0 !important;
+  border-top: 1px solid var(--panel-separator-color);
 }
 
 .searchbar-engine-one-off-item {
@@ -167,12 +191,13 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
   border: none;
   min-width: 48px;
   height: 32px;
-  margin: 0 0;
-  padding: 0 0;
-  background: none;
-  background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAWCAYAAAABxvaqAAAABmJLR0QA/wD/AP+gvaeTAAAAFElEQVQI12NgYGAwZmJgYGCgBwEAHpIAXs+dj/cAAAAASUVORK5CYII=');
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(transparent 15%, var(--panel-separator-color) 15%, var(--panel-separator-color) 85%, transparent 85%);
+  background-size: 1px auto;
   background-repeat: no-repeat;
   background-position: right center;
+  color: GrayText;
 }
 
 .searchbar-engine-one-off-item:-moz-locale-dir(rtl) {
@@ -181,16 +206,25 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
 
 .searchbar-engine-one-off-item:not(.last-row) {
   box-sizing: content-box;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--panel-separator-color);
 }
 
-.searchbar-engine-one-off-item.last-of-row {
+.search-setting-button-compact {
+  border-bottom: none !important;
+}
+
+.search-panel-one-offs:not([compact=true]) > .searchbar-engine-one-off-item.last-of-row,
+.search-panel-one-offs[compact=true] > .searchbar-engine-one-off-item.last-of-row:not(.dummy),
+.search-panel-one-offs[compact=true] > .searchbar-engine-one-off-item.dummy:not(.last-of-row),
+.search-panel-one-offs[compact=true] > .searchbar-engine-one-off-item.last-engine,
+.search-setting-button-compact {
   background-image: none;
 }
 
 .searchbar-engine-one-off-item[selected] {
   background-color: Highlight;
   background-image: none;
+  color: HighlightText;
 }
 
 .searchbar-engine-one-off-item > .button-box {
@@ -224,12 +258,17 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
 }
 
 .addengine-item:first-of-type {
-  border-top: 1px solid rgba(0, 0, 0, 0.2);
+  border-top: 1px solid var(--panel-separator-color);
 }
 
 .addengine-item[selected] {
   background-color: Highlight;
   color: HighlightText;
+}
+
+.addengine-item[type=menu][selected] {
+  color: inherit;
+  background-color: var(--arrowpanel-dimmed-further);
 }
 
 .addengine-icon {
@@ -243,7 +282,8 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
   list-style-image: url("chrome://browser/skin/badge-add-engine.png");
 }
 
-.addengine-item > .button-box > .button-text {
+.addengine-item > .button-box > .button-text,
+.addengine-item[type=menu] > .button-box > .box-inherit > .button-text {
   -moz-box-flex: 1;
   text-align: start;
   padding-inline-start: 10px;
@@ -261,6 +301,12 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
   .addengine-item:not([image]) {
     list-style-image: url("chrome://browser/skin/search-engine-placeholder@2x.png");
   }
+}
+
+.addengine-item[type=menu] > .button-box > .button-menu-dropmarker {
+  display: -moz-box;
+  -moz-appearance: menuarrow !important;
+  list-style-image: none;
 }
 
 .search-panel-tree > .autocomplete-treebody::-moz-tree-cell {
@@ -287,14 +333,16 @@ menuitem[cmd="cmd_clearhistory"][disabled] {
 
 .search-setting-button {
   -moz-appearance: none;
-  border: none;
-  border-top: 1px solid rgba(0, 0, 0, 0.2);
   margin: 0;
   min-height: 32px;
 }
 
 .search-setting-button[selected] {
-  background-color: Highlight;
-  color: HighlightText;
-  border-top-color: #bdbebe;
+  background-color: var(--arrowpanel-dimmed-further);
+}
+
+.search-setting-button-compact > .button-box > .button-icon {
+  list-style-image: url("chrome://browser/skin/gear.svg");
+  filter: url(chrome://global/skin/filters.svg#fill);
+  fill: currentColor;
 }

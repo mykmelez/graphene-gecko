@@ -46,7 +46,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/Telemetry.h"
 
 // Normally, the number of milliseconds that AsyncShutdown waits until
@@ -173,10 +173,9 @@ RunWatchdog(void* arg)
 class PR_CloseDelete
 {
 public:
-  constexpr PR_CloseDelete() {}
+  constexpr PR_CloseDelete() = default;
 
-  PR_CloseDelete(const PR_CloseDelete& aOther)
-  {}
+  PR_CloseDelete(const PR_CloseDelete& aOther) = default;
 
   void operator()(PRFileDesc* aPtr) const
   {
@@ -342,11 +341,9 @@ nsTerminator::SelfInit()
     return NS_ERROR_UNEXPECTED;
   }
 
-  for (size_t i = 0; i < ArrayLength(sShutdownSteps); ++i) {
-    DebugOnly<nsresult> rv = os->AddObserver(this, sShutdownSteps[i].mTopic, false);
-#if defined(DEBUG)
-    NS_WARN_IF(NS_FAILED(rv));
-#endif // defined(DEBUG)
+  for (auto& shutdownStep : sShutdownSteps) {
+    DebugOnly<nsresult> rv = os->AddObserver(this, shutdownStep.mTopic, false);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "AddObserver failed");
   }
 
   return NS_OK;
@@ -509,18 +506,18 @@ nsTerminator::UpdateTelemetry()
   UniquePtr<nsCString> telemetryData(new nsCString());
   telemetryData->AppendLiteral("{");
   size_t fields = 0;
-  for (size_t i = 0; i < ArrayLength(sShutdownSteps); ++i) {
-    if (sShutdownSteps[i].mTicks < 0) {
+  for (auto& shutdownStep : sShutdownSteps) {
+    if (shutdownStep.mTicks < 0) {
       // Ignore this field.
       continue;
     }
     if (fields++ > 0) {
       telemetryData->Append(", ");
     }
-    telemetryData->AppendLiteral("\"");
-    telemetryData->Append(sShutdownSteps[i].mTopic);
-    telemetryData->AppendLiteral("\": ");
-    telemetryData->AppendInt(sShutdownSteps[i].mTicks);
+    telemetryData->AppendLiteral(R"(")");
+    telemetryData->Append(shutdownStep.mTopic);
+    telemetryData->AppendLiteral(R"(": )");
+    telemetryData->AppendInt(shutdownStep.mTicks);
   }
   telemetryData->AppendLiteral("}");
 

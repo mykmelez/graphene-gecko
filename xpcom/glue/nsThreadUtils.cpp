@@ -7,6 +7,7 @@
 #include "nsThreadUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Likely.h"
+#include "mozilla/TimeStamp.h"
 #include "LeakRefPtr.h"
 
 #ifdef MOZILLA_INTERNAL_API
@@ -32,12 +33,41 @@ using namespace mozilla;
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
 
-NS_IMPL_ISUPPORTS(Runnable, nsIRunnable)
+NS_IMPL_ISUPPORTS(IdlePeriod, nsIIdlePeriod)
+
+NS_IMETHODIMP
+IdlePeriod::GetIdlePeriodHint(TimeStamp* aIdleDeadline)
+{
+  *aIdleDeadline = TimeStamp();
+  return NS_OK;
+}
+
+NS_IMPL_ISUPPORTS(Runnable, nsIRunnable, nsINamed)
 
 NS_IMETHODIMP
 Runnable::Run()
 {
   // Do nothing
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+Runnable::GetName(nsACString& aName)
+{
+#ifdef RELEASE_OR_BETA
+  aName.Truncate();
+#else
+  aName.AssignASCII(mName);
+#endif
+  return NS_OK;
+}
+
+nsresult
+Runnable::SetName(const char* aName)
+{
+#ifndef RELEASE_OR_BETA
+  mName = aName;
+#endif
   return NS_OK;
 }
 
@@ -51,18 +81,27 @@ CancelableRunnable::Cancel()
   return NS_OK;
 }
 
+NS_IMPL_ISUPPORTS_INHERITED(IncrementalRunnable, CancelableRunnable,
+                            nsIIncrementalRunnable)
+
+void
+IncrementalRunnable::SetDeadline(TimeStamp aDeadline)
+{
+  // Do nothing
+}
+
 #endif  // XPCOM_GLUE_AVOID_NSPR
 
 //-----------------------------------------------------------------------------
 
-NS_METHOD
+nsresult
 NS_NewThread(nsIThread** aResult, nsIRunnable* aEvent, uint32_t aStackSize)
 {
   nsCOMPtr<nsIThread> thread;
 #ifdef MOZILLA_INTERNAL_API
   nsresult rv =
-    nsThreadManager::get()->nsThreadManager::NewThread(0, aStackSize,
-                                                       getter_AddRefs(thread));
+    nsThreadManager::get().nsThreadManager::NewThread(0, aStackSize,
+                                                      getter_AddRefs(thread));
 #else
   nsresult rv;
   nsCOMPtr<nsIThreadManager> mgr =
@@ -89,11 +128,11 @@ NS_NewThread(nsIThread** aResult, nsIRunnable* aEvent, uint32_t aStackSize)
   return NS_OK;
 }
 
-NS_METHOD
+nsresult
 NS_GetCurrentThread(nsIThread** aResult)
 {
 #ifdef MOZILLA_INTERNAL_API
-  return nsThreadManager::get()->nsThreadManager::GetCurrentThread(aResult);
+  return nsThreadManager::get().nsThreadManager::GetCurrentThread(aResult);
 #else
   nsresult rv;
   nsCOMPtr<nsIThreadManager> mgr =
@@ -105,11 +144,11 @@ NS_GetCurrentThread(nsIThread** aResult)
 #endif
 }
 
-NS_METHOD
+nsresult
 NS_GetMainThread(nsIThread** aResult)
 {
 #ifdef MOZILLA_INTERNAL_API
-  return nsThreadManager::get()->nsThreadManager::GetMainThread(aResult);
+  return nsThreadManager::get().nsThreadManager::GetMainThread(aResult);
 #else
   nsresult rv;
   nsCOMPtr<nsIThreadManager> mgr =
@@ -135,7 +174,7 @@ NS_IsMainThread()
 }
 #endif
 
-NS_METHOD
+nsresult
 NS_DispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent)
 {
   nsresult rv;
@@ -168,14 +207,14 @@ NS_DispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent)
 // It is common to call NS_DispatchToCurrentThread with a newly
 // allocated runnable with a refcount of zero. To keep us from leaking
 // the runnable if the dispatch method fails, we take a death grip.
-NS_METHOD
+nsresult
 NS_DispatchToCurrentThread(nsIRunnable* aEvent)
 {
   nsCOMPtr<nsIRunnable> event(aEvent);
   return NS_DispatchToCurrentThread(event.forget());
 }
 
-NS_METHOD
+nsresult
 NS_DispatchToMainThread(already_AddRefed<nsIRunnable>&& aEvent, uint32_t aDispatchFlags)
 {
   LeakRefPtr<nsIRunnable> event(Move(aEvent));
@@ -195,15 +234,67 @@ NS_DispatchToMainThread(already_AddRefed<nsIRunnable>&& aEvent, uint32_t aDispat
 // likely that the runnable is being dispatched to the main thread
 // because it owns main thread only objects, so it is not safe to
 // release them here.
-NS_METHOD
+nsresult
 NS_DispatchToMainThread(nsIRunnable* aEvent, uint32_t aDispatchFlags)
 {
   nsCOMPtr<nsIRunnable> event(aEvent);
   return NS_DispatchToMainThread(event.forget(), aDispatchFlags);
 }
 
+nsresult
+NS_DelayedDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent, uint32_t aDelayMs)
+{
+  nsCOMPtr<nsIRunnable> event(aEvent);
+#ifdef MOZILLA_INTERNAL_API
+  nsIThread* thread = NS_GetCurrentThread();
+  if (!thread) {
+    return NS_ERROR_UNEXPECTED;
+  }
+#else
+  nsresult rv;
+  nsCOMPtr<nsIThread> thread;
+  rv = NS_GetCurrentThread(getter_AddRefs(thread));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+#endif
+
+  return thread->DelayedDispatch(event.forget(), aDelayMs);
+}
+
+nsresult
+NS_IdleDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent)
+{
+  nsresult rv;
+  nsCOMPtr<nsIRunnable> event(aEvent);
+#ifdef MOZILLA_INTERNAL_API
+  nsIThread* thread = NS_GetCurrentThread();
+  if (!thread) {
+    return NS_ERROR_UNEXPECTED;
+  }
+#else
+  nsCOMPtr<nsIThread> thread;
+  rv = NS_GetCurrentThread(getter_AddRefs(thread));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+#endif
+  // To keep us from leaking the runnable if dispatch method fails,
+  // we grab the reference on failures and release it.
+  nsIRunnable* temp = event.get();
+  rv = thread->IdleDispatch(event.forget());
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    // Dispatch() leaked the reference to the event, but due to caller's
+    // assumptions, we shouldn't leak here. And given we are on the same
+    // thread as the dispatch target, it's mostly safe to do it here.
+    NS_RELEASE(temp);
+  }
+
+  return rv;
+}
+
 #ifndef XPCOM_GLUE_AVOID_NSPR
-NS_METHOD
+nsresult
 NS_ProcessPendingEvents(nsIThread* aThread, PRIntervalTime aTimeout)
 {
   nsresult rv = NS_OK;
@@ -344,7 +435,7 @@ NS_SetThreadName(nsIThread* aThread, const nsACString& aName)
 nsIThread*
 NS_GetCurrentThread()
 {
-  return nsThreadManager::get()->GetCurrentThread();
+  return nsThreadManager::get().GetCurrentThread();
 }
 #endif
 

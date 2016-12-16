@@ -43,7 +43,7 @@ WAVDemuxer::Init()
 {
   if (!InitInternal()) {
     return InitPromise::CreateAndReject(
-      DemuxerFailureReason::DEMUXER_ERROR, __func__);
+      NS_ERROR_DOM_MEDIA_METADATA_ERR, __func__);
   }
   return InitPromise::CreateAndResolve(NS_OK, __func__);
 }
@@ -113,8 +113,6 @@ WAVTrackDemuxer::Init()
     uint32_t aChunkName = mHeaderParser.GiveHeader().ChunkName();
     uint32_t aChunkSize = mHeaderParser.GiveHeader().ChunkSize();
 
-    aChunkSize += aChunkSize % 2;
-
     if (aChunkName == FRMT_CODE) {
       if (!FmtChunkParserInit()) {
         return false;
@@ -136,6 +134,10 @@ WAVTrackDemuxer::Init()
       break;
     } else {
       mOffset += aChunkSize; // Skip other irrelevant chunks.
+    }
+    if (mOffset & 1) {
+      // Wave files are 2-byte aligned so we need to round up
+      mOffset += 1;
     }
     mHeaderParser.Reset();
   }
@@ -171,7 +173,7 @@ WAVTrackDemuxer::RIFFParserInit()
   if (!riffHeader) {
     return false;
   }
-  ByteReader RIFFReader = ByteReader(riffHeader->Data(), 12);
+  ByteReader RIFFReader(riffHeader->Data(), 12);
   mRIFFParser.Parse(RIFFReader);
   return mRIFFParser.RiffHeader().IsValid(11);
 }
@@ -183,7 +185,7 @@ WAVTrackDemuxer::HeaderParserInit()
   if (!header) {
     return false;
   }
-  ByteReader HeaderReader = ByteReader(header->Data(), 8);
+  ByteReader HeaderReader(header->Data(), 8);
   mHeaderParser.Parse(HeaderReader);
   return true;
 }
@@ -195,8 +197,7 @@ WAVTrackDemuxer::FmtChunkParserInit()
   if (!fmtChunk) {
     return false;
   }
-  ByteReader fmtReader = ByteReader(fmtChunk->Data(),
-                                    mHeaderParser.GiveHeader().ChunkSize());
+  ByteReader fmtReader(fmtChunk->Data(), mHeaderParser.GiveHeader().ChunkSize());
   mFmtParser.Parse(fmtReader);
   return true;
 }
@@ -210,7 +211,7 @@ WAVTrackDemuxer::ListChunkParserInit(uint32_t aChunkSize)
   if (!infoTag) {
     return false;
   }
-  ByteReader infoTagReader = ByteReader(infoTag->Data(), 4);
+  ByteReader infoTagReader(infoTag->Data(), 4);
   if (!infoTagReader.CanRead32() || infoTagReader.ReadU32() != INFO_CODE) {
     return false;
   }
@@ -300,7 +301,7 @@ WAVTrackDemuxer::GetInfo() const
 }
 
 RefPtr<WAVTrackDemuxer::SeekPromise>
-WAVTrackDemuxer::Seek(TimeUnit aTime)
+WAVTrackDemuxer::Seek(const TimeUnit& aTime)
 {
   FastSeek(aTime);
   const TimeUnit seekTime = ScanUntil(aTime);
@@ -342,10 +343,7 @@ WAVTrackDemuxer::ScanUntil(const TimeUnit& aTime)
 RefPtr<WAVTrackDemuxer::SamplesPromise>
 WAVTrackDemuxer::GetSamples(int32_t aNumSamples)
 {
-  if (!aNumSamples) {
-    return SamplesPromise::CreateAndReject(
-        DemuxerFailureReason::DEMUXER_ERROR, __func__);
-  }
+  MOZ_ASSERT(aNumSamples);
 
   RefPtr<SamplesHolder> datachunks = new SamplesHolder();
 
@@ -359,7 +357,7 @@ WAVTrackDemuxer::GetSamples(int32_t aNumSamples)
 
   if (datachunks->mSamples.IsEmpty()) {
     return SamplesPromise::CreateAndReject(
-        DemuxerFailureReason::END_OF_STREAM, __func__);
+        NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
   }
 
   return SamplesPromise::CreateAndResolve(datachunks, __func__);
@@ -376,10 +374,10 @@ WAVTrackDemuxer::Reset()
 }
 
 RefPtr<WAVTrackDemuxer::SkipAccessPointPromise>
-WAVTrackDemuxer::SkipToNextRandomAccessPoint(TimeUnit aTimeThreshold)
+WAVTrackDemuxer::SkipToNextRandomAccessPoint(const TimeUnit& aTimeThreshold)
 {
   return SkipAccessPointPromise::CreateAndReject(
-    SkipFailureHolder(DemuxerFailureReason::DEMUXER_ERROR, 0), __func__);
+    SkipFailureHolder(NS_ERROR_DOM_MEDIA_DEMUXER_ERR, 0), __func__);
 }
 
 int64_t

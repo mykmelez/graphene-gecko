@@ -7,7 +7,8 @@ var {
   detectLanguage,
 } = ExtensionUtils;
 
-extensions.registerSchemaAPI("i18n", (extension, context) => {
+function i18nApiFactory(context) {
+  let {extension} = context;
   return {
     i18n: {
       getMessage: function(messageName, substitutions) {
@@ -28,4 +29,7 @@ extensions.registerSchemaAPI("i18n", (extension, context) => {
       },
     },
   };
-});
+}
+extensions.registerSchemaAPI("i18n", "addon_child", i18nApiFactory);
+extensions.registerSchemaAPI("i18n", "content_child", i18nApiFactory);
+extensions.registerSchemaAPI("i18n", "devtools_child", i18nApiFactory);

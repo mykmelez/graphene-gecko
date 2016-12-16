@@ -7,10 +7,12 @@ import logging
 import os
 import yaml
 
+from . import filter_tasks
 from .graph import Graph
 from .taskgraph import TaskGraph
 from .optimize import optimize_task_graph
 from .util.python_path import find_object
+from .util.verifydoc import verify_docs
 
 logger = logging.getLogger(__name__)
 
@@ -51,20 +53,24 @@ class TaskGraphGenerator(object):
     # each "phase" of generation.  This allows some mach subcommands to short-
     # circuit generation of the entire graph by never completing the generator.
 
-    def __init__(self, root_dir, parameters,
-                 target_tasks_method):
+    def __init__(self, root_dir, parameters):
         """
         @param root_dir: root directory, with subdirectories for each kind
         @param parameters: parameters for this task-graph generation
         @type parameters: dict
-        @param target_tasks_method: function to determine the target_task_set;
-                see `./target_tasks.py`.
-        @type target_tasks_method: function
         """
-
         self.root_dir = root_dir
         self.parameters = parameters
-        self.target_tasks_method = target_tasks_method
+
+        self.verify_parameters(self.parameters)
+
+        filters = parameters.get('filters', [])
+
+        # Always add legacy target tasks method until we deprecate that API.
+        if 'target_tasks_method' not in filters:
+            filters.insert(0, 'target_tasks_method')
+
+        self.filters = [filter_tasks.filter_task_functions[f] for f in filters]
 
         # this can be set up until the time the target task set is generated;
         # it defaults to parameters['target_tasks']
@@ -138,9 +144,12 @@ class TaskGraphGenerator(object):
             if not os.path.isdir(path):
                 continue
             kind_name = os.path.basename(path)
-            logger.debug("loading kind `{}` from `{}`".format(kind_name, path))
 
             kind_yml = os.path.join(path, 'kind.yml')
+            if not os.path.exists(kind_yml):
+                continue
+
+            logger.debug("loading kind `{}` from `{}`".format(kind_name, path))
             with open(kind_yml) as f:
                 config = yaml.load(f)
 
@@ -151,6 +160,8 @@ class TaskGraphGenerator(object):
         # put the kinds into a graph and sort topologically so that kinds are loaded
         # in post-order
         kinds = {kind.name: kind for kind in self._load_kinds()}
+        self.verify_kinds(kinds)
+
         edges = set()
         for kind in kinds.itervalues():
             for dep in kind.config.get('kind-dependencies', []):
@@ -169,6 +180,8 @@ class TaskGraphGenerator(object):
                 all_tasks[task.label] = task
             logger.info("Generated {} tasks for kind {}".format(len(new_tasks), kind_name))
         full_task_set = TaskGraph(all_tasks, Graph(set(all_tasks), set()))
+        self.verify_attributes(all_tasks)
+        self.verify_run_using()
         yield 'full_task_set', full_task_set
 
         logger.info("Generating full task graph")
@@ -179,13 +192,24 @@ class TaskGraphGenerator(object):
 
         full_task_graph = TaskGraph(all_tasks,
                                     Graph(full_task_set.graph.nodes, edges))
+        logger.info("Full task graph contains %d tasks and %d dependencies" % (
+            len(full_task_set.graph.nodes), len(edges)))
         yield 'full_task_graph', full_task_graph
 
         logger.info("Generating target task set")
-        target_tasks = set(self.target_tasks_method(full_task_graph, self.parameters))
-        target_task_set = TaskGraph(
-            {l: all_tasks[l] for l in target_tasks},
-            Graph(target_tasks, set()))
+        target_task_set = TaskGraph(dict(all_tasks),
+                                    Graph(set(all_tasks.keys()), set()))
+        for fltr in self.filters:
+            old_len = len(target_task_set.graph.nodes)
+            target_tasks = set(fltr(target_task_set, self.parameters))
+            target_task_set = TaskGraph(
+                {l: all_tasks[l] for l in target_tasks},
+                Graph(target_tasks, set()))
+            logger.info('Filter %s pruned %d tasks (%d remain)' % (
+                fltr.__name__,
+                old_len - len(target_tasks),
+                len(target_tasks)))
+
         yield 'target_task_set', target_task_set
 
         logger.info("Generating target task graph")
@@ -197,9 +221,11 @@ class TaskGraphGenerator(object):
 
         logger.info("Generating optimized task graph")
         do_not_optimize = set()
+
         if not self.parameters.get('optimize_target_tasks', True):
             do_not_optimize = target_task_set.graph.nodes
         optimized_task_graph, label_to_taskid = optimize_task_graph(target_task_graph,
+                                                                    self.parameters,
                                                                     do_not_optimize)
         yield 'label_to_taskid', label_to_taskid
         yield 'optimized_task_graph', optimized_task_graph
@@ -212,3 +238,36 @@ class TaskGraphGenerator(object):
                 raise AttributeError("No such run result {}".format(name))
             self._run_results[k] = v
         return self._run_results[name]
+
+    def verify_parameters(self, parameters):
+        parameters_dict = dict(**parameters)
+        verify_docs(
+            filename="parameters.rst",
+            identifiers=parameters_dict.keys(),
+            appearing_as="inline-literal"
+         )
+
+    def verify_kinds(self, kinds):
+        verify_docs(
+            filename="kinds.rst",
+            identifiers=kinds.keys(),
+            appearing_as="heading"
+         )
+
+    def verify_attributes(self, all_tasks):
+        attribute_set = set()
+        for label, task in all_tasks.iteritems():
+            attribute_set.update(task.attributes.keys())
+        verify_docs(
+            filename="attributes.rst",
+            identifiers=list(attribute_set),
+            appearing_as="heading"
+         )
+
+    def verify_run_using(self):
+        from .transforms.job import registry
+        verify_docs(
+            filename="transforms.rst",
+            identifiers=registry.keys(),
+            appearing_as="inline-literal"
+         )

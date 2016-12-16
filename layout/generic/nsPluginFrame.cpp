@@ -106,29 +106,29 @@ class PluginBackgroundSink : public ReadbackSink {
 public:
   PluginBackgroundSink(nsPluginFrame* aFrame, uint64_t aStartSequenceNumber)
     : mLastSequenceNumber(aStartSequenceNumber), mFrame(aFrame) {}
-  ~PluginBackgroundSink()
+  ~PluginBackgroundSink() override
   {
     if (mFrame) {
       mFrame->mBackgroundSink = nullptr;
     }
   }
 
-  virtual void SetUnknown(uint64_t aSequenceNumber)
+  void SetUnknown(uint64_t aSequenceNumber) override
   {
     if (!AcceptUpdate(aSequenceNumber))
       return;
     mFrame->mInstanceOwner->SetBackgroundUnknown();
   }
 
-  virtual already_AddRefed<DrawTarget>
-      BeginUpdate(const nsIntRect& aRect, uint64_t aSequenceNumber)
+  already_AddRefed<DrawTarget>
+      BeginUpdate(const nsIntRect& aRect, uint64_t aSequenceNumber) override
   {
     if (!AcceptUpdate(aSequenceNumber))
       return nullptr;
     return mFrame->mInstanceOwner->BeginUpdateBackground(aRect);
   }
 
-  virtual void EndUpdate(const nsIntRect& aRect)
+  void EndUpdate(const nsIntRect& aRect) override
   {
     return mFrame->mInstanceOwner->EndUpdateBackground(aRect);
   }
@@ -152,6 +152,8 @@ protected:
 nsPluginFrame::nsPluginFrame(nsStyleContext* aContext)
   : nsFrame(aContext)
   , mInstanceOwner(nullptr)
+  , mInnerView(nullptr)
+  , mBackgroundSink(nullptr)
   , mReflowCallbackPosted(false)
 {
   MOZ_LOG(sPluginFrameLog, LogLevel::Debug,
@@ -321,7 +323,6 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
     configuration->mBounds.height = NSAppUnitsToIntPixels(mRect.height, appUnitsPerDevPixel);
     parentWidget->ConfigureChildren(configurations);
 
-    RefPtr<nsDeviceContext> dx = viewMan->GetDeviceContext();
     mInnerView->AttachWidgetEventHandler(mWidget);
 
 #ifdef XP_MACOSX
@@ -571,6 +572,8 @@ nsPluginFrame::FixupWindow(const nsSize& aSize)
   nsIntPoint origin = GetWindowOriginInPixels(windowless);
 
   // window must be in "display pixels"
+#if defined(XP_MACOSX)
+  // window must be in "display pixels"
   double scaleFactor = 1.0;
   if (NS_FAILED(mInstanceOwner->GetContentsScaleFactor(&scaleFactor))) {
     scaleFactor = 1.0;
@@ -580,6 +583,12 @@ nsPluginFrame::FixupWindow(const nsSize& aSize)
   window->y = origin.y / intScaleFactor;
   window->width = presContext->AppUnitsToDevPixels(aSize.width) / intScaleFactor;
   window->height = presContext->AppUnitsToDevPixels(aSize.height) / intScaleFactor;
+#else
+  window->x = origin.x;
+  window->y = origin.y;
+  window->width = presContext->AppUnitsToDevPixels(aSize.width);
+  window->height = presContext->AppUnitsToDevPixels(aSize.height);
+#endif
 
 #ifndef XP_MACOSX
   mInstanceOwner->UpdateWindowPositionAndClipRect(false);
@@ -640,23 +649,33 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   intBounds.x += intOffset.x;
   intBounds.y += intOffset.y;
 
+#if defined(XP_MACOSX)
   // window must be in "display pixels"
   double scaleFactor = 1.0;
-  if (NS_FAILED(mInstanceOwner->GetContentsScaleFactor(&scaleFactor))) {
+  if (NS_FAILED(instanceOwnerRef->GetContentsScaleFactor(&scaleFactor))) {
     scaleFactor = 1.0;
   }
+
   size_t intScaleFactor = ceil(scaleFactor);
   window->x = intBounds.x / intScaleFactor;
   window->y = intBounds.y / intScaleFactor;
   window->width = intBounds.width / intScaleFactor;
   window->height = intBounds.height / intScaleFactor;
-
-  mInstanceOwner->ResolutionMayHaveChanged();
+#else
+  window->x = intBounds.x;
+  window->y = intBounds.y;
+  window->width = intBounds.width;
+  window->height = intBounds.height;
+#endif
+  // BE CAREFUL: By the time we get here the PluginFrame is sometimes destroyed
+  // and poisoned. If we reference local fields (implicit this deref),
+  // we will crash.
+  instanceOwnerRef->ResolutionMayHaveChanged();
 
   // This will call pi->SetWindow and take care of window subclassing
   // if needed, see bug 132759. Calling SetWindow can destroy this frame
   // so check for that before doing anything else with this frame's memory.
-  if (mInstanceOwner->UseAsyncRendering()) {
+  if (instanceOwnerRef->UseAsyncRendering()) {
     rv = pi->AsyncSetWindow(window);
   }
   else {
@@ -882,24 +901,24 @@ public:
     MOZ_COUNT_CTOR(nsDisplayPluginReadback);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
-  virtual ~nsDisplayPluginReadback() {
+  ~nsDisplayPluginReadback() override {
     MOZ_COUNT_DTOR(nsDisplayPluginReadback);
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+  nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) override;
 
   NS_DISPLAY_DECL_NAME("PluginReadback", TYPE_PLUGIN_READBACK)
 
-  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+  already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
                                              const ContainerLayerParameters& aContainerParameters) override
   {
     return static_cast<nsPluginFrame*>(mFrame)->BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
 
-  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+  LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) override
   {
@@ -1385,10 +1404,8 @@ nsPluginFrame::GetLayerState(nsDisplayListBuilder* aBuilder,
 
 #ifdef MOZ_WIDGET_ANDROID
   // We always want a layer on Honeycomb and later
-  if (AndroidBridge::Bridge()->GetAPIVersion() >= 11)
-    return LAYER_ACTIVE;
-#endif
-
+  return LAYER_ACTIVE;
+#else
   if (mInstanceOwner->NeedsScrollImageLayer()) {
     return LAYER_ACTIVE;
   }
@@ -1398,6 +1415,7 @@ nsPluginFrame::GetLayerState(nsDisplayListBuilder* aBuilder,
   }
 
   return LAYER_ACTIVE_FORCE;
+#endif
 }
 
 class PluginFrameDidCompositeObserver final : public ClientLayerManager::
@@ -1441,12 +1459,19 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   if (window->width <= 0 || window->height <= 0)
     return nullptr;
 
+#if defined(XP_MACOSX)
   // window is in "display pixels", but size needs to be in device pixels
+  // window must be in "display pixels"
   double scaleFactor = 1.0;
   if (NS_FAILED(mInstanceOwner->GetContentsScaleFactor(&scaleFactor))) {
     scaleFactor = 1.0;
   }
-  int intScaleFactor = ceil(scaleFactor);
+
+  size_t intScaleFactor = ceil(scaleFactor);
+#else
+  size_t intScaleFactor = 1;
+#endif
+
   IntSize size(window->width * intScaleFactor, window->height * intScaleFactor);
 
   nsRect area = GetContentRectRelativeToSelf() + aItem->ToReferenceFrame();

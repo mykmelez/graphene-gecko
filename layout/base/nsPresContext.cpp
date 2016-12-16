@@ -37,7 +37,7 @@
 #include "mozilla/RestyleManager.h"
 #include "mozilla/RestyleManagerHandle.h"
 #include "mozilla/RestyleManagerHandleInlines.h"
-#include "SurfaceCache.h"
+#include "SurfaceCacheUtils.h"
 #include "nsCSSRuleProcessor.h"
 #include "nsRuleNode.h"
 #include "gfxPlatform.h"
@@ -74,8 +74,9 @@
 #include "gfxTextRun.h"
 #include "nsFontFaceUtils.h"
 #include "nsLayoutStylesheetCache.h"
-#include "mozilla/StyleSheetHandle.h"
-#include "mozilla/StyleSheetHandleInlines.h"
+#include "mozilla/StyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
+#include "mozilla/ServoRestyleManagerInlines.h"
 
 #if defined(MOZ_WIDGET_GTK)
 #include "gfxPlatformGtk.h" // xxx - for UseFcFontList
@@ -120,7 +121,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mPresContext->DoChangeCharSet(mCharSet);
     return NS_OK;
@@ -205,7 +206,7 @@ IsVisualCharset(const nsCString& aCharset)
 
 nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   : mType(aType), mDocument(aDocument), mBaseMinFontSize(0),
-    mTextZoom(1.0), mFullZoom(1.0),
+    mTextZoom(1.0), mFullZoom(1.0), mOverrideDPPX(0.0),
     mLastFontInflationScreenSize(gfxSize(-1.0, -1.0)),
     mPageSize(-1, -1), mPPScale(1.0f),
     mViewportStyleScrollbar(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
@@ -335,7 +336,7 @@ nsPresContext::Destroy()
 nsPresContext::~nsPresContext()
 {
   NS_PRECONDITION(!mShell, "Presshell forgot to clear our mShell pointer");
-  SetShell(nullptr);
+  DetachShell();
 
   Destroy();
 }
@@ -603,11 +604,6 @@ nsPresContext::GetUserPreferences()
                         GET_BIDI_OPTION_NUMERAL(bidiOptions));
   SET_BIDI_OPTION_NUMERAL(bidiOptions, prefInt);
 
-  prefInt =
-    Preferences::GetInt(IBMBIDI_SUPPORTMODE_STR,
-                        GET_BIDI_OPTION_SUPPORT(bidiOptions));
-  SET_BIDI_OPTION_SUPPORT(bidiOptions, prefInt);
-
   // We don't need to force reflow: either we are initializing a new
   // prescontext or we are being called from UpdateAfterPreferencesChanged()
   // which triggers a reflow anyway.
@@ -828,12 +824,6 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
     }
   }
 
-  // Initialize restyle manager after initializing the refresh driver.
-  // Since RestyleManager is also the name of a method of nsPresContext,
-  // it is necessary to prefix the class with the mozilla namespace
-  // here.
-  mRestyleManager = new mozilla::RestyleManager(this);
-
   mLangService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
 
   // Register callbacks so we're notified when the preferences change
@@ -893,102 +883,116 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
   mInitialized = true;
 #endif
 
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_THIN] = CSSPixelsToAppUnits(1);
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_MEDIUM] = CSSPixelsToAppUnits(3);
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_THICK] = CSSPixelsToAppUnits(5);
-
   return NS_OK;
 }
 
 // Note: We don't hold a reference on the shell; it has a reference to
 // us
 void
-nsPresContext::SetShell(nsIPresShell* aShell)
+nsPresContext::AttachShell(nsIPresShell* aShell, StyleBackendType aBackendType)
 {
+  MOZ_ASSERT(!mShell);
+  mShell = aShell;
+
+  if (aBackendType == StyleBackendType::Servo) {
+    mRestyleManager = new ServoRestyleManager(this);
+  } else {
+    // Since RestyleManager is also the name of a method of nsPresContext,
+    // it is necessary to prefix the class with the mozilla namespace
+    // here.
+    mRestyleManager = new mozilla::RestyleManager(this);
+  }
+
+  // Since CounterStyleManager is also the name of a method of
+  // nsPresContext, it is necessary to prefix the class with the mozilla
+  // namespace here.
+  mCounterStyleManager = new mozilla::CounterStyleManager(this);
+
+  nsIDocument *doc = mShell->GetDocument();
+  NS_ASSERTION(doc, "expect document here");
+  if (doc) {
+    // Have to update PresContext's mDocument before calling any other methods.
+    mDocument = doc;
+  }
+  // Initialize our state from the user preferences, now that we
+  // have a presshell, and hence a document.
+  GetUserPreferences();
+
+  if (doc) {
+    nsIURI *docURI = doc->GetDocumentURI();
+
+    if (IsDynamic() && docURI) {
+      bool isChrome = false;
+      bool isRes = false;
+      docURI->SchemeIs("chrome", &isChrome);
+      docURI->SchemeIs("resource", &isRes);
+
+      if (!isChrome && !isRes)
+        mImageAnimationMode = mImageAnimationModePref;
+      else
+        mImageAnimationMode = imgIContainer::kNormalAnimMode;
+    }
+
+    if (mLangService) {
+      doc->AddCharSetObserver(this);
+      UpdateCharSet(doc->GetDocumentCharacterSet());
+    }
+  }
+}
+
+void
+nsPresContext::DetachShell()
+{
+  // Remove ourselves as the charset observer from the shell's doc, because
+  // this shell may be going away for good.
+  nsIDocument *doc = mShell ? mShell->GetDocument() : nullptr;
+  if (doc) {
+    doc->RemoveCharSetObserver(this);
+  }
+
+  // The counter style manager's destructor needs to deallocate with the
+  // presshell arena. Disconnect it before nulling out the shell.
+  //
+  // XXXbholley: Given recent refactorings, it probably makes more sense to
+  // just null our mShell at the bottom of this function. I'm leaving it
+  // this way to preserve the old ordering, but I doubt anything would break.
   if (mCounterStyleManager) {
     mCounterStyleManager->Disconnect();
     mCounterStyleManager = nullptr;
   }
 
-  if (mShell) {
-    // Remove ourselves as the charset observer from the shell's doc, because
-    // this shell may be going away for good.
-    nsIDocument *doc = mShell->GetDocument();
-    if (doc) {
-      doc->RemoveCharSetObserver(this);
-    }
+  mShell = nullptr;
+
+  if (mEffectCompositor) {
+    mEffectCompositor->Disconnect();
+    mEffectCompositor = nullptr;
+  }
+  if (mTransitionManager) {
+    mTransitionManager->Disconnect();
+    mTransitionManager = nullptr;
+  }
+  if (mAnimationManager) {
+    mAnimationManager->Disconnect();
+    mAnimationManager = nullptr;
+  }
+  if (mRestyleManager) {
+    mRestyleManager->Disconnect();
+    mRestyleManager = nullptr;
+  }
+  if (mRefreshDriver && mRefreshDriver->GetPresContext() == this) {
+    mRefreshDriver->Disconnect();
+    // Can't null out the refresh driver here.
   }
 
-  mShell = aShell;
+  if (IsRoot()) {
+    nsRootPresContext* thisRoot = static_cast<nsRootPresContext*>(this);
 
-  if (mShell) {
-    // Since CounterStyleManager is also the name of a method of
-    // nsPresContext, it is necessary to prefix the class with the mozilla
-    // namespace here.
-    mCounterStyleManager = new mozilla::CounterStyleManager(this);
+    // Have to cancel our plugin geometry timer, because the
+    // callback for that depends on a non-null presshell.
+    thisRoot->CancelApplyPluginGeometryTimer();
 
-    nsIDocument *doc = mShell->GetDocument();
-    NS_ASSERTION(doc, "expect document here");
-    if (doc) {
-      // Have to update PresContext's mDocument before calling any other methods.
-      mDocument = doc;
-    }
-    // Initialize our state from the user preferences, now that we
-    // have a presshell, and hence a document.
-    GetUserPreferences();
-
-    if (doc) {
-      nsIURI *docURI = doc->GetDocumentURI();
-
-      if (IsDynamic() && docURI) {
-        bool isChrome = false;
-        bool isRes = false;
-        docURI->SchemeIs("chrome", &isChrome);
-        docURI->SchemeIs("resource", &isRes);
-
-        if (!isChrome && !isRes)
-          mImageAnimationMode = mImageAnimationModePref;
-        else
-          mImageAnimationMode = imgIContainer::kNormalAnimMode;
-      }
-
-      if (mLangService) {
-        doc->AddCharSetObserver(this);
-        UpdateCharSet(doc->GetDocumentCharacterSet());
-      }
-    }
-  } else {
-    if (mEffectCompositor) {
-      mEffectCompositor->Disconnect();
-      mEffectCompositor = nullptr;
-    }
-    if (mTransitionManager) {
-      mTransitionManager->Disconnect();
-      mTransitionManager = nullptr;
-    }
-    if (mAnimationManager) {
-      mAnimationManager->Disconnect();
-      mAnimationManager = nullptr;
-    }
-    if (mRestyleManager) {
-      mRestyleManager->Disconnect();
-      mRestyleManager = nullptr;
-    }
-    if (mRefreshDriver && mRefreshDriver->PresContext() == this) {
-      mRefreshDriver->Disconnect();
-      // Can't null out the refresh driver here.
-    }
-
-    if (IsRoot()) {
-      nsRootPresContext* thisRoot = static_cast<nsRootPresContext*>(this);
-
-      // Have to cancel our plugin geometry timer, because the
-      // callback for that depends on a non-null presshell.
-      thisRoot->CancelApplyPluginGeometryTimer();
-
-      // The did-paint timer also depends on a non-null pres shell.
-      thisRoot->CancelDidPaintTimer();
-    }
+    // The did-paint timer also depends on a non-null pres shell.
+    thisRoot->CancelDidPaintTimer();
   }
 }
 
@@ -1144,17 +1148,17 @@ nsPresContext::CompatibilityModeChanged()
 
   StyleSetHandle styleSet = mShell->StyleSet();
   auto cache = nsLayoutStylesheetCache::For(styleSet->BackendType());
-  StyleSheetHandle sheet = cache->QuirkSheet();
+  StyleSheet* sheet = cache->QuirkSheet();
 
   if (needsQuirkSheet) {
     // quirk.css needs to come after html.css; we just keep it at the end.
     DebugOnly<nsresult> rv =
       styleSet->AppendStyleSheet(SheetType::Agent, sheet);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to insert quirk.css");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "failed to insert quirk.css");
   } else {
     DebugOnly<nsresult> rv =
       styleSet->RemoveStyleSheet(SheetType::Agent, sheet);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to remove quirk.css");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "failed to remove quirk.css");
   }
 
   mQuirkSheetAdded = needsQuirkSheet;
@@ -1296,6 +1300,16 @@ nsPresContext::SetFullZoom(float aZoom)
   mSuppressResizeReflow = false;
 }
 
+void
+nsPresContext::SetOverrideDPPX(float aDPPX)
+{
+  mOverrideDPPX = aDPPX;
+
+  if (HasCachedStyleData()) {
+    MediaFeatureValuesChanged(nsRestyleHint(0), nsChangeHint(0));
+  }
+}
+
 gfxSize
 nsPresContext::ScreenSizeInchesForFontInflation(bool* aChanged)
 {
@@ -1371,7 +1385,9 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   // Check the style on the document root element
   StyleSetHandle styleSet = aPresContext->StyleSet();
   RefPtr<nsStyleContext> rootStyle;
-  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr);
+  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr,
+                                        ConsumeStyleBehavior::DontConsume,
+                                        LazyComputeBehavior::Allow);
   if (CheckOverflow(rootStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the root element
     return docElement;
@@ -1399,7 +1415,9 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   }
 
   RefPtr<nsStyleContext> bodyStyle;
-  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle);
+  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle,
+                                        ConsumeStyleBehavior::DontConsume,
+                                        LazyComputeBehavior::Allow);
 
   if (CheckOverflow(bodyStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the body element
@@ -1619,7 +1637,7 @@ nsPresContext::ThemeChangedInternal()
     // Vector images (SVG) may be using theme colors so we discard all cached
     // surfaces. (We could add a vector image only version of DiscardAll, but
     // in bug 940625 we decided theme changes are rare enough not to bother.)
-    mozilla::image::SurfaceCache::DiscardAll();
+    image::SurfaceCacheUtils::DiscardAll();
   }
 
   // This will force the system metrics to be generated the next time they're used
@@ -1855,8 +1873,8 @@ nsPresContext::MediaFeatureValuesChanged(nsRestyleHint aRestyleHint,
         aRestyleHint |= eRestyle_Subtree;
       }
     } else {
-      NS_ERROR("stylo: ServoStyleSets don't support responding to medium "
-               "changes yet");
+      NS_WARNING("stylo: ServoStyleSets don't support responding to medium "
+                 "changes yet. See bug 1290228.");
     }
   }
 
@@ -2024,16 +2042,10 @@ nsPresContext::UpdateIsChrome()
               nsIDocShellTreeItem::typeChrome == mContainer->ItemType();
 }
 
-/* virtual */ bool
+bool
 nsPresContext::HasAuthorSpecifiedRules(const nsIFrame *aFrame,
                                        uint32_t ruleTypeMask) const
 {
-#ifdef MOZ_STYLO
-  if (!mShell || mShell->StyleSet()->IsServo()) {
-    NS_ERROR("stylo: nsPresContext::HasAuthorSpecifiedRules not implemented");
-    return true;
-  }
-#endif
   return
     nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
                                         ruleTypeMask,
@@ -2486,8 +2498,9 @@ nsPresContext::HasCachedStyleData()
   nsStyleSet* styleSet = mShell->StyleSet()->GetAsGecko();
   if (!styleSet) {
     // XXXheycam ServoStyleSets do not use the rule tree, so just assume for now
-    // that we need to restyle when e.g. dppx changes.
-    return true;
+    // that we need to restyle when e.g. dppx changes assuming we're sufficiently
+    // bootstrapped.
+    return mShell->DidInitialize();
   }
 
   return styleSet->HasCachedStyleData();
@@ -2675,6 +2688,12 @@ nsPresContext::CheckForInterrupt(nsIFrame* aFrame)
     TimeStamp::Now() - mReflowStartTime > sInterruptTimeout &&
     HavePendingInputEvent() &&
     !IsChrome();
+
+  if (mPendingInterruptFromTest) {
+    mPendingInterruptFromTest = false;
+    mHasPendingInterrupt = true;
+  }
+
   if (mHasPendingInterrupt) {
 #ifdef NOISY_INTERRUPTIBLE_REFLOW
     printf("*** DETECTED pending interrupt (time=%lld)\n", PR_Now());
@@ -2732,6 +2751,19 @@ nsPresContext::IsRootContentDocument() const
 
   nsIFrame* f = view->GetFrame();
   return (f && f->PresContext()->IsChrome());
+}
+
+void
+nsPresContext::NotifyNonBlankPaint()
+{
+  MOZ_ASSERT(!mHadNonBlankPaint);
+  mHadNonBlankPaint = true;
+  if (IsRootContentDocument()) {
+    RefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+    if (timing) {
+      timing->NotifyNonBlankPaintForRootContentDocument();
+    }
+  }
 }
 
 bool nsPresContext::GetPaintFlashing() const
@@ -2956,8 +2988,7 @@ SortConfigurations(nsTArray<nsIWidget::Configuration>* aConfigurations)
       for (uint32_t j = 0; j < pluginsToMove.Length(); ++j) {
         if (i == j)
           continue;
-        LayoutDeviceIntRect bounds;
-        pluginsToMove[j].mChild->GetBounds(bounds);
+        LayoutDeviceIntRect bounds = pluginsToMove[j].mChild->GetBounds();
         AutoTArray<LayoutDeviceIntRect,1> clipRects;
         pluginsToMove[j].mChild->GetWindowClipRegion(&clipRects);
         if (HasOverlap(bounds.TopLeft(), clipRects,

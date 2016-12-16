@@ -39,16 +39,21 @@ user_pref("dom.min_background_timeout_value", 1000);
 user_pref("test.mousescroll", true);
 user_pref("security.default_personal_cert", "Select Automatically"); // Need to client auth test be w/o any dialogs
 user_pref("network.http.prompt-temp-redirect", false);
+user_pref("media.preload.default", 2); // default = metadata
+user_pref("media.preload.auto", 3); // auto = enough
 user_pref("media.cache_size", 1000);
 user_pref("media.volume_scale", "0.01");
+user_pref("media.test.dumpDebugInfo", true);
+user_pref("media.dormant-on-pause-timeout-ms", 0); // Enter dormant immediately without waiting for timeout.
 user_pref("security.warn_viewing_mixed", false);
 user_pref("app.update.enabled", false);
 user_pref("app.update.staging.enabled", false);
 user_pref("app.update.url.android", "");
 // Make sure GMPInstallManager won't hit the network.
 user_pref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
+user_pref("media.gmp-manager.updateEnabled", false);
 user_pref("dom.w3c_touch_events.enabled", 1);
-user_pref("dom.undo_manager.enabled", true);
+user_pref("layout.accessiblecaret.enabled_on_touch", false);
 user_pref("dom.webcomponents.enabled", true);
 user_pref("dom.webcomponents.customelements.enabled", true);
 user_pref("dom.htmlimports.enabled", true);
@@ -156,12 +161,14 @@ user_pref("datareporting.healthreport.about.reportUrl", "http://%(server)s/about
 // Make sure CSS error reporting is enabled for tests
 user_pref("layout.css.report_errors", true);
 
-// Enable CSS Grid for testing
-user_pref("layout.css.grid.enabled", true);
+// Enable CSS Grid 'subgrid' feature for testing
 user_pref("layout.css.grid-template-subgrid-value.enabled", true);
 
 // Enable CSS 'contain' for testing
 user_pref("layout.css.contain.enabled", true);
+
+// Enable CSS initial-letter for testing
+user_pref("layout.css.initial-letter.enabled", true);
 
 // Enable CSS object-fit & object-position for testing
 user_pref("layout.css.object-fit-and-position.enabled", true);
@@ -171,6 +178,9 @@ user_pref("layout.css.prefixes.webkit", true);
 
 // Enable -webkit-{min|max}-device-pixel-ratio media queries for testing
 user_pref("layout.css.prefixes.device-pixel-ratio-webkit", true);
+
+// Enable CSS shape-outside for testing
+user_pref("layout.css.shape-outside.enabled", true);
 
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
@@ -222,8 +232,7 @@ user_pref("general.useragent.updates.enabled", false);
 // Disable webapp updates.  Yes, it is supposed to be an integer.
 user_pref("browser.webapps.checkForUpdates", 0);
 
-// Enable debug logging in the tcp presentation server.
-user_pref("dom.presentation.tcp_server.debug", true);
+user_pref("dom.presentation.testing.simulate-receiver", false);
 
 // Don't connect to Yahoo! for RSS feed tests.
 // en-US only uses .types.0.uri, but set all of them just to be sure.
@@ -277,19 +286,9 @@ user_pref("browser.translation.engine", "bing");
 // Make sure we don't try to load snippets from the network.
 user_pref("browser.aboutHomeSnippets.updateUrl", "nonexistent://test");
 
-// Enable apps customizations
-user_pref("dom.apps.customization.enabled", true);
-
 // Don't fetch or send directory tiles data from real servers
 user_pref("browser.newtabpage.directory.source", 'data:application/json,{"testing":1}');
 user_pref("browser.newtabpage.directory.ping", "");
-
-// Enable Loop
-user_pref("loop.debug.loglevel", "All");
-user_pref("loop.enabled", true);
-user_pref("loop.throttled", false);
-user_pref("loop.server", "http://%(server)s/browser/browser/extensions/loop/chrome/test/mochitest/loop_fxa.sjs?");
-user_pref("loop.CSP","default-src 'self' about: file: chrome: data: wss://* http://* https://*");
 
 // Ensure UITour won't hit the network
 user_pref("browser.uitour.pinnedTabUrl", "http://%(server)s/uitour-dummy/pinnedTab");
@@ -309,13 +308,11 @@ user_pref("media.eme.enabled", true);
 
 user_pref("media.autoplay.enabled", true);
 
-#if defined(XP_WIN)
-user_pref("media.decoder.heuristic.dormant.timeout", 0);
-#endif
-
 // Don't use auto-enabled e10s
 user_pref("browser.tabs.remote.autostart.1", false);
 user_pref("browser.tabs.remote.autostart.2", false);
+// Don't show a delay when hiding the audio indicator during tests
+user_pref("browser.tabs.delayHidingAudioPlayingIconMS", 0);
 // Don't forceably kill content processes after a timeout
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
 
@@ -324,10 +321,6 @@ user_pref("extensions.e10sBlocksEnabling", false);
 
 // Avoid performing Reader Mode intros during tests.
 user_pref("browser.reader.detectedFirstArticle", true);
-
-// Don't let PAC generator to set PAC, as mochitest framework has its own PAC
-// rules during testing.
-user_pref("network.proxy.pac_generator", false);
 
 // Make tests run consistently on DevEdition (which has a lightweight theme
 // selected by default).
@@ -349,4 +342,17 @@ user_pref("dom.audiochannel.mutedByDefault", false);
 user_pref("webextensions.tests", true);
 user_pref("startup.homepage_welcome_url", "about:blank");
 user_pref("startup.homepage_welcome_url.additional", "");
-user_pref("browser.usedOnWindows10.introURL", "");
+
+// For Firefox 52 only, ESR will support non-Flash plugins while release will
+// not, so we keep testing the non-Flash pathways
+user_pref("plugin.load_flash_only", false);
+
+// Don't block old libavcodec libraries when testing, because our test systems
+// cannot easily be upgraded.
+user_pref("media.libavcodec.allow-obsolete", true);
+
+user_pref("media.openUnsupportedTypeWithExternalApp", false);
+
+// Disable password capture, so that mochitests that include forms aren't
+// influenced by the presence of the persistent doorhanger notification.
+user_pref("signon.rememberSignons", false);

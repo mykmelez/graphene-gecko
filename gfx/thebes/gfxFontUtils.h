@@ -781,8 +781,8 @@ public:
                           gfxSparseBitSet& aCharacterMap);
 
     static nsresult
-    ReadCMAPTableFormat12(const uint8_t *aBuf, uint32_t aLength, 
-                          gfxSparseBitSet& aCharacterMap);
+    ReadCMAPTableFormat12or13(const uint8_t *aBuf, uint32_t aLength, 
+                              gfxSparseBitSet& aCharacterMap);
 
     static nsresult 
     ReadCMAPTableFormat4(const uint8_t *aBuf, uint32_t aLength, 
@@ -810,7 +810,7 @@ public:
     MapCharToGlyphFormat10(const uint8_t *aBuf, uint32_t aCh);
 
     static uint32_t
-    MapCharToGlyphFormat12(const uint8_t *aBuf, uint32_t aCh);
+    MapCharToGlyphFormat12or13(const uint8_t *aBuf, uint32_t aCh);
 
     static uint16_t
     MapUVSToGlyphFormat14(const uint8_t *aBuf, uint32_t aCh, uint32_t aVS);
@@ -857,6 +857,20 @@ public:
     static nsresult
     GetFamilyNameFromTable(hb_blob_t *aNameTable,
                            nsAString& aFamilyName);
+
+    // Find the table directory entry for a given table tag, in a (validated)
+    // buffer of 'sfnt' data. Returns null if the tag is not present.
+    static mozilla::TableDirEntry*
+    FindTableDirEntry(const void* aFontData, uint32_t aTableTag);
+
+    // Return a blob that wraps a table found within a buffer of font data.
+    // The blob does NOT own its data; caller guarantees that the buffer
+    // will remain valid at least as long as the blob.
+    // Returns null if the specified table is not found.
+    // This method assumes aFontData is valid 'sfnt' data; before using this,
+    // caller is responsible to do any sanitization/validation necessary.
+    static hb_blob_t*
+    GetTableFromFontData(const void* aFontData, uint32_t aTableTag);
 
     // create a new name table and build a new font with that name table
     // appended on the end, returns true on success

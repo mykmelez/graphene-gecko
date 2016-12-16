@@ -26,6 +26,18 @@ MacroAssembler::moveGPRToFloat32(Register src, FloatRegister dest)
     moveToFloat32(src, dest);
 }
 
+void
+MacroAssembler::move8SignExtend(Register src, Register dest)
+{
+    as_seb(dest, src);
+}
+
+void
+MacroAssembler::move16SignExtend(Register src, Register dest)
+{
+    as_seh(dest, src);
+}
+
 // ===============================================================
 // Logical instructions
 
@@ -397,6 +409,28 @@ MacroAssembler::ctz32(Register src, Register dest, bool knownNotZero)
     ma_ctz(dest, src);
 }
 
+void
+MacroAssembler::popcnt32(Register input,  Register output, Register tmp)
+{
+    // Equivalent to GCC output of mozilla::CountPopulation32()
+    ma_move(output, input);
+    ma_sra(tmp, input, Imm32(1));
+    ma_and(tmp, Imm32(0x55555555));
+    ma_subu(output, tmp);
+    ma_sra(tmp, output, Imm32(2));
+    ma_and(output, Imm32(0x33333333));
+    ma_and(tmp, Imm32(0x33333333));
+    ma_addu(output, tmp);
+    ma_srl(tmp, output, Imm32(4));
+    ma_addu(output, tmp);
+    ma_and(output, Imm32(0xF0F0F0F));
+    ma_sll(tmp, output, Imm32(8));
+    ma_addu(output, tmp);
+    ma_sll(tmp, output, Imm32(16));
+    ma_addu(output, tmp);
+    ma_sra(output, output, Imm32(24));
+}
+
 // ===============================================================
 // Branch functions
 
@@ -486,8 +520,9 @@ MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs, Label* labe
     ma_b(lhs, rhs, label, cond);
 }
 
+template <class L>
 void
-MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, Label* label)
+MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, L label)
 {
     loadPtr(lhs, SecondScratchReg);
     branchPtr(cond, SecondScratchReg, rhs, label);
@@ -568,13 +603,19 @@ MacroAssembler::branchFloat(DoubleCondition cond, FloatRegister lhs, FloatRegist
 }
 
 void
-MacroAssembler::branchTruncateFloat32(FloatRegister src, Register dest, Label* fail)
+MacroAssembler::branchTruncateFloat32MaybeModUint32(FloatRegister src, Register dest, Label* fail)
 {
     Label test, success;
     as_truncws(ScratchFloat32Reg, src);
     as_mfc1(dest, ScratchFloat32Reg);
 
     ma_b(dest, Imm32(INT32_MAX), fail, Assembler::Equal);
+}
+
+void
+MacroAssembler::branchTruncateFloat32ToInt32(FloatRegister src, Register dest, Label* fail)
+{
+    convertFloat32ToInt32(src, dest, fail);
 }
 
 void
@@ -589,7 +630,7 @@ MacroAssembler::branchDouble(DoubleCondition cond, FloatRegister lhs, FloatRegis
 // NOTE: if the value really was supposed to be INT32_MAX / INT32_MIN then it
 // will be wrong.
 void
-MacroAssembler::branchTruncateDouble(FloatRegister src, Register dest, Label* fail)
+MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src, Register dest, Label* fail)
 {
     Label test, success;
     as_truncwd(ScratchDoubleReg, src);
@@ -599,13 +640,22 @@ MacroAssembler::branchTruncateDouble(FloatRegister src, Register dest, Label* fa
     ma_b(dest, Imm32(INT32_MIN), fail, Assembler::Equal);
 }
 
-template <typename T>
 void
-MacroAssembler::branchAdd32(Condition cond, T src, Register dest, Label* overflow)
+MacroAssembler::branchTruncateDoubleToInt32(FloatRegister src, Register dest, Label* fail)
+{
+    convertDoubleToInt32(src, dest, fail);
+}
+
+template <typename T, typename L>
+void
+MacroAssembler::branchAdd32(Condition cond, T src, Register dest, L overflow)
 {
     switch (cond) {
       case Overflow:
         ma_addTestOverflow(dest, dest, src, overflow);
+        break;
+      case CarrySet:
+        ma_addTestCarry(dest, dest, src, overflow);
         break;
       default:
         MOZ_CRASH("NYI");
@@ -673,8 +723,9 @@ MacroAssembler::branchTest32(Condition cond, const AbsoluteAddress& lhs, Imm32 r
     branchTest32(cond, SecondScratchReg, rhs, label);
 }
 
+template <class L>
 void
-MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, Label* label)
+MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, L label)
 {
     MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed || cond == NotSigned);
     if (lhs == rhs) {
@@ -938,6 +989,35 @@ void
 MacroAssembler::storeFloat32x3(FloatRegister src, const BaseIndex& dest)
 {
     MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::memoryBarrier(MemoryBarrierBits barrier)
+{
+    if (barrier == MembarLoadLoad)
+        as_sync(19);
+    else if (barrier == MembarStoreStore)
+        as_sync(4);
+    else if (barrier & MembarSynchronizing)
+        as_sync();
+    else if (barrier)
+        as_sync(16);
+}
+
+// ===============================================================
+// Clamping functions.
+
+void
+MacroAssembler::clampIntToUint8(Register reg)
+{
+    // If reg is < 0, then we want to clamp to 0.
+    as_slti(ScratchRegister, reg, 0);
+    as_movn(reg, zero, ScratchRegister);
+
+    // If reg is >= 255, then we want to clamp to 255.
+    ma_li(SecondScratchReg, Imm32(255));
+    as_slti(ScratchRegister, reg, 255);
+    as_movz(reg, SecondScratchReg, ScratchRegister);
 }
 
 //}}} check_macroassembler_style

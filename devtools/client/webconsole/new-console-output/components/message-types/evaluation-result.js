@@ -9,41 +9,58 @@
 // React & Redux
 const {
   createFactory,
-  DOM: dom,
   PropTypes
 } = require("devtools/client/shared/vendor/react");
-const GripMessageBody = createFactory(require("devtools/client/webconsole/new-console-output/components/grip-message-body").GripMessageBody);
-const MessageIcon = createFactory(require("devtools/client/webconsole/new-console-output/components/message-icon").MessageIcon);
+const Message = createFactory(require("devtools/client/webconsole/new-console-output/components/message"));
+const GripMessageBody = createFactory(require("devtools/client/webconsole/new-console-output/components/grip-message-body"));
 
 EvaluationResult.displayName = "EvaluationResult";
 
 EvaluationResult.propTypes = {
   message: PropTypes.object.isRequired,
+  indent: PropTypes.number.isRequired,
+};
+
+EvaluationResult.defaultProps = {
+  indent: 0,
 };
 
 function EvaluationResult(props) {
-  const { message } = props;
-  const icon = MessageIcon({severity: message.severity});
+  const { message, serviceContainer, indent } = props;
+  const {
+    source,
+    type,
+    level,
+    id: messageId,
+    exceptionDocURL,
+    frame,
+    timeStamp,
+  } = message;
 
-  // @TODO Use of "is" is a temporary hack to get the category and severity
-  // attributes to be applied. There are targeted in webconsole's CSS rules,
-  // so if we remove this hack, we have to modify the CSS rules accordingly.
-  return dom.div({
-    class: "message cm-s-mozilla",
-    is: "fdt-message",
-    category: message.category,
-    severity: message.severity
-  },
-    // @TODO add timestamp
-    // @TODO add indent if needed with console.group
-    icon,
-    dom.span(
-      {className: "message-body-wrapper message-body devtools-monospace"},
-      dom.span({},
-        GripMessageBody({grip: message.parameters})
-      )
-    )
-  );
+  let messageBody;
+  if (message.messageText) {
+    messageBody = message.messageText;
+  } else {
+    messageBody = GripMessageBody({grip: message.parameters, serviceContainer});
+  }
+
+  const topLevelClasses = ["cm-s-mozilla"];
+
+  const childProps = {
+    source,
+    type,
+    level,
+    indent,
+    topLevelClasses,
+    messageBody,
+    messageId,
+    scrollToMessage: props.autoscroll,
+    serviceContainer,
+    exceptionDocURL,
+    frame,
+    timeStamp,
+  };
+  return Message(childProps);
 }
 
-module.exports.EvaluationResult = EvaluationResult;
+module.exports = EvaluationResult;

@@ -15,6 +15,7 @@
 #include "jit/BaselineInspector.h"
 #include "jit/BytecodeAnalysis.h"
 #include "jit/IonAnalysis.h"
+#include "jit/IonControlFlow.h"
 #include "jit/IonOptimizationLevels.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
@@ -39,173 +40,6 @@ class IonBuilder
   : public MIRGenerator,
     public mozilla::LinkedListElement<IonBuilder>
 {
-    enum ControlStatus {
-        ControlStatus_Error,
-        ControlStatus_Abort,
-        ControlStatus_Ended,        // There is no continuation/join point.
-        ControlStatus_Joined,       // Created a join node.
-        ControlStatus_Jumped,       // Parsing another branch at the same level.
-        ControlStatus_None          // No control flow.
-    };
-
-    struct DeferredEdge : public TempObject
-    {
-        MBasicBlock* block;
-        DeferredEdge* next;
-
-        DeferredEdge(MBasicBlock* block, DeferredEdge* next)
-          : block(block), next(next)
-        { }
-    };
-
-    struct ControlFlowInfo {
-        // Entry in the cfgStack.
-        uint32_t cfgEntry;
-
-        // Label that continues go to.
-        jsbytecode* continuepc;
-
-        ControlFlowInfo(uint32_t cfgEntry, jsbytecode* continuepc)
-          : cfgEntry(cfgEntry),
-            continuepc(continuepc)
-        { }
-    };
-
-    // To avoid recursion, the bytecode analyzer uses a stack where each entry
-    // is a small state machine. As we encounter branches or jumps in the
-    // bytecode, we push information about the edges on the stack so that the
-    // CFG can be built in a tree-like fashion.
-    struct CFGState {
-        enum State {
-            IF_TRUE,            // if() { }, no else.
-            IF_TRUE_EMPTY_ELSE, // if() { }, empty else
-            IF_ELSE_TRUE,       // if() { X } else { }
-            IF_ELSE_FALSE,      // if() { } else { X }
-            DO_WHILE_LOOP_BODY, // do { x } while ()
-            DO_WHILE_LOOP_COND, // do { } while (x)
-            WHILE_LOOP_COND,    // while (x) { }
-            WHILE_LOOP_BODY,    // while () { x }
-            FOR_LOOP_COND,      // for (; x;) { }
-            FOR_LOOP_BODY,      // for (; ;) { x }
-            FOR_LOOP_UPDATE,    // for (; ; x) { }
-            TABLE_SWITCH,       // switch() { x }
-            COND_SWITCH_CASE,   // switch() { case X: ... }
-            COND_SWITCH_BODY,   // switch() { case ...: X }
-            AND_OR,             // && x, || x
-            LABEL,              // label: x
-            TRY                 // try { x } catch(e) { }
-        };
-
-        State state;            // Current state of this control structure.
-        jsbytecode* stopAt;     // Bytecode at which to stop the processing loop.
-
-        // For if structures, this contains branch information.
-        union {
-            struct {
-                MBasicBlock* ifFalse;
-                jsbytecode* falseEnd;
-                MBasicBlock* ifTrue;    // Set when the end of the true path is reached.
-                MTest* test;
-            } branch;
-            struct {
-                // Common entry point.
-                MBasicBlock* entry;
-
-                // Whether OSR is being performed for this loop.
-                bool osr;
-
-                // Position of where the loop body starts and ends.
-                jsbytecode* bodyStart;
-                jsbytecode* bodyEnd;
-
-                // pc immediately after the loop exits.
-                jsbytecode* exitpc;
-
-                // pc for 'continue' jumps.
-                jsbytecode* continuepc;
-
-                // Common exit point. Created lazily, so it may be nullptr.
-                MBasicBlock* successor;
-
-                // Deferred break and continue targets.
-                DeferredEdge* breaks;
-                DeferredEdge* continues;
-
-                // Initial state, in case loop processing is restarted.
-                State initialState;
-                jsbytecode* initialPc;
-                jsbytecode* initialStopAt;
-                jsbytecode* loopHead;
-
-                // For-loops only.
-                jsbytecode* condpc;
-                jsbytecode* updatepc;
-                jsbytecode* updateEnd;
-            } loop;
-            struct {
-                // pc immediately after the switch.
-                jsbytecode* exitpc;
-
-                // Deferred break and continue targets.
-                DeferredEdge* breaks;
-
-                // MIR instruction
-                MTableSwitch* ins;
-
-                // The number of current successor that get mapped into a block.
-                uint32_t currentBlock;
-
-            } tableswitch;
-            struct {
-                // Vector of body blocks to process after the cases.
-                FixedList<MBasicBlock*>* bodies;
-
-                // When processing case statements, this counter points at the
-                // last uninitialized body.  When processing bodies, this
-                // counter targets the next body to process.
-                uint32_t currentIdx;
-
-                // Remember the block index of the default case.
-                jsbytecode* defaultTarget;
-                uint32_t defaultIdx;
-
-                // Block immediately after the switch.
-                jsbytecode* exitpc;
-                DeferredEdge* breaks;
-            } condswitch;
-            struct {
-                DeferredEdge* breaks;
-            } label;
-            struct {
-                MBasicBlock* successor;
-            } try_;
-        };
-
-        inline bool isLoop() const {
-            switch (state) {
-              case DO_WHILE_LOOP_COND:
-              case DO_WHILE_LOOP_BODY:
-              case WHILE_LOOP_COND:
-              case WHILE_LOOP_BODY:
-              case FOR_LOOP_COND:
-              case FOR_LOOP_BODY:
-              case FOR_LOOP_UPDATE:
-                return true;
-              default:
-                return false;
-            }
-        }
-
-        static CFGState If(jsbytecode* join, MTest* test);
-        static CFGState IfElse(jsbytecode* trueEnd, jsbytecode* falseEnd, MTest* test);
-        static CFGState AndOr(jsbytecode* join, MBasicBlock* lhs);
-        static CFGState TableSwitch(jsbytecode* exitpc, MTableSwitch* ins);
-        static CFGState CondSwitch(IonBuilder* builder, jsbytecode* exitpc, jsbytecode* defaultTarget);
-        static CFGState Label(jsbytecode* exitpc);
-        static CFGState Try(jsbytecode* exitpc, MBasicBlock* successor);
-    };
-
-    static int CmpSuccessors(const void* a, const void* b);
 
   public:
     IonBuilder(JSContext* analysisContext, CompileCompartment* comp,
@@ -224,12 +58,11 @@ class IonBuilder
 
   private:
     MOZ_MUST_USE bool traverseBytecode();
-    ControlStatus snoopControlFlow(JSOp op);
     MOZ_MUST_USE bool processIterators();
     MOZ_MUST_USE bool inspectOpcode(JSOp op);
     uint32_t readIndex(jsbytecode* pc);
     JSAtom* readAtom(jsbytecode* pc);
-    bool abort(const char* message, ...);
+    bool abort(const char* message, ...) MOZ_FORMAT_PRINTF(2, 3);
     void trackActionableAbort(const char* message);
     void spew(const char* message);
 
@@ -237,44 +70,9 @@ class IonBuilder
     MOZ_MUST_USE bool getPolyCallTargets(TemporaryTypeSet* calleeTypes, bool constructing,
                                          ObjectVector& targets, uint32_t maxTargets);
 
-    void popCfgStack();
-    DeferredEdge* filterDeadDeferredEdges(DeferredEdge* edge);
-    MOZ_MUST_USE bool processDeferredContinues(CFGState& state);
-    ControlStatus processControlEnd();
-    ControlStatus processCfgStack();
-    ControlStatus processCfgEntry(CFGState& state);
-    ControlStatus processIfEnd(CFGState& state);
-    ControlStatus processIfElseTrueEnd(CFGState& state);
-    ControlStatus processIfElseFalseEnd(CFGState& state);
-    ControlStatus processDoWhileBodyEnd(CFGState& state);
-    ControlStatus processDoWhileCondEnd(CFGState& state);
-    ControlStatus processWhileCondEnd(CFGState& state);
-    ControlStatus processWhileBodyEnd(CFGState& state);
-    ControlStatus processForCondEnd(CFGState& state);
-    ControlStatus processForBodyEnd(CFGState& state);
-    ControlStatus processForUpdateEnd(CFGState& state);
-    ControlStatus processNextTableSwitchCase(CFGState& state);
-    ControlStatus processCondSwitchCase(CFGState& state);
-    ControlStatus processCondSwitchBody(CFGState& state);
-    ControlStatus processSwitchBreak(JSOp op);
-    ControlStatus processSwitchEnd(DeferredEdge* breaks, jsbytecode* exitpc);
-    ControlStatus processAndOrEnd(CFGState& state);
-    ControlStatus processLabelEnd(CFGState& state);
-    ControlStatus processTryEnd(CFGState& state);
-    ControlStatus processReturn(JSOp op);
-    ControlStatus processThrow();
-    ControlStatus processContinue(JSOp op);
-    ControlStatus processBreak(JSOp op, jssrcnote* sn);
-    ControlStatus maybeLoop(JSOp op, jssrcnote* sn);
-    MOZ_MUST_USE bool pushLoop(CFGState::State state, jsbytecode* stopAt, MBasicBlock* entry,
-                               bool osr, jsbytecode* loopHead, jsbytecode* initialPc,
-                               jsbytecode* bodyStart, jsbytecode* bodyEnd,
-                               jsbytecode* exitpc, jsbytecode* continuepc);
-    MOZ_MUST_USE bool analyzeNewLoopTypes(MBasicBlock* entry, jsbytecode* start, jsbytecode* end);
+    MOZ_MUST_USE bool analyzeNewLoopTypes(const CFGBlock* loopEntryBlock);
 
-    MBasicBlock* addBlock(MBasicBlock* block, uint32_t loopDepth);
     MBasicBlock* newBlock(MBasicBlock* predecessor, jsbytecode* pc);
-    MBasicBlock* newBlock(MBasicBlock* predecessor, jsbytecode* pc, uint32_t loopDepth);
     MBasicBlock* newBlock(MBasicBlock* predecessor, jsbytecode* pc, MResumePoint* priorResumePoint);
     MBasicBlock* newBlockPopN(MBasicBlock* predecessor, jsbytecode* pc, uint32_t popped);
     MBasicBlock* newBlockAfter(MBasicBlock* at, MBasicBlock* predecessor, jsbytecode* pc);
@@ -289,6 +87,18 @@ class IonBuilder
         return newBlockAfter(at, nullptr, pc);
     }
 
+    MOZ_MUST_USE bool visitBlock(const CFGBlock* hblock, MBasicBlock* mblock);
+    MOZ_MUST_USE bool visitControlInstruction(CFGControlInstruction* ins, bool* restarted);
+    MOZ_MUST_USE bool visitTest(CFGTest* test);
+    MOZ_MUST_USE bool visitCompare(CFGCompare* compare);
+    MOZ_MUST_USE bool visitLoopEntry(CFGLoopEntry* loopEntry);
+    MOZ_MUST_USE bool visitReturn(CFGControlInstruction* ins);
+    MOZ_MUST_USE bool visitGoto(CFGGoto* ins);
+    MOZ_MUST_USE bool visitBackEdge(CFGBackEdge* ins, bool* restarted);
+    MOZ_MUST_USE bool visitTry(CFGTry* test);
+    MOZ_MUST_USE bool visitThrow(CFGThrow* ins);
+    MOZ_MUST_USE bool visitTableSwitch(CFGTableSwitch* ins);
+
     // We want to make sure that our MTest instructions all check whether the
     // thing being tested might emulate undefined.  So we funnel their creation
     // through this method, to make sure that happens.  We don't want to just do
@@ -296,18 +106,6 @@ class IonBuilder
     // threads, and we're not sure it's safe to touch that part of the typeset
     // from a background thread.
     MTest* newTest(MDefinition* ins, MBasicBlock* ifTrue, MBasicBlock* ifFalse);
-
-    // Given a list of pending breaks, creates a new block and inserts a Goto
-    // linking each break to the new block.
-    MBasicBlock* createBreakCatchBlock(DeferredEdge* edge, jsbytecode* pc);
-
-    // Finishes loops that do not actually loop, containing only breaks and
-    // returns or a do while loop with a condition that is constant false.
-    ControlStatus processBrokenLoop(CFGState& state);
-
-    // Computes loop phis, places them in all successors of a loop, then
-    // handles any pending breaks.
-    ControlStatus finishLoop(CFGState& state, MBasicBlock* successor);
 
     // Incorporates a type/typeSet into an OSR value for a loop, after the loop
     // body has been processed.
@@ -317,15 +115,8 @@ class IonBuilder
 
     // Restarts processing of a loop if the type information at its header was
     // incomplete.
-    ControlStatus restartLoop(const CFGState& state);
-
-    void assertValidLoopHeadOp(jsbytecode* pc);
-
-    ControlStatus forLoop(JSOp op, jssrcnote* sn);
-    ControlStatus whileOrForInLoop(jssrcnote* sn);
-    ControlStatus doWhileLoop(JSOp op, jssrcnote* sn);
-    ControlStatus tableSwitch(JSOp op, jssrcnote* sn);
-    ControlStatus condSwitch(JSOp op, jssrcnote* sn);
+    bool restartLoop(const CFGBlock* header);
+    bool initLoopEntry();
 
     // Please see the Big Honkin' Comment about how resume points work in
     // IonBuilder.cpp, near the definition for this function.
@@ -334,13 +125,15 @@ class IonBuilder
     MOZ_MUST_USE bool resumeAfter(MInstruction* ins);
     MOZ_MUST_USE bool maybeInsertResume();
 
+    bool blockIsOSREntry(const CFGBlock* block, const CFGBlock* predecessor);
+
     void insertRecompileCheck();
 
-    void initParameters();
+    MOZ_MUST_USE bool initParameters();
     void initLocals();
     void rewriteParameter(uint32_t slotIdx, MDefinition* param, int32_t argIndex);
-    void rewriteParameters();
-    MOZ_MUST_USE bool initScopeChain(MDefinition* callee = nullptr);
+    MOZ_MUST_USE bool rewriteParameters();
+    MOZ_MUST_USE bool initEnvironmentChain(MDefinition* callee = nullptr);
     MOZ_MUST_USE bool initArgumentsObject();
     void pushConstant(const Value& v);
 
@@ -391,10 +184,10 @@ class IonBuilder
     MDefinition* createThisScriptedSingleton(JSFunction* target, MDefinition* callee);
     MDefinition* createThisScriptedBaseline(MDefinition* callee);
     MDefinition* createThis(JSFunction* target, MDefinition* callee, MDefinition* newTarget);
-    MInstruction* createDeclEnvObject(MDefinition* callee, MDefinition* scopeObj);
-    MInstruction* createCallObject(MDefinition* callee, MDefinition* scopeObj);
+    MInstruction* createNamedLambdaObject(MDefinition* callee, MDefinition* envObj);
+    MInstruction* createCallObject(MDefinition* callee, MDefinition* envObj);
 
-    MDefinition* walkScopeChain(unsigned hops);
+    MDefinition* walkEnvironmentChain(unsigned hops);
 
     MInstruction* addConvertElementsToDoubles(MDefinition* elements);
     MDefinition* addMaybeCopyElementsForWrite(MDefinition* object, bool checkNative);
@@ -412,7 +205,7 @@ class IonBuilder
 
     bool invalidatedIdempotentCache();
 
-    bool hasStaticScopeObject(ScopeCoordinate sc, JSObject** pcall);
+    bool hasStaticEnvironmentObject(EnvironmentCoordinate ec, JSObject** pcall);
     MOZ_MUST_USE bool loadSlot(MDefinition* obj, size_t slot, size_t nfixed, MIRType rvalType,
                                BarrierKind barrier, TemporaryTypeSet* types);
     MOZ_MUST_USE bool loadSlot(MDefinition* obj, Shape* shape, MIRType rvalType,
@@ -444,7 +237,7 @@ class IonBuilder
     MOZ_MUST_USE bool getPropTryUnboxed(bool* emitted, MDefinition* obj, PropertyName* name,
                                         BarrierKind barrier, TemporaryTypeSet* types);
     MOZ_MUST_USE bool getPropTryCommonGetter(bool* emitted, MDefinition* obj, PropertyName* name,
-                                             TemporaryTypeSet* types);
+                                             TemporaryTypeSet* types, bool innerized = false);
     MOZ_MUST_USE bool getPropTryInlineAccess(bool* emitted, MDefinition* obj, PropertyName* name,
                                              BarrierKind barrier, TemporaryTypeSet* types);
     MOZ_MUST_USE bool getPropTryTypedObject(bool* emitted, MDefinition* obj, PropertyName* name);
@@ -555,7 +348,7 @@ class IonBuilder
                              LinearSum* ownerOffset);
     void loadTypedObjectElements(MDefinition* typedObj,
                                  const LinearSum& byteOffset,
-                                 int32_t scale,
+                                 uint32_t scale,
                                  MDefinition** ownerElements,
                                  MDefinition** ownerScaledOffset,
                                  int32_t* ownerByteAdjustment);
@@ -571,7 +364,7 @@ class IonBuilder
                                                   const LinearSum& byteOffset,
                                                   ScalarTypeDescr::Type type,
                                                   MDefinition* value);
-    MOZ_MUST_USE bool checkTypedObjectIndexInBounds(int32_t elemSize,
+    MOZ_MUST_USE bool checkTypedObjectIndexInBounds(uint32_t elemSize,
                                                     MDefinition* obj,
                                                     MDefinition* index,
                                                     TypedObjectPrediction objTypeDescrs,
@@ -615,7 +408,7 @@ class IonBuilder
                                                         TypedObjectPrediction objTypeReprs,
                                                         MDefinition* value,
                                                         TypedObjectPrediction elemTypeReprs,
-                                                        int32_t elemSize);
+                                                        uint32_t elemSize);
     MOZ_MUST_USE bool initializeArrayElement(MDefinition* obj, size_t index, MDefinition* value,
                                              JSValueType unboxedType,
                                              bool addResumePointAndIncrementInitializedLength);
@@ -636,7 +429,7 @@ class IonBuilder
                                                         MDefinition* index,
                                                         TypedObjectPrediction objTypeReprs,
                                                         TypedObjectPrediction elemTypeReprs,
-                                                        int32_t elemSize);
+                                                        uint32_t elemSize);
     MOZ_MUST_USE bool getElemTryReferenceElemOfTypedObject(bool* emitted,
                                                            MDefinition* obj,
                                                            MDefinition* index,
@@ -647,7 +440,7 @@ class IonBuilder
                                                          MDefinition* index,
                                                          TypedObjectPrediction objTypeReprs,
                                                          TypedObjectPrediction elemTypeReprs,
-                                                         int32_t elemSize);
+                                                         uint32_t elemSize);
     TemporaryTypeSet* computeHeapType(const TemporaryTypeSet* objTypes, const jsid id);
 
     enum BoundsChecking { DoBoundsCheck, SkipBoundsCheck };
@@ -676,7 +469,7 @@ class IonBuilder
     MOZ_MUST_USE bool improveThisTypesForCall();
 
     MDefinition* getCallee();
-    MDefinition* getAliasedVar(ScopeCoordinate sc);
+    MDefinition* getAliasedVar(EnvironmentCoordinate ec);
     MDefinition* addLexicalCheck(MDefinition* input);
 
     MDefinition* convertToBoolean(MDefinition* input);
@@ -701,17 +494,14 @@ class IonBuilder
     MOZ_MUST_USE bool jsop_notearg();
     MOZ_MUST_USE bool jsop_throwsetconst();
     MOZ_MUST_USE bool jsop_checklexical();
-    MOZ_MUST_USE bool jsop_checkaliasedlet(ScopeCoordinate sc);
+    MOZ_MUST_USE bool jsop_checkaliasedlexical(EnvironmentCoordinate ec);
     MOZ_MUST_USE bool jsop_funcall(uint32_t argc);
     MOZ_MUST_USE bool jsop_funapply(uint32_t argc);
     MOZ_MUST_USE bool jsop_funapplyarguments(uint32_t argc);
     MOZ_MUST_USE bool jsop_funapplyarray(uint32_t argc);
     MOZ_MUST_USE bool jsop_call(uint32_t argc, bool constructing);
     MOZ_MUST_USE bool jsop_eval(uint32_t argc);
-    MOZ_MUST_USE bool jsop_ifeq(JSOp op);
-    MOZ_MUST_USE bool jsop_try();
     MOZ_MUST_USE bool jsop_label();
-    MOZ_MUST_USE bool jsop_condswitch();
     MOZ_MUST_USE bool jsop_andor(JSOp op);
     MOZ_MUST_USE bool jsop_dup2();
     MOZ_MUST_USE bool jsop_loophead(jsbytecode* pc);
@@ -737,7 +527,7 @@ class IonBuilder
     MOZ_MUST_USE bool jsop_setelem_dense(TemporaryTypeSet::DoubleConversion conversion,
                                          MDefinition* object, MDefinition* index,
                                          MDefinition* value, JSValueType unboxedType,
-                                         bool writeHole);
+                                         bool writeHole, bool* emitted);
     MOZ_MUST_USE bool jsop_setelem_typed(ScalarTypeDescr::Type arrayType,
                                          MDefinition* object, MDefinition* index,
                                          MDefinition* value);
@@ -766,9 +556,11 @@ class IonBuilder
     MOZ_MUST_USE bool jsop_object(JSObject* obj);
     MOZ_MUST_USE bool jsop_lambda(JSFunction* fun);
     MOZ_MUST_USE bool jsop_lambda_arrow(JSFunction* fun);
+    MOZ_MUST_USE bool jsop_setfunname(uint8_t prefixKind);
     MOZ_MUST_USE bool jsop_functionthis();
     MOZ_MUST_USE bool jsop_globalthis();
     MOZ_MUST_USE bool jsop_typeof();
+    MOZ_MUST_USE bool jsop_toasync();
     MOZ_MUST_USE bool jsop_toid();
     MOZ_MUST_USE bool jsop_iter(uint8_t flags);
     MOZ_MUST_USE bool jsop_itermore();
@@ -776,11 +568,13 @@ class IonBuilder
     MOZ_MUST_USE bool jsop_iterend();
     MOZ_MUST_USE bool jsop_in();
     MOZ_MUST_USE bool jsop_instanceof();
-    MOZ_MUST_USE bool jsop_getaliasedvar(ScopeCoordinate sc);
-    MOZ_MUST_USE bool jsop_setaliasedvar(ScopeCoordinate sc);
+    MOZ_MUST_USE bool jsop_getaliasedvar(EnvironmentCoordinate ec);
+    MOZ_MUST_USE bool jsop_setaliasedvar(EnvironmentCoordinate ec);
     MOZ_MUST_USE bool jsop_debugger();
     MOZ_MUST_USE bool jsop_newtarget();
+    MOZ_MUST_USE bool jsop_checkisobj(uint8_t kind);
     MOZ_MUST_USE bool jsop_checkobjcoercible();
+    MOZ_MUST_USE bool jsop_pushcallobj();
 
     /* Inlining. */
 
@@ -848,6 +642,7 @@ class IonBuilder
     InliningStatus inlineStrCharCodeAt(CallInfo& callInfo);
     InliningStatus inlineConstantCharCodeAt(CallInfo& callInfo);
     InliningStatus inlineStrFromCharCode(CallInfo& callInfo);
+    InliningStatus inlineStrFromCodePoint(CallInfo& callInfo);
     InliningStatus inlineStrCharAt(CallInfo& callInfo);
 
     // String intrinsics.
@@ -881,8 +676,9 @@ class IonBuilder
     InliningStatus inlineUnsafeGetReservedSlot(CallInfo& callInfo,
                                                MIRType knownValueType);
 
-    // Map intrinsics.
-    InliningStatus inlineGetNextMapEntryForIterator(CallInfo& callInfo);
+    // Map and Set intrinsics.
+    InliningStatus inlineGetNextEntryForIterator(CallInfo& callInfo,
+                                                 MGetNextEntryForIterator::Mode mode);
 
     // ArrayBuffer intrinsics.
     InliningStatus inlineArrayBufferByteLength(CallInfo& callInfo);
@@ -978,7 +774,7 @@ class IonBuilder
     InliningStatus inlineNativeCall(CallInfo& callInfo, JSFunction* target);
     InliningStatus inlineNativeGetter(CallInfo& callInfo, JSFunction* target);
     InliningStatus inlineNonFunctionCall(CallInfo& callInfo, JSObject* target);
-    MOZ_MUST_USE bool inlineScriptedCall(CallInfo& callInfo, JSFunction* target);
+    InliningStatus inlineScriptedCall(CallInfo& callInfo, JSFunction* target);
     InliningStatus inlineSingleCall(CallInfo& callInfo, JSObject* target);
 
     // Call functions
@@ -1080,7 +876,7 @@ class IonBuilder
 
     MOZ_MUST_USE bool setCurrentAndSpecializePhis(MBasicBlock* block) {
         if (block) {
-            if (!block->specializePhis())
+            if (!block->specializePhis(alloc()))
                 return false;
         }
         setCurrent(block);
@@ -1112,7 +908,13 @@ class IonBuilder
     jsbytecode* actionableAbortPc_;
     const char* actionableAbortMessage_;
 
+    MRootList* rootList_;
+
   public:
+    void setRootList(MRootList& rootList) {
+        MOZ_ASSERT(!rootList_);
+        rootList_ = &rootList;
+    }
     void clearForBackEnd();
     JSObject* checkNurseryObject(JSObject* obj);
 
@@ -1152,6 +954,8 @@ class IonBuilder
         *abortMessage = actionableAbortMessage_;
     }
 
+    void trace(JSTracer* trc);
+
   private:
     MOZ_MUST_USE bool init();
 
@@ -1174,11 +978,14 @@ class IonBuilder
     uint32_t* bytecodeTypeMap;
 
     GSNCache gsn;
-    ScopeCoordinateNameCache scopeCoordinateNameCache;
+    EnvironmentCoordinateNameCache envCoordinateNameCache;
 
     jsbytecode* pc;
     MBasicBlock* current;
     uint32_t loopDepth_;
+    Vector<MBasicBlock*, 0, JitAllocPolicy> blockWorklist;
+    const CFGBlock* cfgCurrent;
+    const ControlFlowGraph* cfg;
 
     Vector<BytecodeSite*, 0, JitAllocPolicy> trackedOptimizationSites_;
 
@@ -1224,12 +1031,13 @@ class IonBuilder
         {}
     };
 
-    Vector<CFGState, 8, JitAllocPolicy> cfgStack_;
-    Vector<ControlFlowInfo, 4, JitAllocPolicy> loops_;
-    Vector<ControlFlowInfo, 0, JitAllocPolicy> switches_;
-    Vector<ControlFlowInfo, 2, JitAllocPolicy> labels_;
     Vector<MInstruction*, 2, JitAllocPolicy> iterators_;
     Vector<LoopHeader, 0, JitAllocPolicy> loopHeaders_;
+    Vector<MBasicBlock*, 0, JitAllocPolicy> loopHeaderStack_;
+#ifdef DEBUG
+    Vector<const CFGBlock*, 0, JitAllocPolicy> cfgLoopHeaderStack_;
+#endif
+
     BaselineInspector* inspector;
 
     size_t inliningDepth_;

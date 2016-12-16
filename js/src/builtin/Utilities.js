@@ -148,10 +148,33 @@ function GetIterator(obj, method) {
 
     // Step 5.
     if (!IsObject(iterator))
-        ThrowTypeError(JSMSG_NOT_ITERABLE, ToString(iterator));
+        ThrowTypeError(JSMSG_NOT_ITERATOR, ToString(iterator));
 
     // Step 6.
     return iterator;
+}
+
+// ES2017 draft rev 7.4.6.
+// When completion.[[Type]] is throw.
+function IteratorCloseThrow(iter) {
+    // Steps 1-2 (implicit)
+
+    // Step 3.
+    var returnMethod = GetMethod(iter, "return");
+
+    // Step 4 (done in caller).
+    if (returnMethod === undefined)
+        return;
+
+    try {
+        // Step 5.
+        callContentFunction(returnMethod, iter);
+    } catch (e) {
+    }
+
+    // Step 6 (done in caller).
+
+    // Steps 7-9 (skipped).
 }
 
 var _builtinCtorsCache = {__proto__: null};
@@ -201,6 +224,15 @@ function SpeciesConstructor(obj, defaultConstructor) {
 function GetTypeError(msg) {
     try {
         FUN_APPLY(ThrowTypeError, undefined, arguments);
+    } catch (e) {
+        return e;
+    }
+    assert(false, "the catch block should've returned from this function.");
+}
+
+function GetInternalError(msg) {
+    try {
+        FUN_APPLY(ThrowInternalError, undefined, arguments);
     } catch (e) {
         return e;
     }

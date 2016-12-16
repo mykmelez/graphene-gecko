@@ -7,9 +7,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Sprintf.h"
 #include "XRemoteClient.h"
 #include "prmem.h"
-#include "prprf.h"
 #include "plstr.h"
 #include "prsystem.h"
 #include "mozilla/Logging.h"
@@ -293,7 +293,7 @@ XRemoteClient::GetLock(Window aWindow, bool *aDestroyed)
     
     char pidstr[32];
     char sysinfobuf[SYS_INFO_BUFFER_LENGTH];
-    PR_snprintf(pidstr, sizeof(pidstr), "pid%d@", getpid());
+    SprintfLiteral(pidstr, "pid%d@", getpid());
     PRStatus status;
     status = PR_GetSystemInfo(PR_SI_HOSTNAME, sysinfobuf,
 			      SYS_INFO_BUFFER_LENGTH);
@@ -357,7 +357,7 @@ XRemoteClient::GetLock(Window aWindow, bool *aDestroyed)
 	     ("window 0x%x is locked by %s; waiting...\n",
 	      (unsigned int) aWindow, data));
       waited = True;
-      while (1) {
+      while (true) {
 	XEvent event;
 	int select_retval;
 	fd_set select_set;
@@ -642,14 +642,14 @@ XRemoteClient::DoSendCommandLine(Window aWindow, int32_t argc, char **argv,
     argvlen += len;
   }
 
-  int32_t* buffer = (int32_t*) malloc(argvlen + argc + 1 +
+  auto* buffer = (int32_t*) malloc(argvlen + argc + 1 +
                                       sizeof(int32_t) * (argc + 1));
   if (!buffer)
     return NS_ERROR_OUT_OF_MEMORY;
 
   buffer[0] = TO_LITTLE_ENDIAN32(argc);
 
-  char *bufend = (char*) (buffer + argc + 1);
+  auto *bufend = (char*) (buffer + argc + 1);
 
   bufend = estrcpy(cwdbuf, bufend);
 

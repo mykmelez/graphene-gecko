@@ -81,7 +81,7 @@ public:
     , mOpt(aOpt)
   {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     return mSocket->SetSocketOption(mOpt);
   }
@@ -249,8 +249,6 @@ nsUDPMessage::GetDataAsTArray()
 nsUDPSocket::nsUDPSocket()
   : mLock("nsUDPSocket.mLock")
   , mFD(nullptr)
-  , mAppId(NECKO_UNKNOWN_APP_ID)
-  , mIsInIsolatedMozBrowserElement(false)
   , mAttached(false)
   , mByteReadCount(0)
   , mByteWriteCount(0)
@@ -266,20 +264,17 @@ nsUDPSocket::nsUDPSocket()
   }
 
   mSts = gSocketTransportService;
-  MOZ_COUNT_CTOR(nsUDPSocket);
 }
 
 nsUDPSocket::~nsUDPSocket()
 {
   CloseSocket();
-  MOZ_COUNT_DTOR(nsUDPSocket);
 }
 
 void
 nsUDPSocket::AddOutputBytes(uint64_t aBytes)
 {
   mByteWriteCount += aBytes;
-  SaveNetworkStats(false);
 }
 
 void
@@ -469,7 +464,6 @@ nsUDPSocket::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
     return;
   }
   mByteReadCount += count;
-  SaveNetworkStats(false);
 
   FallibleTArray<uint8_t> data;
   if (!data.AppendElements(buff, count, fallible)) {
@@ -516,7 +510,6 @@ nsUDPSocket::OnSocketDetached(PRFileDesc *fd)
     NS_ASSERTION(mFD == fd, "wrong file descriptor");
     CloseSocket();
   }
-  SaveNetworkStats(true);
 
   if (mListener)
   {
@@ -573,6 +566,31 @@ nsUDPSocket::Init(int32_t aPort, bool aLoopbackOnly, nsIPrincipal *aPrincipal,
 }
 
 NS_IMETHODIMP
+nsUDPSocket::Init2(const nsACString& aAddr, int32_t aPort, nsIPrincipal *aPrincipal,
+                   bool aAddressReuse, uint8_t aOptionalArgc)
+{
+  if (NS_WARN_IF(aAddr.IsEmpty())) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  PRNetAddr prAddr;
+  if (PR_StringToNetAddr(aAddr.BeginReading(), &prAddr) != PR_SUCCESS) {
+    return NS_ERROR_FAILURE;
+  }
+
+  NetAddr addr;
+
+  if (aPort < 0)
+    aPort = 0;
+
+  addr.raw.family = AF_INET;
+  addr.inet.port = htons(aPort);
+  addr.inet.ip = prAddr.inet.ip;
+
+  return InitWithAddress(&addr, aPrincipal, aAddressReuse, aOptionalArgc);
+}
+
+NS_IMETHODIMP
 nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
                              bool aAddressReuse, uint8_t aOptionalArgc)
 {
@@ -594,27 +612,6 @@ nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
     NS_WARNING("unable to create UDP socket");
     return NS_ERROR_FAILURE;
   }
-
-  if (aPrincipal) {
-    nsresult rv = aPrincipal->GetAppId(&mAppId);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    rv = aPrincipal->GetIsInIsolatedMozBrowserElement(&mIsInIsolatedMozBrowserElement);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-#ifdef MOZ_WIDGET_GONK
-  if (mAppId != NECKO_UNKNOWN_APP_ID) {
-    nsCOMPtr<nsINetworkInfo> activeNetworkInfo;
-    GetActiveNetworkInfo(activeNetworkInfo);
-    mActiveNetworkInfo =
-      new nsMainThreadPtrHolder<nsINetworkInfo>(activeNetworkInfo);
-  }
-#endif
 
   uint16_t port;
   if (NS_FAILED(net::GetPort(aAddr, &port))) {
@@ -716,7 +713,6 @@ nsUDPSocket::Close()
       // expects this happen synchronously.
       CloseSocket();
 
-      SaveNetworkStats(true);
       return NS_OK;
     }
   }
@@ -742,34 +738,6 @@ nsUDPSocket::GetLocalAddr(nsINetAddr * *aResult)
   result.forget(aResult);
 
   return NS_OK;
-}
-
-void
-nsUDPSocket::SaveNetworkStats(bool aEnforce)
-{
-#ifdef MOZ_WIDGET_GONK
-  if (!mActiveNetworkInfo || mAppId == NECKO_UNKNOWN_APP_ID) {
-    return;
-  }
-
-  if (mByteReadCount == 0 && mByteWriteCount == 0) {
-    return;
-  }
-
-  uint64_t total = mByteReadCount + mByteWriteCount;
-  if (aEnforce || total > NETWORK_STATS_THRESHOLD) {
-    // Create the event to save the network statistics.
-    // the event is then dispathed to the main thread.
-    RefPtr<Runnable> event =
-      new SaveNetworkStatsEvent(mAppId, mIsInIsolatedMozBrowserElement, mActiveNetworkInfo,
-                                mByteReadCount, mByteWriteCount, false);
-    NS_DispatchToMainThread(event);
-
-    // Reset the counters after saving.
-    mByteReadCount = 0;
-    mByteWriteCount = 0;
-  }
-#endif
 }
 
 void

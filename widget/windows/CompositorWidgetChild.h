@@ -29,11 +29,10 @@ public:
   void OnDestroyWindow() override;
   void UpdateTransparency(nsTransparencyMode aMode) override;
   void ClearTransparentWindow() override;
-  void ResizeTransparentWindow(const gfx::IntSize& aSize) override;
   HDC GetTransparentDC() const override;
 
-  bool RecvObserveVsync() override;
-  bool RecvUnobserveVsync() override;
+  mozilla::ipc::IPCResult RecvObserveVsync() override;
+  mozilla::ipc::IPCResult RecvUnobserveVsync() override;
 
 private:
   RefPtr<CompositorVsyncDispatcher> mVsyncDispatcher;

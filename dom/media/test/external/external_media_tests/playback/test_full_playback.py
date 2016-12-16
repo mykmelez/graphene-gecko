@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from marionette_harness import Marionette
 
 from external_media_harness.testcase import MediaTestCase
 from external_media_tests.media_utils.video_puppeteer import VideoPuppeteer
@@ -17,7 +18,7 @@ class TestFullPlayback(MediaTestCase):
     """
 
     def test_video_playback_full(self):
-        with self.marionette.using_context('content'):
+        with self.marionette.using_context(Marionette.CONTEXT_CONTENT):
             for url in self.video_urls:
                 video = VideoPuppeteer(self.marionette, url,
                                        stall_wait_time=10)

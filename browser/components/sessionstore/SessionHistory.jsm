@@ -14,7 +14,9 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Utils",
-  "resource:///modules/sessionstore/Utils.jsm");
+  "resource://gre/modules/sessionstore/Utils.jsm");
+XPCOMUtils.defineLazyServiceGetter(this, "uuidGenerator",
+  "@mozilla.org/uuid-generator;1", "nsIUUIDGenerator");
 
 function debug(msg) {
   Services.console.logStringMessage("SessionHistory: " + msg);
@@ -28,8 +30,8 @@ this.SessionHistory = Object.freeze({
     return SessionHistoryInternal.isEmpty(docShell);
   },
 
-  collect: function (docShell) {
-    return SessionHistoryInternal.collect(docShell);
+  collect: function (docShell, aFromIdx = -1) {
+    return SessionHistoryInternal.collect(docShell, aFromIdx);
   },
 
   restore: function (docShell, tabData) {
@@ -41,6 +43,11 @@ this.SessionHistory = Object.freeze({
  * The internal API for the SessionHistory module.
  */
 var SessionHistoryInternal = {
+  /**
+   * Mapping from legacy docshellIDs to docshellUUIDs.
+   */
+  _docshellUUIDMap: new Map(),
+
   /**
    * Returns whether the given docShell's session history is empty.
    *
@@ -62,11 +69,15 @@ var SessionHistoryInternal = {
    *
    * @param docShell
    *        The docShell that owns the session history.
+   * @param aFromIdx
+   *        The starting local index to collect the history from.
+   * @return An object reprereseting a partial global history update.
    */
-  collect: function (docShell) {
+  collect: function (docShell, aFromIdx = -1) {
     let loadContext = docShell.QueryInterface(Ci.nsILoadContext);
     let webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
     let history = webNavigation.sessionHistory.QueryInterface(Ci.nsISHistoryInternal);
+    let ihistory = history.QueryInterface(Ci.nsISHistory);
 
     let data = {entries: [], userContextId: loadContext.originAttributes.userContextId };
 
@@ -98,6 +109,23 @@ var SessionHistoryInternal = {
         data.entries.push({ url: uri });
         data.index = 1;
       }
+    }
+
+    // Check if we should discard some of the entries which didn't change
+    if (aFromIdx > -1) {
+      data.entries.splice(0, aFromIdx + 1);
+    }
+
+    // Transform the entries from local to global index space.
+    data.index += ihistory.globalIndexOffset;
+    data.fromIdx = aFromIdx + ihistory.globalIndexOffset;
+
+    // If we are not the most recent partialSHistory in our groupedSHistory, we
+    // need to make certain that we don't replace the entries from the following
+    // SHistories - so we replace only the number of entries which our SHistory
+    // takes up.
+    if (ihistory.globalIndexOffset + ihistory.count < ihistory.globalCount) {
+      data.toIdx = data.fromIdx + ihistory.count;
     }
 
     return data;
@@ -132,7 +160,7 @@ var SessionHistoryInternal = {
       entry.cacheKey = cacheKey.data;
     }
     entry.ID = shEntry.ID;
-    entry.docshellID = shEntry.docshellID;
+    entry.docshellUUID = shEntry.docshellID.toString();
 
     // We will include the property only if it's truthy to save a couple of
     // bytes when the resulting object is stringified and saved to disk.
@@ -170,16 +198,35 @@ var SessionHistoryInternal = {
         entry.scroll = x.value + "," + y.value;
     }
 
-    // Collect owner data for the current history entry.
-    try {
-      let owner = this.serializeOwner(shEntry);
-      if (owner) {
-        entry.owner_b64 = owner;
+    // Collect triggeringPrincipal data for the current history entry.
+    // Please note that before Bug 1297338 there was no concept of a
+    // principalToInherit. To remain backward/forward compatible we
+    // serialize the principalToInherit as triggeringPrincipal_b64.
+    // Once principalToInherit is well established (within FF55)
+    // we can update this code, remove triggeringPrincipal_b64 and
+    // just keep triggeringPrincipal_base64 as well as
+    // principalToInherit_base64;  see Bug 1301666.
+    if (shEntry.principalToInherit) {
+      try {
+        let principalToInherit = Utils.serializePrincipal(shEntry.principalToInherit);
+        if (principalToInherit) {
+          entry.triggeringPrincipal_b64 = principalToInherit;
+          entry.principalToInherit_base64 = principalToInherit;
+        }
+      } catch (e) {
+        debug(e);
       }
-    } catch (ex) {
-      // Not catching anything specific here, just possible errors
-      // from writeCompoundObject() and the like.
-      debug("Failed serializing owner data: " + ex);
+    }
+
+    if (shEntry.triggeringPrincipal) {
+      try {
+        let triggeringPrincipal = Utils.serializePrincipal(shEntry.triggeringPrincipal);
+        if (triggeringPrincipal) {
+          entry.triggeringPrincipal_base64 = triggeringPrincipal;
+        }
+      } catch (e) {
+        debug(e);
+      }
     }
 
     entry.docIdentifier = shEntry.BFCacheEntry.ID;
@@ -216,39 +263,6 @@ var SessionHistoryInternal = {
     }
 
     return entry;
-  },
-
-  /**
-   * Serialize owner data contained in the given session history entry.
-   *
-   * @param shEntry
-   *        The session history entry.
-   * @return The base64 encoded owner data.
-   */
-  serializeOwner: function (shEntry) {
-    if (!shEntry.owner) {
-      return null;
-    }
-
-    let binaryStream = Cc["@mozilla.org/binaryoutputstream;1"].
-                       createInstance(Ci.nsIObjectOutputStream);
-    let pipe = Cc["@mozilla.org/pipe;1"].createInstance(Ci.nsIPipe);
-    pipe.init(false, false, 0, 0xffffffff, null);
-    binaryStream.setOutputStream(pipe.outputStream);
-    binaryStream.writeCompoundObject(shEntry.owner, Ci.nsISupports, true);
-    binaryStream.close();
-
-    // Now we want to read the data from the pipe's input end and encode it.
-    let scriptableStream = Cc["@mozilla.org/binaryinputstream;1"].
-                           createInstance(Ci.nsIBinaryInputStream);
-    scriptableStream.setInputStream(pipe.inputStream);
-    let ownerBytes =
-      scriptableStream.readByteArray(scriptableStream.available());
-
-    // We can stop doing base64 encoding once our serialization into JSON
-    // is guaranteed to handle all chars in strings, including embedded
-    // nulls.
-    return btoa(String.fromCharCode.apply(null, ownerBytes));
   },
 
   /**
@@ -342,8 +356,22 @@ var SessionHistoryInternal = {
       shEntry.ID = id;
     }
 
-    if (entry.docshellID)
-      shEntry.docshellID = entry.docshellID;
+    // If we have the legacy docshellID on our entry, upgrade it to a
+    // docshellUUID by going through the mapping.
+    if (entry.docshellID) {
+      if (!this._docshellUUIDMap.has(entry.docshellID)) {
+        // Convert the nsID to a string so that the docshellUUID property
+        // is correctly stored as a string.
+        this._docshellUUIDMap.set(entry.docshellID,
+                                  uuidGenerator.generateUUID().toString());
+      }
+      entry.docshellUUID = this._docshellUUIDMap.get(entry.docshellID);
+      delete entry.docshellID;
+    }
+
+    if (entry.docshellUUID) {
+      shEntry.docshellID = Components.ID(entry.docshellUUID);
+    }
 
     if (entry.structuredCloneState && entry.structuredCloneVersion) {
       shEntry.stateData =
@@ -379,17 +407,48 @@ var SessionHistoryInternal = {
       }
     }
 
+    // The field entry.owner_b64 got renamed to entry.triggeringPricipal_b64 in
+    // Bug 1286472. To remain backward compatible we still have to support that
+    // field for a few cycles before we can remove it within Bug 1289785.
     if (entry.owner_b64) {
-      var ownerInput = Cc["@mozilla.org/io/string-input-stream;1"].
-                       createInstance(Ci.nsIStringInputStream);
-      var binaryData = atob(entry.owner_b64);
-      ownerInput.setData(binaryData, binaryData.length);
-      var binaryStream = Cc["@mozilla.org/binaryinputstream;1"].
-                         createInstance(Ci.nsIObjectInputStream);
-      binaryStream.setInputStream(ownerInput);
-      try { // Catch possible deserialization exceptions
-        shEntry.owner = binaryStream.readObject(true);
-      } catch (ex) { debug(ex); }
+      entry.triggeringPricipal_b64 = entry.owner_b64;
+      delete entry.owner_b64;
+    }
+
+    // Before introducing the concept of principalToInherit we only had
+    // a triggeringPrincipal within every entry which basically is the
+    // equivalent of the new principalToInherit. To avoid compatibility
+    // issues, we first check if the entry has entries for
+    // triggeringPrincipal_base64 and principalToInherit_base64. If not
+    // we fall back to using the principalToInherit (which is stored
+    // as triggeringPrincipal_b64) as the triggeringPrincipal and
+    // the principalToInherit.
+    // FF55 will remove the triggeringPrincipal_b64, see Bug 1301666.
+    if (entry.triggeringPrincipal_base64 || entry.principalToInherit_base64) {
+      if (entry.triggeringPrincipal_base64) {
+        try {
+          shEntry.triggeringPrincipal =
+            Utils.deserializePrincipal(entry.triggeringPrincipal_base64);
+        } catch (e) {
+          debug(e);
+        }
+      }
+      if (entry.principalToInherit_base64) {
+        try {
+          shEntry.principalToInherit =
+            Utils.deserializePrincipal(entry.principalToInherit_base64);
+        } catch (e) {
+          debug(e);
+        }
+      }
+    } else if (entry.triggeringPrincipal_b64) {
+      try {
+        shEntry.triggeringPrincipal = Utils.deserializePrincipal(entry.triggeringPrincipal_b64);
+        shEntry.principalToInherit = shEntry.triggeringPrincipal;
+      }
+      catch (e) {
+        debug(e);
+      }
     }
 
     if (entry.children && shEntry instanceof Ci.nsISHContainer) {

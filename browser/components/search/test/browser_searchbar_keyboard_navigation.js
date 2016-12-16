@@ -3,29 +3,18 @@
 const searchbar = document.getElementById("searchbar");
 const textbox = searchbar._textbox;
 const searchPopup = document.getElementById("PopupSearchAutoComplete");
+const oneOffsContainer =
+  document.getAnonymousElementByAttribute(searchPopup, "anonid",
+                                          "search-one-off-buttons");
 
 const kValues = ["foo1", "foo2", "foo3"];
 const kUserValue = "foo";
-
-// Get an array of the one-off buttons.
-function getOneOffs() {
-  let oneOffs = [];
-  let oneOff = document.getAnonymousElementByAttribute(searchPopup, "anonid",
-                                                       "search-panel-one-offs");
-  for (oneOff = oneOff.firstChild; oneOff; oneOff = oneOff.nextSibling) {
-    if (oneOff.classList.contains("dummy"))
-      break;
-    oneOffs.push(oneOff);
-  }
-
-  return oneOffs;
-}
 
 function getOpenSearchItems() {
   let os = [];
 
   let addEngineList =
-    document.getAnonymousElementByAttribute(searchPopup, "anonid",
+    document.getAnonymousElementByAttribute(oneOffsContainer, "anonid",
                                             "add-engines");
   for (let item = addEngineList.firstChild; item; item = item.nextSibling)
     os.push(item);
@@ -46,20 +35,20 @@ add_task(function* init() {
 
   yield new Promise((resolve, reject) => {
     info("adding search history values: " + kValues);
-    let ops = kValues.map(value => { return {op: "add",
+    let addOps = kValues.map(value => { return {op: "add",
                                              fieldname: "searchbar-history",
                                              value: value}
                                    });
-    searchbar.FormHistory.update(ops, {
+    searchbar.FormHistory.update(addOps, {
       handleCompletion: function() {
         registerCleanupFunction(() => {
           info("removing search history values: " + kValues);
-          let ops =
+          let removeOps =
             kValues.map(value => { return {op: "remove",
                                            fieldname: "searchbar-history",
                                            value: value}
                                  });
-          searchbar.FormHistory.update(ops);
+          searchbar.FormHistory.update(removeOps);
         });
         resolve();
       },
@@ -382,7 +371,7 @@ add_task(function* test_tab_and_arrows() {
 
 add_task(function* test_open_search() {
   let rootDir = getRootDirectory(gTestPath);
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, rootDir + "opensearch.html");
+  yield BrowserTestUtils.openNewForegroundTab(gBrowser, rootDir + "opensearch.html");
 
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");

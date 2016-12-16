@@ -101,8 +101,8 @@ nsBlockReflowContext::ComputeCollapsedBStartMargin(const ReflowInput& aRI,
   // OK because our traversal is idempotent.
   for ( ;block; block = static_cast<nsBlockFrame*>(block->GetNextInFlow())) {
     for (int overflowLines = 0; overflowLines <= 1; ++overflowLines) {
-      nsBlockFrame::line_iterator line;
-      nsBlockFrame::line_iterator line_end;
+      nsBlockFrame::LineIterator line;
+      nsBlockFrame::LineIterator line_end;
       bool anyLines = true;
       if (overflowLines) {
         nsBlockFrame::FrameLines* frames = block->GetOverflowLines();
@@ -114,8 +114,8 @@ nsBlockReflowContext::ComputeCollapsedBStartMargin(const ReflowInput& aRI,
           line_end = lines->end();
         }
       } else {
-        line = block->begin_lines();
-        line_end = block->end_lines();
+        line = block->LinesBegin();
+        line_end = block->LinesEnd();
       }
       for (; anyLines && line != line_end; ++line) {
         if (!aClearanceFrame && line->HasClearance()) {
@@ -168,7 +168,7 @@ nsBlockReflowContext::ComputeCollapsedBStartMargin(const ReflowInput& aRI,
                                                availSpace);
             // Record that we're being optimistic by assuming the kid
             // has no clearance
-            if (kid->StyleDisplay()->mBreakType != NS_STYLE_CLEAR_NONE ||
+            if (kid->StyleDisplay()->mBreakType != StyleClear::None ||
                 !nsBlockFrame::BlockCanIntersectFloats(kid)) {
               *aMayNeedRetry = true;
             }

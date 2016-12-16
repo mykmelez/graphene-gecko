@@ -13,6 +13,7 @@
 #include <memory>
 
 #include "common/angleutils.h"
+#include "common/Color.h"
 #include "libANGLE/Debug.h"
 #include "libANGLE/Program.h"
 #include "libANGLE/RefCountObject.h"
@@ -20,6 +21,7 @@
 #include "libANGLE/Sampler.h"
 #include "libANGLE/Texture.h"
 #include "libANGLE/TransformFeedback.h"
+#include "libANGLE/Version.h"
 #include "libANGLE/VertexAttribute.h"
 #include "libANGLE/angletypes.h"
 
@@ -40,8 +42,9 @@ class State : angle::NonCopyable
 
     void initialize(const Caps &caps,
                     const Extensions &extensions,
-                    GLuint clientVersion,
-                    bool debug);
+                    const Version &clientVersion,
+                    bool debug,
+                    bool bindGeneratesResource);
     void reset();
 
     // State chunk getters
@@ -146,6 +149,9 @@ class State : angle::NonCopyable
     void setGenerateMipmapHint(GLenum hint);
     void setFragmentShaderDerivativeHint(GLenum hint);
 
+    // GL_CHROMIUM_bind_generates_resource
+    bool isBindGeneratesResourceEnabled() const;
+
     // Viewport state setter/getter
     void setViewportParams(GLint x, GLint y, GLsizei width, GLsizei height);
     const Rectangle &getViewport() const;
@@ -198,7 +204,7 @@ class State : angle::NonCopyable
     bool removeTransformFeedbackBinding(GLuint transformFeedback);
 
     // Query binding manipulation
-    bool isQueryActive(GLenum type) const;
+    bool isQueryActive(const GLenum type) const;
     bool isQueryActive(Query *query) const;
     void setActiveQuery(GLenum target, Query *query);
     GLuint getActiveQueryId(GLenum target) const;
@@ -285,13 +291,18 @@ class State : angle::NonCopyable
     GLint getPathStencilRef() const;
     GLuint getPathStencilMask() const;
 
+    // GL_EXT_sRGB_write_control
+    void setFramebufferSRGB(bool sRGB);
+    bool getFramebufferSRGB() const;
+
     // State query functions
     void getBooleanv(GLenum pname, GLboolean *params);
     void getFloatv(GLenum pname, GLfloat *params);
     void getIntegerv(const ContextState &data, GLenum pname, GLint *params);
     void getPointerv(GLenum pname, void **params) const;
-    bool getIndexedIntegerv(GLenum target, GLuint index, GLint *data);
-    bool getIndexedInteger64v(GLenum target, GLuint index, GLint64 *data);
+    void getIntegeri_v(GLenum target, GLuint index, GLint *data);
+    void getInteger64i_v(GLenum target, GLuint index, GLint64 *data);
+    void getBooleani_v(GLenum target, GLuint index, GLboolean *data);
 
     bool hasMappedBuffer(GLenum target) const;
 
@@ -357,6 +368,7 @@ class State : angle::NonCopyable
         DIRTY_BIT_PATH_RENDERING_MATRIX_MV,    // CHROMIUM_path_rendering path model view matrix
         DIRTY_BIT_PATH_RENDERING_MATRIX_PROJ,  // CHROMIUM_path_rendering path projection matrix
         DIRTY_BIT_PATH_RENDERING_STENCIL_STATE,
+        DIRTY_BIT_FRAMEBUFFER_SRGB,  // GL_EXT_sRGB_write_control
         DIRTY_BIT_CURRENT_VALUE_0,
         DIRTY_BIT_CURRENT_VALUE_MAX = DIRTY_BIT_CURRENT_VALUE_0 + MAX_VERTEX_ATTRIBS,
         DIRTY_BIT_INVALID           = DIRTY_BIT_CURRENT_VALUE_MAX,
@@ -416,6 +428,8 @@ class State : angle::NonCopyable
     GLenum mGenerateMipmapHint;
     GLenum mFragmentShaderDerivativeHint;
 
+    bool mBindGeneratesResource;
+
     Rectangle mViewport;
     float mNearZ;
     float mFarZ;
@@ -471,6 +485,9 @@ class State : angle::NonCopyable
     GLint mPathStencilRef;
     GLuint mPathStencilMask;
 
+    // GL_EXT_sRGB_write_control
+    bool mFramebufferSRGB;
+
     DirtyBits mDirtyBits;
     DirtyObjects mDirtyObjects;
 };
@@ -478,4 +495,3 @@ class State : angle::NonCopyable
 }  // namespace gl
 
 #endif // LIBANGLE_STATE_H_
-

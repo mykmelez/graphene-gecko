@@ -41,6 +41,7 @@
 #include "GLContextSymbols.h"
 #include "base/platform_thread.h"       // for PlatformThreadId
 #include "mozilla/GenericRefCounted.h"
+#include "mozilla/WeakPtr.h"
 #include "gfx2DGlue.h"
 #include "GeckoProfiler.h"
 
@@ -110,6 +111,8 @@ enum class GLFeature {
     occlusion_query_boolean,
     occlusion_query2,
     packed_depth_stencil,
+    prim_restart,
+    prim_restart_fixed,
     query_counter,
     query_objects,
     query_time_elapsed,
@@ -174,8 +177,10 @@ enum class GLRenderer {
     AdrenoTM330,
     AdrenoTM420,
     Mali400MP,
+    Mali450MP,
     SGX530,
     SGX540,
+    SGX544MP,
     Tegra,
     AndroidEmulator,
     GalliumLlvmpipe,
@@ -187,7 +192,11 @@ enum class GLRenderer {
 class GLContext
     : public GLLibraryLoader
     , public GenericAtomicRefCounted
+    , public SupportsWeakPtr<GLContext>
 {
+public:
+    MOZ_DECLARE_WEAKREFERENCE_TYPENAME(GLContext)
+
 // -----------------------------------------------------------------------------
 // basic enums
 public:
@@ -471,12 +480,15 @@ public:
         IMG_texture_compression_pvrtc,
         IMG_texture_npot,
         KHR_debug,
+        KHR_texture_compression_astc_hdr,
+        KHR_texture_compression_astc_ldr,
         NV_draw_instanced,
         NV_fence,
         NV_framebuffer_blit,
         NV_geometry_program4,
         NV_half_float,
         NV_instanced_arrays,
+        NV_primitive_restart,
         NV_texture_barrier,
         NV_transform_feedback,
         NV_transform_feedback2,
@@ -1964,6 +1976,9 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fFramebufferTexture2D(target, attachmentPoint, textureTarget, texture, level);
         AFTER_GL_CALL;
+        if (mNeedsCheckAfterAttachTextureToFb) {
+            fCheckFramebufferStatus(target);
+        }
     }
 
     void fFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) {
@@ -3172,6 +3187,16 @@ public:
     }
 
 // -----------------------------------------------------------------------------
+// prim_restart
+
+    void fPrimitiveRestartIndex(GLuint index) {
+        BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fPrimitiveRestartIndex);
+        mSymbols.fPrimitiveRestartIndex(index);
+        AFTER_GL_CALL;
+    }
+
+// -----------------------------------------------------------------------------
 // Constructor
 protected:
     explicit GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
@@ -3518,6 +3543,7 @@ protected:
     bool mNeedsTextureSizeChecks;
     bool mNeedsFlushBeforeDeleteFB;
     bool mTextureAllocCrashesOnMapFailure;
+    bool mNeedsCheckAfterAttachTextureToFb;
     bool mWorkAroundDriverBugs;
 
     bool IsTextureSizeSafeToPassToDriver(GLenum target, GLsizei width, GLsizei height) const {

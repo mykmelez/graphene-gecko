@@ -5,9 +5,10 @@
 
 #include "mozilla/Logging.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "gfxPlatform.h"
+#include "nsArrayUtils.h"
 #include "nsCOMPtr.h"
 #include "nsClipboard.h"
 #include "nsString.h"
@@ -35,17 +36,24 @@ extern PRLogModuleInfo* sCocoaLog;
 
 extern void EnsureLogInitialized();
 
-nsClipboard::nsClipboard() : nsBaseClipboard()
-{
-  mCachedClipboard = -1;
-  mChangeCount = 0;
+mozilla::StaticRefPtr<nsITransferable> nsClipboard::sSelectionCache;
 
+nsClipboard::nsClipboard()
+  : mCachedClipboard(-1)
+  , mChangeCount(0)
+  , mIgnoreEmptyNotification(false)
+{
   EnsureLogInitialized();
 }
 
 nsClipboard::~nsClipboard()
 {
+  EmptyClipboard(kGlobalClipboard);
+  EmptyClipboard(kFindClipboard);
+  ClearSelectionCache();
 }
+
+NS_IMPL_ISUPPORTS(nsClipboard, nsIClipboard)
 
 // We separate this into its own function because after an @try, all local
 // variables within that function get marked as volatile, and our C++ type
@@ -62,6 +70,18 @@ GetDataFromPasteboard(NSPasteboard* aPasteboard, NSString* aType)
     mozilla::Unused << e;
   }
   return data;
+}
+
+void
+nsClipboard::SetSelectionCache(nsITransferable *aTransferable)
+{
+  sSelectionCache = aTransferable;
+}
+
+void
+nsClipboard::ClearSelectionCache()
+{
+  sSelectionCache = nullptr;
 }
 
 NS_IMETHODIMP
@@ -127,18 +147,16 @@ nsClipboard::TransferableFromPasteboard(nsITransferable *aTransferable, NSPasteb
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
   // get flavor list that includes all acceptable flavors (including ones obtained through conversion)
-  nsCOMPtr<nsISupportsArray> flavorList;
+  nsCOMPtr<nsIArray> flavorList;
   nsresult rv = aTransferable->FlavorsTransferableCanImport(getter_AddRefs(flavorList));
   if (NS_FAILED(rv))
     return NS_ERROR_FAILURE;
 
   uint32_t flavorCount;
-  flavorList->Count(&flavorCount);
+  flavorList->GetLength(&flavorCount);
 
   for (uint32_t i = 0; i < flavorCount; i++) {
-    nsCOMPtr<nsISupports> genericFlavor;
-    flavorList->GetElementAt(i, getter_AddRefs(genericFlavor));
-    nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(genericFlavor));
+    nsCOMPtr<nsISupportsCString> currentFlavor = do_QueryElementAt(flavorList, i);
     if (!currentFlavor)
       continue;
 
@@ -298,13 +316,13 @@ nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable, int32_t aWhi
     return NS_ERROR_FAILURE;
 
   // get flavor list that includes all acceptable flavors (including ones obtained through conversion)
-  nsCOMPtr<nsISupportsArray> flavorList;
+  nsCOMPtr<nsIArray> flavorList;
   nsresult rv = aTransferable->FlavorsTransferableCanImport(getter_AddRefs(flavorList));
   if (NS_FAILED(rv))
     return NS_ERROR_FAILURE;
 
   uint32_t flavorCount;
-  flavorList->Count(&flavorCount);
+  flavorList->GetLength(&flavorCount);
 
   // If we were the last ones to put something on the pasteboard, then just use the cached
   // transferable. Otherwise clear it because it isn't relevant any more.
@@ -312,9 +330,7 @@ nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable, int32_t aWhi
       mChangeCount == [cocoaPasteboard changeCount]) {
     if (mTransferable) {
       for (uint32_t i = 0; i < flavorCount; i++) {
-        nsCOMPtr<nsISupports> genericFlavor;
-        flavorList->GetElementAt(i, getter_AddRefs(genericFlavor));
-        nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(genericFlavor));
+        nsCOMPtr<nsISupportsCString> currentFlavor = do_QueryElementAt(flavorList, i);
         if (!currentFlavor)
           continue;
 
@@ -331,7 +347,7 @@ nsClipboard::GetNativeClipboardData(nsITransferable* aTransferable, int32_t aWhi
       }
     }
   } else {
-    nsBaseClipboard::EmptyClipboard(aWhichClipboard);
+    EmptyClipboard(aWhichClipboard);
   }
 
   // at this point we can't satisfy the request from cache data so let's look
@@ -356,15 +372,14 @@ nsClipboard::HasDataMatchingFlavors(const char** aFlavorList, uint32_t aLength,
 
   // first see if we have data for this in our cached transferable
   if (mTransferable) {
-    nsCOMPtr<nsISupportsArray> transferableFlavorList;
+    nsCOMPtr<nsIArray> transferableFlavorList;
     nsresult rv = mTransferable->FlavorsTransferableCanImport(getter_AddRefs(transferableFlavorList));
     if (NS_SUCCEEDED(rv)) {
       uint32_t transferableFlavorCount;
-      transferableFlavorList->Count(&transferableFlavorCount);
+      transferableFlavorList->GetLength(&transferableFlavorCount);
       for (uint32_t j = 0; j < transferableFlavorCount; j++) {
-        nsCOMPtr<nsISupports> transferableFlavorSupports;
-        transferableFlavorList->GetElementAt(j, getter_AddRefs(transferableFlavorSupports));
-        nsCOMPtr<nsISupportsCString> currentTransferableFlavor(do_QueryInterface(transferableFlavorSupports));
+        nsCOMPtr<nsISupportsCString> currentTransferableFlavor =
+            do_QueryElementAt(transferableFlavorList, j);
         if (!currentTransferableFlavor)
           continue;
         nsXPIDLCString transferableFlavorStr;
@@ -437,17 +452,15 @@ nsClipboard::PasteboardDictFromTransferable(nsITransferable* aTransferable)
 
   NSMutableDictionary* pasteboardOutputDict = [NSMutableDictionary dictionary];
 
-  nsCOMPtr<nsISupportsArray> flavorList;
+  nsCOMPtr<nsIArray> flavorList;
   nsresult rv = aTransferable->FlavorsTransferableCanExport(getter_AddRefs(flavorList));
   if (NS_FAILED(rv))
     return nil;
 
   uint32_t flavorCount;
-  flavorList->Count(&flavorCount);
+  flavorList->GetLength(&flavorCount);
   for (uint32_t i = 0; i < flavorCount; i++) {
-    nsCOMPtr<nsISupports> genericFlavor;
-    flavorList->GetElementAt(i, getter_AddRefs(genericFlavor));
-    nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(genericFlavor));
+    nsCOMPtr<nsISupportsCString> currentFlavor = do_QueryElementAt(flavorList, i);
     if (!currentFlavor)
       continue;
 
@@ -658,4 +671,105 @@ NSString* nsClipboard::WrapHtmlForSystemPasteboard(NSString* aString)
          "</body>"
        "</html>", aString];
   return wrapped;
+}
+
+/**
+  * Sets the transferable object
+  *
+  */
+NS_IMETHODIMP
+nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* anOwner,
+                     int32_t aWhichClipboard)
+{
+  NS_ASSERTION (aTransferable, "clipboard given a null transferable");
+
+  if (aWhichClipboard == kSelectionCache) {
+    if (aTransferable) {
+      SetSelectionCache(aTransferable);
+      return NS_OK;
+    }
+    return NS_ERROR_FAILURE;
+  }
+
+  if (aTransferable == mTransferable && anOwner == mClipboardOwner) {
+    return NS_OK;
+  }
+  bool selectClipPresent;
+  SupportsSelectionClipboard(&selectClipPresent);
+  bool findClipPresent;
+  SupportsFindClipboard(&findClipPresent);
+  if (!selectClipPresent && !findClipPresent && aWhichClipboard != kGlobalClipboard) {
+    return NS_ERROR_FAILURE;
+  }
+
+  EmptyClipboard(aWhichClipboard);
+
+  mClipboardOwner = anOwner;
+  mTransferable = aTransferable;
+
+  nsresult rv = NS_ERROR_FAILURE;
+  if (mTransferable) {
+    rv = SetNativeClipboardData(aWhichClipboard);
+  }
+
+  return rv;
+}
+
+/**
+  * Gets the transferable object
+  *
+  */
+NS_IMETHODIMP
+nsClipboard::GetData(nsITransferable* aTransferable, int32_t aWhichClipboard)
+{
+  NS_ASSERTION (aTransferable, "clipboard given a null transferable");
+
+  bool selectClipPresent;
+  SupportsSelectionClipboard(&selectClipPresent);
+  bool findClipPresent;
+  SupportsFindClipboard(&findClipPresent);
+  if (!selectClipPresent && !findClipPresent && aWhichClipboard != kGlobalClipboard)
+    return NS_ERROR_FAILURE;
+
+  if (aTransferable) {
+    return GetNativeClipboardData(aTransferable, aWhichClipboard);
+  }
+
+  return NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP
+nsClipboard::EmptyClipboard(int32_t aWhichClipboard)
+{
+  if (aWhichClipboard == kSelectionCache) {
+    ClearSelectionCache();
+    return NS_OK;
+  }
+
+  bool selectClipPresent;
+  SupportsSelectionClipboard(&selectClipPresent);
+  bool findClipPresent;
+  SupportsFindClipboard(&findClipPresent);
+  if (!selectClipPresent && !findClipPresent && aWhichClipboard != kGlobalClipboard) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (mIgnoreEmptyNotification) {
+    return NS_OK;
+  }
+
+  if (mClipboardOwner) {
+    mClipboardOwner->LosingOwnership(mTransferable);
+    mClipboardOwner = nullptr;
+  }
+
+  mTransferable = nullptr;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsClipboard::SupportsSelectionClipboard(bool* _retval)
+{
+  *_retval = false;   // we don't support the selection clipboard by default.
+  return NS_OK;
 }

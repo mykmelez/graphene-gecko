@@ -42,8 +42,18 @@ add_task(function* setup() {
   let oldInternal = SyncedTabs._internal;
   SyncedTabs._internal = mockedInternal;
 
+  // This test hacks some observer states to simulate a user being signed
+  // in to Sync - restore them when the test completes.
+  let initialObserverStates = {};
+  for (let id of ["sync-reauth-state", "sync-setup-state", "sync-syncnow-state"]) {
+    initialObserverStates[id] = document.getElementById(id).hidden;
+  }
+
   registerCleanupFunction(() => {
     SyncedTabs._internal = oldInternal;
+    for (let [id, initial] of Object.entries(initialObserverStates)) {
+      document.getElementById(id).hidden = initial;
+    }
   });
 });
 
@@ -97,7 +107,7 @@ function* openPrefsFromMenuPanel(expectedPanelId, entryPoint) {
     "Firefox Sync preference page opened with `menupanel` entrypoint");
   ok(!isPanelUIOpen(), "The panel closed");
 
-  if(isPanelUIOpen()) {
+  if (isPanelUIOpen()) {
     let panelHidePromise = promisePanelHidden(window);
     PanelUI.hide();
     yield panelHidePromise;
@@ -117,10 +127,7 @@ function* asyncCleanup() {
 }
 
 // When Sync is not setup.
-add_task(() => openPrefsFromMenuPanel("PanelUI-remotetabs-setupsync", "syncbutton"));
-add_task(asyncCleanup);
-// Test that uitour is in progress, the entrypoint is `uitour` and not `menupanel`
-add_task(() => openPrefsFromMenuPanel("PanelUI-remotetabs-setupsync", "uitour"));
+add_task(() => openPrefsFromMenuPanel("PanelUI-remotetabs-setupsync", "synced-tabs"));
 add_task(asyncCleanup);
 
 // When Sync is configured in a "needs reauthentication" state.
@@ -129,7 +136,7 @@ add_task(function* () {
   document.getElementById("sync-reauth-state").hidden = false;
   document.getElementById("sync-setup-state").hidden = true;
   document.getElementById("sync-syncnow-state").hidden = true;
-  yield openPrefsFromMenuPanel("PanelUI-remotetabs-reauthsync", "syncbutton")
+  yield openPrefsFromMenuPanel("PanelUI-remotetabs-reauthsync", "synced-tabs")
 });
 
 // Test the mobile promo links
@@ -197,10 +204,8 @@ add_task(function* () {
 
 // Test the "Sync Now" button
 add_task(function* () {
-  let nSyncs = 0;
   mockedInternal.getTabClients = () => [];
   mockedInternal.syncTabs = () => {
-    nSyncs++;
     return Promise.resolve();
   }
 

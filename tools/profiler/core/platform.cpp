@@ -18,6 +18,7 @@
 #endif
 #include "mozilla/ThreadLocal.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/Sprintf.h"
 #include "PseudoStack.h"
 #include "GeckoSampler.h"
 #ifndef SPS_STANDALONE
@@ -36,11 +37,11 @@
 #endif
 
 #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
-  #include "GeneratedJNIWrappers.h"
+  #include "FennecJNIWrappers.h"
 #endif
 
 #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
-#include "GeneratedJNINatives.h"
+#include "FennecJNINatives.h"
 #endif
 
 #ifndef SPS_STANDALONE
@@ -429,7 +430,7 @@ mozilla_sampler_log(const char *fmt, va_list args)
     char buf[2048];
     va_list argsCpy;
     VARARGS_ASSIGN(argsCpy, args);
-    int required = vsnprintf(buf, sizeof(buf), fmt, argsCpy);
+    int required = VsprintfLiteral(buf, fmt, argsCpy);
     va_end(argsCpy);
 
     if (required < 0) {
@@ -502,7 +503,7 @@ void mozilla_sampler_init(void* stackTop)
 #endif
 
 #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
-  if (mozilla::jni::IsAvailable()) {
+  if (mozilla::jni::IsFennec()) {
     GeckoJavaSampler::Init();
   }
 #endif
@@ -621,6 +622,20 @@ void mozilla_sampler_get_profile_data_async(double aSinceTime,
   }
 
   t->ToJSObjectAsync(aSinceTime, aPromise);
+}
+
+void mozilla_sampler_save_profile_to_file_async(double aSinceTime,
+						const char* aFileName)
+{
+  nsCString filename(aFileName);
+  NS_DispatchToMainThread(NS_NewRunnableFunction([=] () {
+	GeckoSampler *t = tlsTicker.get();
+	if (NS_WARN_IF(!t)) {
+	  return;
+	}
+
+	t->ToFileAsync(filename, aSinceTime);
+      }));
 }
 
 void mozilla_sampler_get_profiler_start_params(int* aEntrySize,
@@ -825,7 +840,7 @@ void mozilla_sampler_start(int aProfileEntries, double aInterval,
     if (javaInterval < 10) {
       aInterval = 10;
     }
-    java::GeckoJavaSampler::StartJavaProfiling(javaInterval, 1000);
+    java::GeckoJavaSampler::Start(javaInterval, 1000);
   }
 #endif
 
@@ -1077,6 +1092,17 @@ void mozilla_sampler_sleep_end() {
       return;
     }
     stack->setSleeping(0);
+}
+
+bool mozilla_sampler_is_sleeping() {
+  if (sInitCount == 0) {
+    return false;
+  }
+  PseudoStack *stack = tlsPseudoStack.get();
+  if (stack == nullptr) {
+    return false;
+  }
+  return stack->isSleeping();
 }
 
 double mozilla_sampler_time(const mozilla::TimeStamp& aTime)

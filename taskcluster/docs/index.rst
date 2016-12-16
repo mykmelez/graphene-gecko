@@ -22,10 +22,9 @@ check out the :doc:`how-to section <how-tos>`.
 .. toctree::
 
     taskgraph
-    parameters
-    attributes
-    kinds
+    loading
     transforms
     yaml-templates
-    how-tos
     docker-images
+    how-tos
+    reference

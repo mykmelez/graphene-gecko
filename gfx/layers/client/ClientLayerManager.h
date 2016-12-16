@@ -61,8 +61,8 @@ public:
   virtual int32_t GetMaxTextureSize() const override;
 
   virtual void SetDefaultTargetConfiguration(BufferMode aDoubleBuffering, ScreenRotation aRotation);
-  virtual void BeginTransactionWithTarget(gfxContext* aTarget) override;
-  virtual void BeginTransaction() override;
+  virtual bool BeginTransactionWithTarget(gfxContext* aTarget) override;
+  virtual bool BeginTransaction() override;
   virtual bool EndEmptyTransaction(EndTransactionFlags aFlags = END_DEFAULT) override;
   virtual void EndTransaction(DrawPaintedLayerCallback aCallback,
                               void* aCallbackData,
@@ -87,12 +87,14 @@ public:
   virtual already_AddRefed<CanvasLayer> CreateCanvasLayer() override;
   virtual already_AddRefed<ReadbackLayer> CreateReadbackLayer() override;
   virtual already_AddRefed<ColorLayer> CreateColorLayer() override;
+  virtual already_AddRefed<TextLayer> CreateTextLayer() override;
+  virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
   void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier);
   TextureFactoryIdentifier GetTextureFactoryIdentifier()
   {
-    return mForwarder->GetTextureFactoryIdentifier();
+    return AsShadowForwarder()->GetTextureFactoryIdentifier();
   }
 
   virtual void FlushRendering() override;
@@ -154,22 +156,6 @@ public:
 
   // Disable component alpha layers with the software compositor.
   virtual bool ShouldAvoidComponentAlphaLayers() override { return !IsCompositingCheap(); }
-
-  /**
-   * Called for each iteration of a progressive tile update. Updates
-   * aMetrics with the current scroll offset and scale being used to composite
-   * the primary scrollable layer in this manager, to determine what area
-   * intersects with the target composition bounds.
-   * aDrawingCritical will be true if the current drawing operation is using
-   * the critical displayport.
-   * Returns true if the update should continue, or false if it should be
-   * cancelled.
-   * This is only called if gfxPlatform::UseProgressiveTilePainting() returns
-   * true.
-   */
-  bool ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
-                                 FrameMetrics& aMetrics,
-                                 bool aDrawingCritical);
 
   bool InConstruction() { return mPhase == PHASE_CONSTRUCTION; }
 #ifdef DEBUG
@@ -238,6 +224,8 @@ public:
 
   void SetNextPaintSyncId(int32_t aSyncId);
 
+  void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch);
+
   class DidCompositeObserver {
   public:
     virtual void DidComposite() = 0;
@@ -303,7 +291,7 @@ private:
   LayerRefArray mKeepAlive;
 
   nsIWidget* mWidget;
-  
+
   /* PaintedLayer callbacks; valid at the end of a transaciton,
    * while rendering */
   DrawPaintedLayerCallback mPaintedLayerCallback;
@@ -321,6 +309,7 @@ private:
 
   RefPtr<TransactionIdAllocator> mTransactionIdAllocator;
   uint64_t mLatestTransactionId;
+  TimeDuration mLastPaintTime;
 
   // Sometimes we draw to targets that don't natively support
   // landscape/portrait orientation.  When we need to implement that
@@ -415,8 +404,9 @@ CreateShadowFor(ClientLayer* aLayer,
                 CreatedMethod aMethod)
 {
   PLayerChild* shadow = aMgr->AsShadowForwarder()->ConstructShadowFor(aLayer);
-  // XXX error handling
-  MOZ_ASSERT(shadow, "failed to create shadow");
+  if (!shadow) {
+    return;
+  }
 
   aLayer->SetShadow(shadow);
   (aMgr->AsShadowForwarder()->*aMethod)(aLayer);

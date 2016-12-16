@@ -426,7 +426,8 @@
          return;
        }
 
-       if (ctypes.winLastError == Const.ERROR_FILE_NOT_FOUND) {
+       if (ctypes.winLastError == Const.ERROR_FILE_NOT_FOUND ||
+           ctypes.winLastError == Const.ERROR_PATH_NOT_FOUND) {
          if ((!("ignoreAbsent" in options) || options.ignoreAbsent)) {
            return;
          }
@@ -881,7 +882,7 @@
       * implementation.
       */
      File.DirectoryIterator.Entry.toMsg = function toMsg(value) {
-       if (!value instanceof File.DirectoryIterator.Entry) {
+       if (!(value instanceof File.DirectoryIterator.Entry)) {
          throw new TypeError("parameter of " +
            "File.DirectoryIterator.Entry.toMsg must be a " +
            "File.DirectoryIterator.Entry");
@@ -930,7 +931,7 @@
       * is asymmetric and returns an object with a different implementation.
       */
      File.Info.toMsg = function toMsg(stat) {
-       if (!stat instanceof File.Info) {
+       if (!(stat instanceof File.Info)) {
          throw new TypeError("parameter of File.Info.toMsg must be a File.Info");
        }
        let serialized = {};

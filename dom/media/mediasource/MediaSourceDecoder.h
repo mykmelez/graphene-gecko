@@ -43,14 +43,6 @@ public:
   media::TimeIntervals GetSeekable() override;
   media::TimeIntervals GetBuffered() override;
 
-  // We can't do this in the constructor because we don't know what type of
-  // media we're dealing with by that point.
-  void NotifyDormantSupported(bool aSupported)
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    mDormantSupported = aSupported;
-  }
-
   void Shutdown() override;
 
   static already_AddRefed<MediaResource> CreateResource(nsIPrincipal* aPrincipal = nullptr);
@@ -80,6 +72,10 @@ public:
   MediaDecoderOwner::NextFrameStatus NextFrameBufferedStatus() override;
   bool CanPlayThrough() override;
 
+  void NotifyWaitingForKey() override;
+
+  MediaEventSource<void>* WaitingForKeyEvent() override;
+
 private:
   void DoSetMediaSourceDuration(double aDuration);
   media::TimeInterval ClampIntervalToEnd(const media::TimeInterval& aInterval);
@@ -90,8 +86,9 @@ private:
   dom::MediaSource* mMediaSource;
   RefPtr<MediaSourceDemuxer> mDemuxer;
   RefPtr<MediaFormatReader> mReader;
+  MediaEventProducer<void> mWaitingForKeyEvent;
 
-  Atomic<bool> mEnded;
+  bool mEnded;
 };
 
 } // namespace mozilla

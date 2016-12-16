@@ -47,4 +47,17 @@ interface nsIWebBrowserChrome3 : nsIWebBrowserChrome2
   bool shouldLoadURI(in nsIDocShell    aDocShell,
                      in nsIURI         aURI,
                      in nsIURI         aReferrer);
+
+  bool shouldLoadURIInThisProcess(in nsIURI aURI);
+
+  /**
+   * Attempts to load the currently loaded page into a fresh process to increase
+   * available memory.
+   *
+   * @param aDocShell
+   *        The docshell performing the load.
+   */
+  bool reloadInFreshProcess(in nsIDocShell aDocShell,
+                            in nsIURI aURI,
+                            in nsIURI aReferrer);
 };

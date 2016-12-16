@@ -1,6 +1,6 @@
-/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+
 "use strict";
 
 /**
@@ -31,7 +31,7 @@ add_task(function* () {
     }
   ];
 
-  let [tab, debuggee, monitor] = yield initNetMonitor(CUSTOM_GET_URL);
+  let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   let { $, EVENTS, NetMonitorView } = monitor.panelWin;
   let { RequestsMenu } = NetMonitorView;
   RequestsMenu.lazyUpdate = false;
@@ -44,11 +44,13 @@ add_task(function* () {
                        waitForSecurityBrokenNetworkEvent() :
                        waitForNetworkEvents(monitor, 1);
 
-    let tab = $("#security-tab");
+    let tabEl = $("#security-tab");
     let tabpanel = $("#security-tabpanel");
 
     info("Performing a request to " + testcase.uri);
-    debuggee.performRequests(1, testcase.uri);
+    yield ContentTask.spawn(tab.linkedBrowser, testcase.uri, function* (url) {
+      content.wrappedJSObject.performRequests(1, url);
+    });
 
     info("Waiting for new network event.");
     yield onNewItem;
@@ -56,9 +58,9 @@ add_task(function* () {
     info("Selecting the request.");
     RequestsMenu.selectedIndex = 0;
 
-    is(RequestsMenu.selectedItem.attachment.securityState, undefined,
+    is(RequestsMenu.selectedItem.securityState, undefined,
        "Security state has not yet arrived.");
-    is(tab.hidden, !testcase.visibleOnNewEvent,
+    is(tabEl.hidden, !testcase.visibleOnNewEvent,
        "Security tab is " +
         (testcase.visibleOnNewEvent ? "visible" : "hidden") +
        " after new request was added to the menu.");
@@ -68,9 +70,9 @@ add_task(function* () {
     info("Waiting for security information to arrive.");
     yield onSecurityInfo;
 
-    ok(RequestsMenu.selectedItem.attachment.securityState,
+    ok(RequestsMenu.selectedItem.securityState,
        "Security state arrived.");
-    is(tab.hidden, !testcase.visibleOnSecurityInfo,
+    is(tabEl.hidden, !testcase.visibleOnSecurityInfo,
        "Security tab is " +
         (testcase.visibleOnSecurityInfo ? "visible" : "hidden") +
        " after security information arrived.");
@@ -79,7 +81,8 @@ add_task(function* () {
 
     info("Waiting for request to complete.");
     yield onComplete;
-    is(tab.hidden, !testcase.visibleOnceComplete,
+
+    is(tabEl.hidden, !testcase.visibleOnceComplete,
        "Security tab is " +
         (testcase.visibleOnceComplete ? "visible" : "hidden") +
        " after request has been completed.");
@@ -90,7 +93,7 @@ add_task(function* () {
     RequestsMenu.clear();
   }
 
-  yield teardown(monitor);
+  return teardown(monitor);
 
   /**
    * Returns a promise that's resolved once a request with security issues is

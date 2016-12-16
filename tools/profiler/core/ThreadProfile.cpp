@@ -48,7 +48,7 @@ void ThreadProfile::StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
   // mUniqueStacks may already be emplaced from FlushSamplesAndMarkers.
   if (!mUniqueStacks.isSome()) {
 #ifndef SPS_STANDALONE
-    mUniqueStacks.emplace(mPseudoStack->mRuntime);
+    mUniqueStacks.emplace(mPseudoStack->mContext);
 #else
     mUniqueStacks.emplace(nullptr);
 #endif
@@ -108,21 +108,10 @@ void ThreadProfile::StreamSamplesAndMarkers(SpliceableJSONWriter& aWriter, doubl
                                             UniqueStacks& aUniqueStacks)
 {
 #ifndef SPS_STANDALONE
-  // Thread meta data
-  if (XRE_GetProcessType() == GeckoProcessType_Plugin) {
-    // TODO Add the proper plugin name
-    aWriter.StringProperty("name", "Plugin");
-  } else if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    // This isn't going to really help once we have multiple content
-    // processes, but it'll do for now.
-    aWriter.StringProperty("name", "Content");
-  } else {
-    aWriter.StringProperty("name", Name());
-  }
-#else
-  aWriter.StringProperty("name", Name());
+  aWriter.StringProperty("processType", XRE_ChildProcessTypeToString(XRE_GetProcessType()));
 #endif
 
+  aWriter.StringProperty("name", Name());
   aWriter.IntProperty("tid", static_cast<int>(mThreadId));
 
   aWriter.StartObjectProperty("samples");
@@ -150,7 +139,7 @@ void ThreadProfile::StreamSamplesAndMarkers(SpliceableJSONWriter& aWriter, doubl
       }
       mBuffer->StreamSamplesToJSON(aWriter, mThreadId, aSinceTime,
 #ifndef SPS_STANDALONE
-                                   mPseudoStack->mRuntime,
+                                   mPseudoStack->mContext,
 #else
                                    nullptr,
 #endif
@@ -186,8 +175,8 @@ void ThreadProfile::StreamSamplesAndMarkers(SpliceableJSONWriter& aWriter, doubl
 void ThreadProfile::FlushSamplesAndMarkers()
 {
   // This function is used to serialize the current buffer just before
-  // JSRuntime destruction.
-  MOZ_ASSERT(mPseudoStack->mRuntime);
+  // JSContext destruction.
+  MOZ_ASSERT(mPseudoStack->mContext);
 
   // Unlike StreamJSObject, do not surround the samples in brackets by calling
   // aWriter.{Start,End}BareList. The result string will be a comma-separated
@@ -197,7 +186,7 @@ void ThreadProfile::FlushSamplesAndMarkers()
   // Note that the UniqueStacks instance is persisted so that the frame-index
   // mapping is stable across JS shutdown.
 #ifndef SPS_STANDALONE
-  mUniqueStacks.emplace(mPseudoStack->mRuntime);
+  mUniqueStacks.emplace(mPseudoStack->mContext);
 #else
   mUniqueStacks.emplace(nullptr);
 #endif
@@ -208,7 +197,7 @@ void ThreadProfile::FlushSamplesAndMarkers()
     {
       mBuffer->StreamSamplesToJSON(b, mThreadId, /* aSinceTime = */ 0,
 #ifndef SPS_STANDALONE
-                                   mPseudoStack->mRuntime,
+                                   mPseudoStack->mContext,
 #else
                                    nullptr,
 #endif
@@ -228,7 +217,7 @@ void ThreadProfile::FlushSamplesAndMarkers()
     mSavedStreamedMarkers = b.WriteFunc()->CopyData();
   }
 
-  // Reset the buffer. Attempting to symbolicate JS samples after mRuntime has
+  // Reset the buffer. Attempting to symbolicate JS samples after mContext has
   // gone away will crash.
   mBuffer->reset();
 }

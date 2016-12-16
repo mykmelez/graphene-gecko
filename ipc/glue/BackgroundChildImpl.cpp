@@ -29,7 +29,6 @@
 #include "mozilla/dom/GamepadTestChannelChild.h"
 #endif
 #include "mozilla/dom/MessagePortChild.h"
-#include "mozilla/dom/NuwaChild.h"
 #include "mozilla/ipc/PBackgroundTestChild.h"
 #include "mozilla/ipc/PSendStreamChild.h"
 #include "mozilla/layout/VsyncChild.h"
@@ -53,13 +52,13 @@ class TestChild final : public mozilla::ipc::PBackgroundTestChild
   }
 
 protected:
-  ~TestChild()
+  ~TestChild() override
   {
     MOZ_COUNT_DTOR(TestChild);
   }
 
 public:
-  virtual bool
+  mozilla::ipc::IPCResult
   Recv__delete__(const nsCString& aTestArg) override;
 };
 
@@ -75,7 +74,6 @@ using mozilla::dom::asmjscache::PAsmJSCacheEntryChild;
 using mozilla::dom::cache::PCacheChild;
 using mozilla::dom::cache::PCacheStorageChild;
 using mozilla::dom::cache::PCacheStreamControlChild;
-using mozilla::dom::PNuwaChild;
 
 // -----------------------------------------------------------------------------
 // BackgroundChildImpl::ThreadLocal
@@ -409,21 +407,6 @@ BackgroundChildImpl::DeallocPMessagePortChild(PMessagePortChild* aActor)
   return true;
 }
 
-PNuwaChild*
-BackgroundChildImpl::AllocPNuwaChild()
-{
-  return new mozilla::dom::NuwaChild();
-}
-
-bool
-BackgroundChildImpl::DeallocPNuwaChild(PNuwaChild* aActor)
-{
-  MOZ_ASSERT(aActor);
-
-  delete aActor;
-  return true;
-}
-
 PSendStreamChild*
 BackgroundChildImpl::AllocPSendStreamChild()
 {
@@ -527,11 +510,11 @@ BackgroundChildImpl::DeallocPGamepadTestChannelChild(PGamepadTestChannelChild* a
 } // namespace ipc
 } // namespace mozilla
 
-bool
+mozilla::ipc::IPCResult
 TestChild::Recv__delete__(const nsCString& aTestArg)
 {
   MOZ_RELEASE_ASSERT(aTestArg == mTestArg,
                      "BackgroundTest message was corrupted!");
 
-  return true;
+  return IPC_OK();
 }

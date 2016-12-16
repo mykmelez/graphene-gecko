@@ -58,7 +58,6 @@ CacheFileMetadata::CacheFileMetadata(CacheFileHandle *aHandle, const nsACString 
   LOG(("CacheFileMetadata::CacheFileMetadata() [this=%p, handle=%p, key=%s]",
        this, aHandle, PromiseFlatCString(aKey).get()));
 
-  MOZ_COUNT_CTOR(CacheFileMetadata);
   memset(&mMetaHdr, 0, sizeof(CacheFileMetadataHeader));
   mMetaHdr.mVersion = kCacheEntryVersion;
   mMetaHdr.mExpirationTime = nsICacheEntry::NO_EXPIRATION_TIME;
@@ -88,7 +87,6 @@ CacheFileMetadata::CacheFileMetadata(bool aMemoryOnly, bool aPinned, const nsACS
   LOG(("CacheFileMetadata::CacheFileMetadata() [this=%p, key=%s]",
        this, PromiseFlatCString(aKey).get()));
 
-  MOZ_COUNT_CTOR(CacheFileMetadata);
   memset(&mMetaHdr, 0, sizeof(CacheFileMetadataHeader));
   mMetaHdr.mVersion = kCacheEntryVersion;
   if (aPinned) {
@@ -121,7 +119,6 @@ CacheFileMetadata::CacheFileMetadata()
 {
   LOG(("CacheFileMetadata::CacheFileMetadata() [this=%p]", this));
 
-  MOZ_COUNT_CTOR(CacheFileMetadata);
   memset(&mMetaHdr, 0, sizeof(CacheFileMetadataHeader));
 }
 
@@ -129,7 +126,6 @@ CacheFileMetadata::~CacheFileMetadata()
 {
   LOG(("CacheFileMetadata::~CacheFileMetadata() [this=%p]", this));
 
-  MOZ_COUNT_DTOR(CacheFileMetadata);
   MOZ_ASSERT(!mListener);
 
   if (mHashArray) {
@@ -832,6 +828,7 @@ CacheFileMetadata::InitEmptyMetadata()
     mBuf = nullptr;
     mBufSize = 0;
   }
+  mAllocExactSize = false;
   mOffset = 0;
   mMetaHdr.mVersion = kCacheEntryVersion;
   mMetaHdr.mFetchCount = 0;
@@ -845,6 +842,11 @@ CacheFileMetadata::InitEmptyMetadata()
   // We're creating a new entry. If there is any old data truncate it.
   if (mHandle) {
     mHandle->SetPinned(Pinned());
+    // We can pronounce the handle as invalid now, because it simply
+    // doesn't have the correct metadata.  This will cause IO operations
+    // be bypassed during shutdown (mainly dooming it, when a channel
+    // is canceled by closing the window.)
+    mHandle->SetInvalid();
     if (mHandle->FileExists() && mHandle->FileSize()) {
       CacheFileIOManager::TruncateSeekSetEOF(mHandle, 0, 0, nullptr);
     }
@@ -885,6 +887,9 @@ CacheFileMetadata::ParseMetadata(uint32_t aMetaOffset, uint32_t aBufOffset,
   if (mMetaHdr.mVersion == 1) {
     // Backward compatibility before we've added flags to the header
     keyOffset -= sizeof(uint32_t);
+  } else if (mMetaHdr.mVersion == 2) {
+    // Version 2 just lacks the ability to store alternative data. Nothing to do
+    // here.
   } else if (mMetaHdr.mVersion != kCacheEntryVersion) {
     LOG(("CacheFileMetadata::ParseMetadata() - Not a version we understand to. "
          "[version=0x%x, this=%p]", mMetaHdr.mVersion, this));

@@ -46,7 +46,6 @@ NS_IMPL_FRAMEARENA_HELPERS(nsNumberControlFrame)
 NS_QUERYFRAME_HEAD(nsNumberControlFrame)
   NS_QUERYFRAME_ENTRY(nsNumberControlFrame)
   NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
-  NS_QUERYFRAME_ENTRY(nsITextControlFrame)
   NS_QUERYFRAME_ENTRY(nsIFormControlFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
@@ -308,7 +307,7 @@ public:
       mTextField(aTextField)
   {}
 
-  NS_IMETHODIMP Run() override
+  NS_IMETHOD Run() override
   {
     if (mNumber->AsElement()->State().HasState(NS_EVENT_STATE_FOCUS)) {
       HTMLInputElement::FromContent(mTextField)->Focus();
@@ -405,7 +404,7 @@ nsNumberControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 
   // Initialize the text field value:
   nsAutoString value;
-  content->GetValue(value);
+  content->GetValue(value, CallerType::System);
   SetValueOfAnonTextControl(value);
 
   // If we're readonly, make sure our anonymous text control is too:
@@ -471,72 +470,6 @@ nsIAtom*
 nsNumberControlFrame::GetType() const
 {
   return nsGkAtoms::numberControlFrame;
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::GetEditor(nsIEditor **aEditor)
-{
-  return GetTextFieldFrame()->GetEditor(aEditor);
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::SetSelectionStart(int32_t aSelectionStart)
-{
-  return GetTextFieldFrame()->SetSelectionStart(aSelectionStart);
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::SetSelectionEnd(int32_t aSelectionEnd)
-{
-  return GetTextFieldFrame()->SetSelectionEnd(aSelectionEnd);
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::SetSelectionRange(int32_t aSelectionStart,
-                                        int32_t aSelectionEnd,
-                                        SelectionDirection aDirection)
-{
-  return GetTextFieldFrame()->SetSelectionRange(aSelectionStart, aSelectionEnd,
-                                                aDirection);
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::GetSelectionRange(int32_t* aSelectionStart,
-                                        int32_t* aSelectionEnd,
-                                        SelectionDirection* aDirection)
-{
-  return GetTextFieldFrame()->GetSelectionRange(aSelectionStart, aSelectionEnd,
-                                                aDirection);
-}
-
-NS_IMETHODIMP
-nsNumberControlFrame::GetOwnedSelectionController(nsISelectionController** aSelCon)
-{
-  return GetTextFieldFrame()->GetOwnedSelectionController(aSelCon);
-}
-
-nsFrameSelection*
-nsNumberControlFrame::GetOwnedFrameSelection()
-{
-  return GetTextFieldFrame()->GetOwnedFrameSelection();
-}
-
-nsresult
-nsNumberControlFrame::GetPhonetic(nsAString& aPhonetic)
-{
-  return GetTextFieldFrame()->GetPhonetic(aPhonetic);
-}
-
-nsresult
-nsNumberControlFrame::EnsureEditorInitialized()
-{
-  return GetTextFieldFrame()->EnsureEditorInitialized();
-}
-
-nsresult
-nsNumberControlFrame::ScrollSelectionIntoView()
-{
-  return GetTextFieldFrame()->ScrollSelectionIntoView();
 }
 
 void
@@ -758,7 +691,14 @@ nsNumberControlFrame::SetValueOfAnonTextControl(const nsAString& aValue)
   // this must be its value, and not its 'value' attribute (the default value),
   // since the default value is ignored once a user types into the text
   // control.
-  HTMLInputElement::FromContent(mTextField)->SetValue(localizedValue);
+  //
+  // Pass NonSystem as the caller type; this should work fine for actual number
+  // inputs, and be safe in case our input has a type we don't expect for some
+  // reason.
+  IgnoredErrorResult rv;
+  HTMLInputElement::FromContent(mTextField)->SetValue(localizedValue,
+                                                      CallerType::NonSystem,
+                                                      rv);
 }
 
 void
@@ -769,7 +709,7 @@ nsNumberControlFrame::GetValueOfAnonTextControl(nsAString& aValue)
     return;
   }
 
-  HTMLInputElement::FromContent(mTextField)->GetValue(aValue);
+  HTMLInputElement::FromContent(mTextField)->GetValue(aValue, CallerType::System);
 
 #ifdef ENABLE_INTL_API
   // Here we need to de-localize any number typed in by the user. That is, we
@@ -822,7 +762,7 @@ nsNumberControlFrame::AnonTextControlIsEmpty()
     return true;
   }
   nsAutoString value;
-  HTMLInputElement::FromContent(mTextField)->GetValue(value);
+  HTMLInputElement::FromContent(mTextField)->GetValue(value, CallerType::System);
   return value.IsEmpty();
 }
 

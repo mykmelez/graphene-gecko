@@ -6,13 +6,10 @@ const BASE_URI = "http://mochi.test:8888/browser/browser/components/"
   + "contextualidentity/test/browser/empty_file.html";
 
 add_task(function* setup() {
-  yield new Promise((resolve) => {
-    SpecialPowers.pushPrefEnv({"set": [
-      ["privacy.userContext.enabled", true]
-    ]}, resolve);
-  });
+  yield SpecialPowers.pushPrefEnv({"set": [
+    ["privacy.userContext.enabled", true]
+  ]});
 });
-
 
 add_task(function* test() {
   info("Creating a tab with UCI = 1...");
@@ -41,16 +38,13 @@ add_task(function* test() {
   yield ContentTask.spawn(browser2, blobURL, function(url) {
     return new Promise(resolve => {
       var xhr = new content.window.XMLHttpRequest();
+      xhr.onerror = function() { resolve("SendErrored"); }
+      xhr.onload = function() { resolve("SendLoaded"); }
       xhr.open("GET", url);
-      try {
-        xhr.send();
-        resolve("SendSucceeded");
-      } catch(e) {
-        resolve("SendThrew");
-      }
+      xhr.send();
     });
   }).then(status => {
-    is(status, "SendThrew", "Using a blob URI from one user context id in another should not work");
+    is(status, "SendErrored", "Using a blob URI from one user context id in another should not work");
   });
 
   info("Creating a tab with UCI = 1...");
@@ -67,7 +61,7 @@ add_task(function* test() {
       try {
         xhr.send();
         resolve("SendSucceeded");
-      } catch(e) {
+      } catch (e) {
         resolve("SendThrew");
       }
     });

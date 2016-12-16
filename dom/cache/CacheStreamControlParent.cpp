@@ -7,7 +7,7 @@
 #include "mozilla/dom/cache/CacheStreamControlParent.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/cache/CacheTypes.h"
 #include "mozilla/dom/cache/ReadStream.h"
 #include "mozilla/dom/cache/StreamList.h"
@@ -89,13 +89,13 @@ CacheStreamControlParent::ActorDestroy(ActorDestroyReason aReason)
   mStreamList = nullptr;
 }
 
-bool
+mozilla::ipc::IPCResult
 CacheStreamControlParent::RecvNoteClosed(const nsID& aId)
 {
   NS_ASSERT_OWNINGTHREAD(CacheStreamControlParent);
   MOZ_ASSERT(mStreamList);
   mStreamList->NoteClosed(aId);
-  return true;
+  return IPC_OK();
 }
 
 void

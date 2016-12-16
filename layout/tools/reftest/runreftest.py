@@ -35,8 +35,8 @@ from mozrunner.utils import get_stack_fixer_function, test_environment
 from mozscreenshot import printstatus, dump_screen
 
 try:
-    from marionette import Marionette
     from marionette_driver.addons import Addons
+    from marionette_harness import Marionette
 except ImportError, e:
     # Defer ImportError until attempt to use Marionette
     def reraise(*args, **kwargs):
@@ -174,7 +174,7 @@ class ReftestResolver(object):
                     break
             if found:
                 rv = [(os.path.join(dirname, default_manifest),
-                       r".*(?:/|\\)%s$" % pathname)]
+                       r".*(?:/|\\)%s(?:[#?].*)?$" % pathname)]
 
         return rv
 
@@ -338,6 +338,8 @@ class RefTest(object):
             profile = mozprofile.Profile.clone(profile_to_clone, **kwargs)
         else:
             profile = mozprofile.Profile(**kwargs)
+
+        options.extraProfileFiles.append(os.path.join(here, 'chrome'))
 
         self.copyExtraFilesToProfile(options, profile)
         return profile
@@ -713,18 +715,7 @@ class RefTest(object):
                 continue
 
 
-def run(**kwargs):
-    parser = reftestcommandline.DesktopArgumentsParser()
-
-    # Mach gives us kwargs; this is a way to turn them back into an
-    # options object
-    parser.set_defaults(**kwargs)
-
-    if 'tests' in kwargs:
-        options = parser.parse_args(kwargs["tests"])
-    else:
-        options = parser.parse_args()
-
+def run_test_harness(parser, options):
     reftest = RefTest()
     parser.validate(options, reftest)
 
@@ -746,4 +737,6 @@ def run(**kwargs):
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    parser = reftestcommandline.DesktopArgumentsParser()
+    options = parser.parse_args()
+    sys.exit(run_test_harness(parser, options))

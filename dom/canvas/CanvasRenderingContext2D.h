@@ -47,6 +47,118 @@ class TextMetrics;
 class CanvasFilterChainObserver;
 class CanvasPath;
 
+template<class T>
+struct MaybeNotNull
+{
+  MOZ_IMPLICIT MaybeNotNull() : mWrapped(nullptr), mEnsure(false) {}
+  MOZ_IMPLICIT MaybeNotNull(T&& aValue) : mWrapped(aValue), mEnsure(false) {}
+  ~MaybeNotNull() {}
+
+  void BeginNotNull() {
+    mEnsure = true;
+  }
+
+  void EndNotNull() {
+    mEnsure = false;
+  }
+
+  void MaybeCheckWrapped() {
+    if (mEnsure && !mWrapped) {
+      MOZ_CRASH("GFX: Setting mTarget to nullptr?");
+    }
+  }
+
+  typename T::element_type* operator->() const {
+    return mWrapped.get();
+  }
+
+  already_AddRefed<typename T::element_type> forget() {
+    already_AddRefed<typename T::element_type>&& ret = mWrapped.forget();
+    MaybeCheckWrapped();
+    return Move(ret);
+  }
+
+  MOZ_IMPLICIT operator bool () {
+    return mWrapped;
+  }
+
+  operator T&() {
+    return mWrapped;
+  }
+
+  operator typename T::element_type*() {
+    return mWrapped.get();
+  }
+
+  bool operator!() const {
+    return !mWrapped;
+  }
+
+  MaybeNotNull& operator=(decltype(nullptr)) {
+    mWrapped = nullptr;
+    MaybeCheckWrapped();
+    return *this;
+  }
+
+  template<class U>
+  MaybeNotNull& operator=(U& aOther){
+    mWrapped = aOther;
+    MaybeCheckWrapped();
+    return *this;
+  }
+
+  template<class U>
+  MaybeNotNull& operator=(U&& aOther){
+    mWrapped = aOther;
+    MaybeCheckWrapped();
+    return *this;
+  }
+
+  struct AutoNotNull
+  {
+    MOZ_IMPLICIT AutoNotNull(MaybeNotNull* aMaybe) : mMaybe(aMaybe)
+    {
+      mMaybe->BeginNotNull();
+    }
+
+    ~AutoNotNull()
+    {
+      mMaybe->EndNotNull();
+    }
+
+    MaybeNotNull* mMaybe;
+  };
+
+  AutoNotNull MakeAuto()
+  {
+    return AutoNotNull(this);
+  }
+
+  T mWrapped;
+
+  bool mEnsure;
+};
+
+template<class T, class U>
+  bool operator!=(const MaybeNotNull<T>& aT, const U& aU) {
+  return aT.mWrapped != aU;
+}
+
+template<class T, class U>
+  bool operator==(const MaybeNotNull<T>& aT, const U& aU) {
+  return aT.mWrapped == aU;
+}
+
+template<class T, class U>
+  bool operator||(const MaybeNotNull<T>& aT, const U& aU) {
+  return aT.mWrapped || aU;
+}
+
+template<class T, class U>
+  bool operator||(const T& aT, const MaybeNotNull<U>& aU) {
+  return aT || aU.mWrapped;
+}
+
 extern const mozilla::gfx::Float SIGMA_MAX;
 
 template<typename T> class Optional;
@@ -66,13 +178,13 @@ class CanvasRenderingContext2D final :
   virtual ~CanvasRenderingContext2D();
 
 public:
-  CanvasRenderingContext2D();
+  explicit CanvasRenderingContext2D(layers::LayersBackend aCompositorBackend);
 
   virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   HTMLCanvasElement* GetCanvas() const
   {
-    if (mCanvasElement->IsInNativeAnonymousSubtree()) {
+    if (!mCanvasElement || mCanvasElement->IsInNativeAnonymousSubtree()) {
       return nullptr;
     }
 
@@ -305,8 +417,8 @@ public:
     if (mPathBuilder) {
       mPathBuilder->MoveTo(mozilla::gfx::Point(ToFloat(aX), ToFloat(aY)));
     } else {
-      mDSPathBuilder->MoveTo(mTarget->GetTransform() *
-                             mozilla::gfx::Point(ToFloat(aX), ToFloat(aY)));
+      mDSPathBuilder->MoveTo(mTarget->GetTransform().TransformPoint(
+                             mozilla::gfx::Point(ToFloat(aX), ToFloat(aY))));
     }
   }
 
@@ -326,10 +438,10 @@ public:
                                       mozilla::gfx::Point(ToFloat(aX), ToFloat(aY)));
     } else {
       mozilla::gfx::Matrix transform = mTarget->GetTransform();
-      mDSPathBuilder->QuadraticBezierTo(transform *
-                                        mozilla::gfx::Point(ToFloat(aCpx), ToFloat(aCpy)),
-                                        transform *
-                                        mozilla::gfx::Point(ToFloat(aX), ToFloat(aY)));
+      mDSPathBuilder->QuadraticBezierTo(transform.TransformPoint(
+                                          mozilla::gfx::Point(ToFloat(aCpx), ToFloat(aCpy))),
+                                        transform.TransformPoint(
+                                          mozilla::gfx::Point(ToFloat(aX), ToFloat(aY))));
     }
   }
 
@@ -353,22 +465,18 @@ public:
 
   void GetMozCurrentTransform(JSContext* aCx,
                               JS::MutableHandle<JSObject*> aResult,
-                              mozilla::ErrorResult& aError) const;
+                              mozilla::ErrorResult& aError);
   void SetMozCurrentTransform(JSContext* aCx,
                               JS::Handle<JSObject*> aCurrentTransform,
                               mozilla::ErrorResult& aError);
   void GetMozCurrentTransformInverse(JSContext* aCx,
                                      JS::MutableHandle<JSObject*> aResult,
-                                     mozilla::ErrorResult& aError) const;
+                                     mozilla::ErrorResult& aError);
   void SetMozCurrentTransformInverse(JSContext* aCx,
                                      JS::Handle<JSObject*> aCurrentTransform,
                                      mozilla::ErrorResult& aError);
   void GetFillRule(nsAString& aFillRule);
   void SetFillRule(const nsAString& aFillRule);
-  void GetMozDash(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval,
-                  mozilla::ErrorResult& aError);
-  void SetMozDash(JSContext* aCx, const JS::Value& aMozDash,
-                  mozilla::ErrorResult& aError);
 
   void SetLineDash(const Sequence<double>& aSegments,
                    mozilla::ErrorResult& aRv);
@@ -376,12 +484,6 @@ public:
 
   void SetLineDashOffset(double aOffset);
   double LineDashOffset() const;
-
-  double MozDashOffset()
-  {
-    return CurrentState().dashOffset;
-  }
-  void SetMozDashOffset(double aMozDashOffset);
 
   void GetMozTextStyle(nsAString& aMozTextStyle)
   {
@@ -429,6 +531,7 @@ public:
 
   virtual int32_t GetWidth() const override;
   virtual int32_t GetHeight() const override;
+  gfx::IntSize GetSize() const { return gfx::IntSize(mWidth, mHeight); }
 
   // nsICanvasRenderingContextInternal
   /**
@@ -445,7 +548,7 @@ public:
   }
   NS_IMETHOD SetDimensions(int32_t aWidth, int32_t aHeight) override;
   NS_IMETHOD InitializeWithDrawTarget(nsIDocShell* aShell,
-                                      gfx::DrawTarget* aTarget) override;
+                                      NotNull<gfx::DrawTarget*> aTarget) override;
 
   NS_IMETHOD GetInputStream(const char* aMimeType,
                             const char16_t* aEncoderOptions,
@@ -463,7 +566,6 @@ public:
   NS_IMETHOD SetIsOpaque(bool aIsOpaque) override;
   bool GetIsOpaque() override { return mOpaque; }
   NS_IMETHOD Reset() override;
-  mozilla::layers::PersistentBufferProvider* GetBufferProvider(mozilla::layers::LayerManager* aManager);
   already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                          Layer* aOldLayer,
                                          LayerManager* aManager,
@@ -517,7 +619,7 @@ public:
     if (mPathBuilder) {
       mPathBuilder->LineTo(aPoint);
     } else {
-      mDSPathBuilder->LineTo(mTarget->GetTransform() * aPoint);
+      mDSPathBuilder->LineTo(mTarget->GetTransform().TransformPoint(aPoint));
     }
   }
 
@@ -529,9 +631,9 @@ public:
       mPathBuilder->BezierTo(aCP1, aCP2, aCP3);
     } else {
       mozilla::gfx::Matrix transform = mTarget->GetTransform();
-      mDSPathBuilder->BezierTo(transform * aCP1,
-                                transform * aCP2,
-                                transform * aCP3);
+      mDSPathBuilder->BezierTo(transform.TransformPoint(aCP1),
+                               transform.TransformPoint(aCP2),
+                               transform.TransformPoint(aCP3));
     }
   }
 
@@ -548,6 +650,10 @@ public:
   bool GetHitRegionRect(Element* aElement, nsRect& aRect) override;
 
   void OnShutdown();
+
+  // Check the global setup, as well as the compositor type:
+  bool AllowOpenGLCanvas() const;
+
 protected:
   nsresult GetImageDataArray(JSContext* aCx, int32_t aX, int32_t aY,
                              uint32_t aWidth, uint32_t aHeight,
@@ -557,6 +663,10 @@ protected:
                                  dom::Uint8ClampedArray* aArray,
                                  bool aHasDirtyRect, int32_t aDirtyX, int32_t aDirtyY,
                                  int32_t aDirtyWidth, int32_t aDirtyHeight);
+
+  bool CopyBufferProvider(layers::PersistentBufferProvider& aOld,
+                          gfx::DrawTarget& aTarget,
+                          gfx::IntRect aCopyRect);
 
   /**
    * Internal method to complete initialisation, expects mTarget to have been set
@@ -573,6 +683,8 @@ protected:
   static uint32_t sNumLivingContexts;
 
   static mozilla::gfx::DrawTarget* sErrorTarget;
+
+  void SetTransformInternal(const mozilla::gfx::Matrix& aTransform);
 
   // Some helpers.  Doesn't modify a color on failure.
   void SetStyleFromUnion(const StringOrCanvasGradientOrCanvasPattern& aValue,
@@ -641,6 +753,23 @@ protected:
   RenderingMode EnsureTarget(const gfx::Rect* aCoveredRect = nullptr,
                              RenderingMode aRenderMode = RenderingMode::DefaultBackendMode);
 
+  void RestoreClipsAndTransformToTarget();
+
+  bool TrySkiaGLTarget(RefPtr<gfx::DrawTarget>& aOutDT,
+                       RefPtr<layers::PersistentBufferProvider>& aOutProvider);
+
+  bool TrySharedTarget(RefPtr<gfx::DrawTarget>& aOutDT,
+                       RefPtr<layers::PersistentBufferProvider>& aOutProvider);
+
+  bool TryBasicTarget(RefPtr<gfx::DrawTarget>& aOutDT,
+                      RefPtr<layers::PersistentBufferProvider>& aOutProvider);
+
+  void RegisterAllocation();
+
+  void SetInitialState();
+
+  void SetErrorState();
+
   /**
    * This method is run at the end of the event-loop spin where
    * ScheduleStableStateCallback was called.
@@ -657,19 +786,19 @@ protected:
   /**
    * Disposes an old target and prepares to lazily create a new target.
    */
-  void ClearTarget();
+  void ClearTarget(bool aRetainBuffer = false);
 
   /*
    * Returns the target to the buffer provider. i.e. this will queue a frame for
    * rendering.
    */
-  void ReturnTarget();
+  void ReturnTarget(bool aForceReset = false);
 
   /**
    * Check if the target is valid after calling EnsureTarget.
    */
   bool IsTargetValid() const {
-    return (sErrorTarget == nullptr || mTarget != sErrorTarget) && (mBufferProvider != nullptr || mTarget);
+    return !!mTarget && mTarget != sErrorTarget;
   }
 
   /**
@@ -687,6 +816,7 @@ protected:
   /**
    * Update CurrentState().filter with the filter description for
    * CurrentState().filterChain.
+   * Flushes the PresShell, so the world can change if you call this function.
    */
   void UpdateFilter();
 
@@ -723,6 +853,8 @@ protected:
 
   RenderingMode mRenderingMode;
 
+  layers::LayersBackend mCompositorBackend;
+
   // Member vars
   int32_t mWidth, mHeight;
 
@@ -751,7 +883,7 @@ protected:
   // This is created lazily so it is necessary to call EnsureTarget before
   // accessing it. In the event of an error it will be equal to
   // sErrorTarget.
-  RefPtr<mozilla::gfx::DrawTarget> mTarget;
+  MaybeNotNull<RefPtr<mozilla::gfx::DrawTarget>> mTarget;
 
   RefPtr<mozilla::layers::PersistentBufferProvider> mBufferProvider;
 
@@ -856,8 +988,20 @@ protected:
     */
   bool NeedToApplyFilter()
   {
-    const ContextState& state = CurrentState();
-    return state.filter.mPrimitives.Length() > 0;
+    return EnsureUpdatedFilter().mPrimitives.Length() > 0;
+  }
+
+  /**
+   * Calls UpdateFilter if the canvas's WriteOnly state has changed between the
+   * last call to UpdateFilter and now.
+   */
+  const gfx::FilterDescription& EnsureUpdatedFilter() {
+    bool isWriteOnly = mCanvasElement && mCanvasElement->IsWriteOnly();
+    if (CurrentState().filterSourceGraphicTainted != isWriteOnly) {
+      UpdateFilter();
+    }
+    MOZ_ASSERT(CurrentState().filterSourceGraphicTainted == isWriteOnly);
+    return CurrentState().filter;
   }
 
   bool NeedToCalculateBounds()
@@ -917,6 +1061,22 @@ protected:
 
   bool CheckSizeForSkiaGL(mozilla::gfx::IntSize aSize);
 
+  // A clip or a transform, recorded and restored in order.
+  struct ClipState {
+    explicit ClipState(mozilla::gfx::Path* aClip)
+      : clip(aClip)
+    {}
+
+    explicit ClipState(const mozilla::gfx::Matrix& aTransform)
+      : transform(aTransform)
+    {}
+
+    bool IsClip() const { return !!clip; }
+
+    RefPtr<mozilla::gfx::Path> clip;
+    mozilla::gfx::Matrix transform;
+  };
+
   // state stack handling
   class ContextState {
   public:
@@ -933,7 +1093,7 @@ protected:
                      lineCap(mozilla::gfx::CapStyle::BUTT),
                      lineJoin(mozilla::gfx::JoinStyle::MITER_OR_BEVEL),
                      filterString(u"none"),
-                     updateFilterOnWriteOnly(false),
+                     filterSourceGraphicTainted(false),
                      imageSmoothingEnabled(true),
                      fontExplicitLanguage(false)
     { }
@@ -966,7 +1126,7 @@ protected:
           filterChainObserver(aOther.filterChainObserver),
           filter(aOther.filter),
           filterAdditionalImages(aOther.filterAdditionalImages),
-          updateFilterOnWriteOnly(aOther.updateFilterOnWriteOnly),
+          filterSourceGraphicTainted(aOther.filterSourceGraphicTainted),
           imageSmoothingEnabled(aOther.imageSmoothingEnabled),
           fontExplicitLanguage(aOther.fontExplicitLanguage)
     { }
@@ -1009,7 +1169,7 @@ protected:
       return std::min(SIGMA_MAX, shadowBlur / 2.0f);
     }
 
-    nsTArray<RefPtr<mozilla::gfx::Path> > clipsPushed;
+    nsTArray<ClipState> clipsAndTransforms;
 
     RefPtr<gfxFontGroup> fontGroup;
     nsCOMPtr<nsIAtom> fontLanguage;
@@ -1044,7 +1204,19 @@ protected:
     RefPtr<nsSVGFilterChainObserver> filterChainObserver;
     mozilla::gfx::FilterDescription filter;
     nsTArray<RefPtr<mozilla::gfx::SourceSurface>> filterAdditionalImages;
-    bool updateFilterOnWriteOnly;
+
+    // This keeps track of whether the canvas was "tainted" or not when
+    // we last used a filter. This is a security measure, whereby the
+    // canvas is flipped to write-only if a cross-origin image is drawn to it.
+    // This is to stop bad actors from reading back data they shouldn't have
+    // access to.
+    //
+    // This also limits what filters we can apply to the context; in particular
+    // feDisplacementMap is restricted.
+    //
+    // We keep track of this to ensure that if this gets out of sync with the
+    // tainted state of the canvas itself, we update our filters accordingly.
+    bool filterSourceGraphicTainted;
 
     bool imageSmoothingEnabled;
     bool fontExplicitLanguage;

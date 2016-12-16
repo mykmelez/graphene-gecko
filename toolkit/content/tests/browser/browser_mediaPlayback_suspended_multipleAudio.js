@@ -59,17 +59,15 @@ function check_autoplay_audio_pause_state(expectedPauseState) {
     } else {
       ok(true, "Audio is resumed correctly.");
     }
+  } else if (expectedPauseState) {
+    autoPlay.onpause = function() {
+      autoPlay.onpause = null;
+      ok(true, "Audio is paused correctly, checking from onpause.");
+    }
   } else {
-    if (expectedPauseState) {
-      autoPlay.onpause = function () {
-        autoPlay.onpause = null;
-        ok(true, "Audio is paused correctly, checking from onpause.");
-      }
-    } else {
-      autoPlay.onplay = function () {
-        autoPlay.onplay = null;
-        ok(true, "Audio is resumed correctly, checking from onplay.");
-      }
+    autoPlay.onplay = function() {
+      autoPlay.onplay = null;
+      ok(true, "Audio is resumed correctly, checking from onplay.");
     }
   }
 }
@@ -82,7 +80,7 @@ function play_nonautoplay_audio_should_be_paused() {
 
   nonAutoPlay.play();
   return new Promise(resolve => {
-    nonAutoPlay.onpause = function () {
+    nonAutoPlay.onpause = function() {
       nonAutoPlay.onpause = null;
       is(nonAutoPlay.ended, false, "Audio can't be playback.");
       resolve();
@@ -120,7 +118,7 @@ function play_nonautoplay_audio_should_play_until_ended() {
 
   nonAutoPlay.play();
   return new Promise(resolve => {
-    nonAutoPlay.onended = function () {
+    nonAutoPlay.onended = function() {
       nonAutoPlay.onended = null;
       ok(true, "Audio can be playback until ended.");
       resolve();
@@ -145,14 +143,7 @@ function play_nonautoplay_audio_should_be_blocked(suspendedType) {
   }
 
   nonAutoPlay.play();
-  return new Promise(resolve => {
-    nonAutoPlay.onplay = function () {
-      nonAutoPlay.onplay = null;
-      is(nonAutoPlay.computedSuspended, suspendedType,
-         "The suspeded state of non-autoplay audio is correct.");
-      resolve();
-    }
-  });
+  ok(nonAutoPlay.paused, "The blocked audio can't be playback.");
 }
 
 function* suspended_pause(url, browser) {
@@ -284,11 +275,9 @@ function* suspended_block(url, browser) {
 }
 
 add_task(function* setup_test_preference() {
-  yield new Promise(resolve => {
-    SpecialPowers.pushPrefEnv({"set": [
-      ["media.useAudioChannelService.testing", true]
-    ]}, resolve);
-  });
+  yield SpecialPowers.pushPrefEnv({"set": [
+    ["media.useAudioChannelService.testing", true]
+  ]});
 });
 
 add_task(function* test_suspended_pause() {

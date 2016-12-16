@@ -22,8 +22,6 @@ const DEFAULT_URL   = "about:blank";
 
 gPort = PORT;
 
-// Path to source URI of installed add-on
-const INSTALL_URL1  = "/addons/test_AddonRepository_1.xpi";
 // Path to source URI of installing add-on
 const INSTALL_URL2  = "/addons/test_AddonRepository_2.xpi";
 // Path to source URI of non-active add-on (state = STATE_AVAILABLE)
@@ -403,7 +401,7 @@ function run_test() {
       try {
         aInstall.install();
       }
-      catch(e) {
+      catch (e) {
         do_print("Failed to install add-on " + aInstall.sourceURI.spec);
         do_report_unexpected_exception(e);
       }

@@ -1,4 +1,3 @@
-
 ; This Source Code Form is subject to the terms of the Mozilla Public
 ; License, v. 2.0. If a copy of the MPL was not distributed with this
 ; file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -86,6 +85,10 @@
 @BINPATH@/blocklist.xml
 
 ; [Components]
+#ifdef MOZ_ARTIFACT_BUILDS
+@BINPATH@/components/interfaces.xpt
+@BINPATH@/components/prebuilt-interfaces.manifest
+#endif
 @BINPATH@/components/components.manifest
 @BINPATH@/components/alerts.xpt
 #ifdef ACCESSIBILITY
@@ -110,17 +113,14 @@
 @BINPATH@/components/directory.xpt
 @BINPATH@/components/docshell.xpt
 @BINPATH@/components/dom.xpt
-@BINPATH@/components/dom_activities.xpt
-@BINPATH@/components/dom_apps.xpt
-@BINPATH@/components/dom_newapps.xpt
 @BINPATH@/components/dom_base.xpt
 @BINPATH@/components/dom_canvas.xpt
 @BINPATH@/components/dom_core.xpt
 @BINPATH@/components/dom_css.xpt
 @BINPATH@/components/dom_events.xpt
+@BINPATH@/components/dom_file.xpt
 @BINPATH@/components/dom_geolocation.xpt
 @BINPATH@/components/dom_media.xpt
-@BINPATH@/components/dom_messages.xpt
 @BINPATH@/components/dom_network.xpt
 @BINPATH@/components/dom_notification.xpt
 @BINPATH@/components/dom_html.xpt
@@ -134,7 +134,6 @@
 @BINPATH@/components/dom_range.xpt
 @BINPATH@/components/dom_security.xpt
 @BINPATH@/components/dom_settings.xpt
-@BINPATH@/components/dom_permissionsettings.xpt
 @BINPATH@/components/dom_sidebar.xpt
 @BINPATH@/components/dom_mobilemessage.xpt
 @BINPATH@/components/dom_storage.xpt
@@ -260,8 +259,6 @@
 @BINPATH@/components/zipwriter.xpt
 
 ; JavaScript components
-@BINPATH@/components/ChromeNotifications.js
-@BINPATH@/components/ChromeNotifications.manifest
 @BINPATH@/components/ConsoleAPI.manifest
 @BINPATH@/components/ConsoleAPIStorage.js
 @BINPATH@/components/ContactManager.js
@@ -279,16 +276,10 @@
 @BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/BrowserElementParent.manifest
 @BINPATH@/components/BrowserElementParent.js
-@BINPATH@/components/BrowserElementProxy.manifest
-@BINPATH@/components/BrowserElementProxy.js
 @BINPATH@/components/FeedProcessor.manifest
 @BINPATH@/components/FeedProcessor.js
-@BINPATH@/components/PackagedAppUtils.manifest
-@BINPATH@/components/PackagedAppUtils.js
-@BINPATH@/components/PermissionSettings.js
-@BINPATH@/components/PermissionSettings.manifest
-@BINPATH@/components/PermissionPromptService.js
-@BINPATH@/components/PermissionPromptService.manifest
+@BINPATH@/components/WellKnownOpportunisticUtils.js
+@BINPATH@/components/WellKnownOpportunisticUtils.manifest
 @BINPATH@/components/nsDNSServiceDiscovery.manifest
 @BINPATH@/components/nsDNSServiceDiscovery.js
 @BINPATH@/components/toolkitsearch.manifest
@@ -304,15 +295,18 @@
 @BINPATH@/components/TooltipTextProvider.manifest
 @BINPATH@/components/NetworkGeolocationProvider.manifest
 @BINPATH@/components/NetworkGeolocationProvider.js
+@BINPATH@/components/EditorUtils.manifest
+@BINPATH@/components/EditorUtils.js
 @BINPATH@/components/extensions.manifest
 @BINPATH@/components/utils.manifest
 @BINPATH@/components/simpleServices.js
 @BINPATH@/components/addonManager.js
 @BINPATH@/components/amContentHandler.js
 @BINPATH@/components/amInstallTrigger.js
+@BINPATH@/components/amWebAPI.js
 @BINPATH@/components/amWebInstallListener.js
 @BINPATH@/components/nsBlocklistService.js
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
 @BINPATH@/components/TabSource.js
 #endif
 @BINPATH@/components/webvtt.xpt
@@ -361,27 +355,13 @@
 @BINPATH@/components/TelemetryStartup.manifest
 @BINPATH@/components/XULStore.js
 @BINPATH@/components/XULStore.manifest
-@BINPATH@/components/Webapps.js
-@BINPATH@/components/Webapps.manifest
-@BINPATH@/components/AppsService.js
-@BINPATH@/components/AppsService.manifest
 @BINPATH@/components/htmlMenuBuilder.js
 @BINPATH@/components/htmlMenuBuilder.manifest
-
-@BINPATH@/components/Activities.manifest
-@BINPATH@/components/AndroidActivitiesGlue.js
-@BINPATH@/components/ActivityProxy.js
-@BINPATH@/components/ActivityRequestHandler.js
-@BINPATH@/components/ActivityWrapper.js
-@BINPATH@/components/ActivityMessageConfigurator.js
 
 @BINPATH@/components/SystemMessageInternal.js
 @BINPATH@/components/SystemMessageManager.js
 @BINPATH@/components/SystemMessageCache.js
 @BINPATH@/components/SystemMessageManager.manifest
-
-@BINPATH@/components/InstallPackagedWebapp.manifest
-@BINPATH@/components/InstallPackagedWebapp.js
 
 #ifdef MOZ_WEBRTC
 @BINPATH@/components/PeerConnection.js
@@ -395,7 +375,7 @@
 @BINPATH@/components/dom_webspeechsynth.xpt
 #endif
 
-#ifdef MOZ_DEBUG
+#if defined(ENABLE_TESTS) && defined(MOZ_DEBUG)
 @BINPATH@/components/TestInterfaceJS.js
 @BINPATH@/components/TestInterfaceJS.manifest
 @BINPATH@/components/TestInterfaceJSMaplike.js
@@ -415,11 +395,8 @@
 @BINPATH@/components/PresentationNetworkHelper.manifest
 @BINPATH@/components/PresentationDataChannelSessionTransport.js
 @BINPATH@/components/PresentationDataChannelSessionTransport.manifest
-@BINPATH@/components/LegacyProviders.manifest
-@BINPATH@/components/LegacyPresentationControlService.js
-
-@BINPATH@/components/PACGenerator.js
-@BINPATH@/components/PACGenerator.manifest
+@BINPATH@/components/AndroidCastDeviceProvider.manifest
+@BINPATH@/components/AndroidCastDeviceProvider.js
 
 @BINPATH@/components/TVSimulatorService.js
 @BINPATH@/components/TVSimulatorService.manifest
@@ -427,14 +404,12 @@
 ; Modules
 @BINPATH@/modules/*
 
-#ifdef MOZ_SAFE_BROWSING
 ; Safe Browsing
 @BINPATH@/components/nsURLClassifier.manifest
 @BINPATH@/components/nsUrlClassifierHashCompleter.js
 @BINPATH@/components/nsUrlClassifierListManager.js
 @BINPATH@/components/nsUrlClassifierLib.js
 @BINPATH@/components/url-classifier.xpt
-#endif
 
 ; Private Browsing
 @BINPATH@/components/privatebrowsing.xpt
@@ -448,6 +423,10 @@
 ; [Browser Chrome Files]
 @BINPATH@/chrome/toolkit@JAREXT@
 @BINPATH@/chrome/toolkit.manifest
+
+; [Extensions]
+@BINPATH@/components/extensions-toolkit.manifest
+@BINPATH@/components/extensions-mobile.manifest
 
 ; Features
 @BINPATH@/features/*
@@ -536,6 +515,7 @@
 @BINPATH@/components/ImageBlockingPolicy.js
 @BINPATH@/components/DirectoryProvider.js
 @BINPATH@/components/FilePicker.js
+@BINPATH@/components/FxAccountsPush.js
 @BINPATH@/components/HelperAppDialog.js
 @BINPATH@/components/LoginManagerPrompter.js
 @BINPATH@/components/MobileComponents.manifest
@@ -543,6 +523,7 @@
 @BINPATH@/components/NSSDialogService.js
 @BINPATH@/components/PersistentNotificationHandler.js
 @BINPATH@/components/PresentationDevicePrompt.js
+@BINPATH@/components/PresentationRequestUIGlue.js
 @BINPATH@/components/PromptService.js
 @BINPATH@/components/SessionStore.js
 @BINPATH@/components/SiteSpecificUserAgent.js
@@ -553,8 +534,8 @@
 #ifdef ENABLE_MARIONETTE
 @BINPATH@/chrome/marionette@JAREXT@
 @BINPATH@/chrome/marionette.manifest
-@BINPATH@/components/MarionetteComponents.manifest
-@BINPATH@/components/marionettecomponent.js
+@BINPATH@/components/marionette.manifest
+@BINPATH@/components/marionette.js
 #endif
 
 #ifdef PKG_LOCALE_MANIFEST
@@ -562,3 +543,6 @@
 #endif
 
 @BINPATH@/components/dom_audiochannel.xpt
+
+@BINPATH@/components/RemoteWebNavigation.js
+@BINPATH@/components/remotebrowserutils.manifest

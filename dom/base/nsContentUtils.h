@@ -34,6 +34,7 @@
 #include "mozilla/Logging.h"
 #include "mozilla/NotNull.h"
 #include "nsIContentPolicy.h"
+#include "nsIDocument.h"
 #include "nsPIDOMWindow.h"
 
 #if defined(XP_WIN)
@@ -55,7 +56,6 @@ class nsIContent;
 class nsIContentPolicy;
 class nsIContentSecurityPolicy;
 class nsIDocShellTreeItem;
-class nsIDocument;
 class nsIDocumentLoaderFactory;
 class nsIDOMDocument;
 class nsIDOMDocumentFragment;
@@ -85,7 +85,6 @@ class nsIScriptContext;
 class nsIScriptSecurityManager;
 class nsIStringBundle;
 class nsIStringBundleService;
-class nsISupportsArray;
 class nsISupportsHashKey;
 class nsIURI;
 class nsIUUIDGenerator;
@@ -119,14 +118,17 @@ class ErrorResult;
 class EventListenerManager;
 
 namespace dom {
+struct CustomElementDefinition;
 class DocumentFragment;
 class Element;
 class EventTarget;
 class IPCDataTransfer;
 class IPCDataTransferItem;
+struct LifecycleCallbackArgs;
 class NodeInfo;
 class nsIContentChild;
 class nsIContentParent;
+class TabChild;
 class Selection;
 class TabParent;
 } // namespace dom
@@ -196,6 +198,23 @@ public:
   static bool     IsCallerChrome();
   static bool     ThreadsafeIsCallerChrome();
   static bool     IsCallerContentXBL();
+
+  // The APIs for checking whether the caller is system (in the sense of system
+  // principal) should only be used when the JSContext is known to accurately
+  // represent the caller.  In practice, that means you should only use them in
+  // two situations at the moment:
+  //
+  // 1) Functions used in WebIDL Func annotations.
+  // 2) Bindings code or other code called directly from the JS engine.
+  //
+  // Use pretty much anywhere else is almost certainly wrong and should be
+  // replaced with [NeedsCallerType] annotations in bindings.
+
+  // Check whether the caller is system if you know you're on the main thread.
+  static bool IsSystemCaller(JSContext* aCx);
+
+  // Check whether the caller is system if you might be on a worker thread.
+  static bool ThreadsafeIsSystemCaller(JSContext* aCx);
 
   // In the traditional Gecko architecture, both C++ code and untrusted JS code
   // needed to rely on the same XPCOM method/getter/setter to get work done.
@@ -646,7 +665,7 @@ public:
 
   /**
    * Method that gets the primary presContext for the node.
-   * 
+   *
    * @param aContent The content node.
    * @return the presContext, or nullptr if the content is not in a document
    *         (if GetCurrentDoc returns nullptr)
@@ -781,6 +800,18 @@ public:
   static void GetEventArgNames(int32_t aNameSpaceID, nsIAtom *aEventName,
                                bool aIsForWindow,
                                uint32_t *aArgCount, const char*** aArgNames);
+
+  /**
+   * Returns origin attributes of the document.
+   **/
+  static mozilla::PrincipalOriginAttributes
+  GetOriginAttributes(nsIDocument* aDoc);
+
+  /**
+   * Returns origin attributes of the load group.
+   **/
+  static mozilla::PrincipalOriginAttributes
+  GetOriginAttributes(nsILoadGroup* aLoadGroup);
 
   /**
    * Returns true if this document is in a Private Browsing window.
@@ -995,14 +1026,20 @@ public:
   static bool IsChildOfSameType(nsIDocument* aDoc);
 
   /**
-  '* Returns true if the content-type is any of the supported script types.
+   * Returns true if the content-type is any of the supported script types.
    */
   static bool IsScriptType(const nsACString& aContentType);
 
   /**
-  '* Returns true if the content-type will be rendered as plain-text.
+   * Returns true if the content-type will be rendered as plain-text.
    */
   static bool IsPlainTextType(const nsACString& aContentType);
+
+  /**
+   * Returns true iff the type is rendered as plain text and doesn't support
+   * non-UTF-8 encodings.
+   */
+  static bool IsUtf8OnlyPlainTextType(const nsACString& aContentType);
 
   /**
    * Get the script file name to use when compiling the script
@@ -1015,7 +1052,8 @@ public:
    */
   static bool GetWrapperSafeScriptFilename(nsIDocument *aDocument,
                                              nsIURI *aURI,
-                                             nsACString& aScriptURI);
+                                             nsACString& aScriptURI,
+                                             nsresult* aRv);
 
 
   /**
@@ -1739,9 +1777,6 @@ public:
 
   static JSContext *GetCurrentJSContext();
   static JSContext *GetCurrentJSContextForThread();
-  inline static JSContext *RootingCx() {
-    return mozilla::dom::danger::GetJSContext();
-  }
 
   /**
    * Case insensitive comparison between two strings. However it only ignores
@@ -1850,11 +1885,6 @@ public:
    */
   static nsresult CreateArrayBuffer(JSContext *aCx, const nsACString& aData,
                                     JSObject** aResult);
-
-  static nsresult CreateBlobBuffer(JSContext* aCx,
-                                   nsISupports* aParent,
-                                   const nsACString& aData,
-                                   JS::MutableHandle<JS::Value> aBlob);
 
   static void StripNullChars(const nsAString& aInStr, nsAString& aOutStr);
 
@@ -2059,6 +2089,14 @@ public:
   static bool ResistFingerprinting()
   {
     return sPrivacyResistFingerprinting;
+  }
+
+  /**
+   * Returns true if the browser should show busy cursor when loading page.
+   */
+  static bool UseActivityCursor()
+  {
+    return sUseActivityCursor;
   }
 
   /**
@@ -2355,18 +2393,6 @@ public:
   static nsIEditor* GetHTMLEditor(nsPresContext* aPresContext);
 
   /**
-   * Check whether a spec feature/version is supported.
-   * @param aObject the object, which should support the feature,
-   *        for example nsIDOMNode or nsIDOMDOMImplementation
-   * @param aFeature the feature ("Views", "Core", "HTML", "Range" ...)
-   * @param aVersion the version ("1.0", "2.0", ...)
-   * @return whether the feature is supported or not
-   */
-  static bool InternalIsSupported(nsISupports* aObject,
-                                  const nsAString& aFeature,
-                                  const nsAString& aVersion);
-
-  /**
    * Returns true if the browser.dom.window.dump.enabled pref is set.
    */
   static bool DOMWindowDumpEnabled();
@@ -2392,7 +2418,7 @@ public:
    *
    * @param aContent The content to test for being an insertion point.
    */
-  static bool IsContentInsertionPoint(const nsIContent* aContent);
+  static bool IsContentInsertionPoint(nsIContent* aContent);
 
 
   /**
@@ -2484,7 +2510,14 @@ public:
    */
   static bool IsFlavorImage(const nsACString& aFlavor);
 
-  static void TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
+  static nsresult IPCTransferableToTransferable(const mozilla::dom::IPCDataTransfer& aDataTransfer,
+                                                const bool& aIsPrivateData,
+                                                nsIPrincipal* aRequestingPrincipal,
+                                                nsITransferable* aTransferable,
+                                                mozilla::dom::nsIContentParent* aContentParent,
+                                                mozilla::dom::TabChild* aTabChild);
+
+  static void TransferablesToIPCTransferables(nsIArray* aTransferables,
                                               nsTArray<mozilla::dom::IPCDataTransfer>& aIPC,
                                               bool aInSyncMessage,
                                               mozilla::dom::nsIContentChild* aChild,
@@ -2540,11 +2573,12 @@ public:
    * Synthesize a mouse event to the given widget
    * (see nsIDOMWindowUtils.sendMouseEvent).
    */
-  static nsresult SendMouseEvent(nsCOMPtr<nsIPresShell> aPresShell,
+  static nsresult SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
                                  const nsAString& aType,
                                  float aX,
                                  float aY,
                                  int32_t aButton,
+                                 int32_t aButtons,
                                  int32_t aClickCount,
                                  int32_t aModifiers,
                                  bool aIgnoreRootScrollFrame,
@@ -2552,7 +2586,8 @@ public:
                                  unsigned short aInputSourceArg,
                                  bool aToWindow,
                                  bool *aPreventDefault,
-                                 bool aIsSynthesized);
+                                 bool aIsDOMEventSynthesized,
+                                 bool aIsWidgetEventSynthesized);
 
   static void FirePageShowEvent(nsIDocShellTreeItem* aItem,
                                 mozilla::dom::EventTarget* aChromeEventHandler,
@@ -2660,6 +2695,50 @@ public:
    * Try to find the docshell corresponding to the given event target.
    */
   static nsIDocShell* GetDocShellForEventTarget(mozilla::dom::EventTarget* aTarget);
+
+  /**
+   * Returns true if the "HTTPS state" of the document should be "modern". See:
+   *
+   * https://html.spec.whatwg.org/#concept-document-https-state
+   * https://fetch.spec.whatwg.org/#concept-response-https-state
+   */
+  static bool HttpsStateIsModern(nsIDocument* aDocument);
+
+  /**
+   * Looking up a custom element definition.
+   * https://html.spec.whatwg.org/#look-up-a-custom-element-definition
+   */
+  static mozilla::dom::CustomElementDefinition*
+    LookupCustomElementDefinition(nsIDocument* aDoc,
+                                  const nsAString& aLocalName,
+                                  uint32_t aNameSpaceID,
+                                  const nsAString* aIs = nullptr);
+
+  static void SetupCustomElement(Element* aElement,
+                                 const nsAString* aTypeExtension = nullptr);
+
+  static void EnqueueLifecycleCallback(nsIDocument* aDoc,
+                                       nsIDocument::ElementCallbackType aType,
+                                       Element* aCustomElement,
+                                       mozilla::dom::LifecycleCallbackArgs* aArgs = nullptr,
+                                       mozilla::dom::CustomElementDefinition* aDefinition = nullptr);
+
+  static void GetCustomPrototype(nsIDocument* aDoc,
+                                 int32_t aNamespaceID,
+                                 nsIAtom* aAtom,
+                                 JS::MutableHandle<JSObject*> prototype);
+
+  static bool AttemptLargeAllocationLoad(nsIHttpChannel* aChannel);
+
+  /**
+   * Appends all "document level" native anonymous content subtree roots for
+   * aDocument to aElements.  Document level NAC subtrees are those created
+   * by ancestor frames of the document element's primary frame, such as
+   * the scrollbar elements created by the root scroll frame.
+   */
+  static void AppendDocumentLevelNativeAnonymousContentTo(
+      nsIDocument* aDocument,
+      nsTArray<nsIContent*>& aElements);
 
 private:
   static bool InitializeEventTable();
@@ -2770,6 +2849,7 @@ private:
   static bool sGettersDecodeURLHash;
   static bool sPrivacyResistFingerprinting;
   static bool sSendPerformanceTimingNotifications;
+  static bool sUseActivityCursor;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
 

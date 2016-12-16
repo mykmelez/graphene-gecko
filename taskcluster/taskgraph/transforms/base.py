@@ -4,6 +4,9 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import re
+import copy
+import pprint
 import voluptuous
 
 
@@ -63,43 +66,60 @@ def validate_schema(schema, obj, msg_prefix):
     beginning with msg_prefix.
     """
     try:
-        return schema(obj)
+        # deep copy the result since it may include mutable defaults
+        return copy.deepcopy(schema(obj))
     except voluptuous.MultipleInvalid as exc:
         msg = [msg_prefix]
         for error in exc.errors:
             msg.append(str(error))
-        raise Exception('\n'.join(msg))
+        raise Exception('\n'.join(msg) + '\n' + pprint.pformat(obj))
 
 
-def get_keyed_by(item, field, item_name):
+def get_keyed_by(item, field, item_name, subfield=None):
     """
     For values which can either accept a literal value, or be keyed by some
     other attribute of the item, perform that lookup.  For example, this supports
 
         chunks:
-            by-item-platform:
+            by-test-platform:
                 macosx-10.11/debug: 13
+                win.*: 6
                 default: 12
 
     The `item_name` parameter is used to generate useful error messages.
+    The `subfield` parameter, if specified, allows access to a second level
+    of the item dictionary: item[field][subfield]. For example, this supports
+
+        mozharness:
+            config:
+                by-test-platform:
+                    default: ...
     """
     value = item[field]
     if not isinstance(value, dict):
         return value
+    if subfield:
+        value = item[field][subfield]
+        if not isinstance(value, dict):
+            return value
 
-    assert len(value) == 1, "Invalid attribute {} in {}".format(field, item_name)
     keyed_by = value.keys()[0]
+    if len(value) > 1 or not keyed_by.startswith('by-'):
+        return value
+
     values = value[keyed_by]
-    if keyed_by.startswith('by-'):
-        keyed_by = keyed_by[3:]  # extract just the keyed-by field name
-        for k in item[keyed_by], 'default':
-            if k in values:
-                return values[k]
-        else:
-            raise Exception(
-                "Neither {} {} nor 'default' found while determining item {} in {}".format(
-                    keyed_by, item[keyed_by], field, item_name))
+    keyed_by = keyed_by[3:]  # strip 'by-' off the keyed-by field name
+    if item[keyed_by] in values:
+        return values[item[keyed_by]]
+    for k in values.keys():
+        if re.match(k, item[keyed_by]):
+            return values[k]
+    if 'default' in values:
+        return values['default']
+    for k in item[keyed_by], 'default':
+        if k in values:
+            return values[k]
     else:
         raise Exception(
-            "Invalid attribute {} keyed-by value {} in {}".format(
-                field, keyed_by, item_name))
+            "Neither {} {} nor 'default' found while determining item {} in {}".format(
+                keyed_by, item[keyed_by], field, item_name))

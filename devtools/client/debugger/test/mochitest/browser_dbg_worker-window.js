@@ -34,8 +34,17 @@ add_task(function* () {
                                             "jsdebugger",
                                             Toolbox.HostType.WINDOW);
 
-  is(toolbox._host.type, "window", "correct host");
-  ok(toolbox._host._window.document.title.includes(WORKER_URL),
+  is(toolbox.hostType, "window", "correct host");
+
+  yield new Promise(done => {
+    toolbox.win.parent.addEventListener("message", function onmessage(event) {
+      if (event.data.name == "set-host-title") {
+        toolbox.win.parent.removeEventListener("message", onmessage);
+        done();
+      }
+    });
+  });
+  ok(toolbox.win.parent.document.title.includes(WORKER_URL),
      "worker URL in host title");
 
   let toolTabs = toolbox.doc.querySelectorAll(".devtools-tab");
@@ -44,8 +53,9 @@ add_task(function* () {
   is(activeTools.join(","), "webconsole,jsdebugger,scratchpad,options",
     "Correct set of tools supported by worker");
 
-  yield toolbox.destroy();
   terminateWorkerInTab(tab, WORKER_URL);
   yield waitForWorkerClose(workerClient);
   yield close(client);
+
+  yield toolbox.destroy();
 });

@@ -41,7 +41,7 @@ class NullFactory : public GLImplFactory
     RenderbufferImpl *createRenderbuffer() override { return nullptr; }
 
     // Buffer creation
-    BufferImpl *createBuffer() override { return nullptr; }
+    BufferImpl *createBuffer(const gl::BufferState &state) override { return nullptr; }
 
     // Vertex Array creation
     VertexArrayImpl *createVertexArray(const gl::VertexArrayState &data) override
@@ -55,7 +55,10 @@ class NullFactory : public GLImplFactory
     FenceSyncImpl *createFenceSync() override { return nullptr; }
 
     // Transform Feedback creation
-    TransformFeedbackImpl *createTransformFeedback() override { return nullptr; }
+    TransformFeedbackImpl *createTransformFeedback(const gl::TransformFeedbackState &state) override
+    {
+        return nullptr;
+    }
 
     // Sampler object creation
     SamplerImpl *createSampler() override { return nullptr; }
@@ -77,12 +80,13 @@ class MockGLFactory : public GLImplFactory
     MOCK_METHOD1(createFramebuffer, FramebufferImpl *(const gl::FramebufferState &));
     MOCK_METHOD1(createTexture, TextureImpl *(const gl::TextureState &));
     MOCK_METHOD0(createRenderbuffer, RenderbufferImpl *());
-    MOCK_METHOD0(createBuffer, BufferImpl *());
+    MOCK_METHOD1(createBuffer, BufferImpl *(const gl::BufferState &));
     MOCK_METHOD1(createVertexArray, VertexArrayImpl *(const gl::VertexArrayState &));
     MOCK_METHOD1(createQuery, QueryImpl *(GLenum type));
     MOCK_METHOD0(createFenceNV, FenceNVImpl *());
     MOCK_METHOD0(createFenceSync, FenceSyncImpl *());
-    MOCK_METHOD0(createTransformFeedback, TransformFeedbackImpl *());
+    MOCK_METHOD1(createTransformFeedback,
+                 TransformFeedbackImpl *(const gl::TransformFeedbackState &));
     MOCK_METHOD0(createSampler, SamplerImpl *());
     MOCK_METHOD1(createPaths, std::vector<PathImpl *>(GLsizei));
 };
@@ -99,9 +103,10 @@ class MockEGLFactory : public EGLImplFactory
                  SurfaceImpl *(const egl::SurfaceState &,
                                const egl::Config *,
                                const egl::AttributeMap &));
-    MOCK_METHOD4(createPbufferFromClientBuffer,
+    MOCK_METHOD5(createPbufferFromClientBuffer,
                  SurfaceImpl *(const egl::SurfaceState &,
                                const egl::Config *,
+                               EGLenum,
                                EGLClientBuffer,
                                const egl::AttributeMap &));
     MOCK_METHOD4(createPixmapSurface,

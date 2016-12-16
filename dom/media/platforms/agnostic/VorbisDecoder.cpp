@@ -54,11 +54,9 @@ VorbisDataDecoder::~VorbisDataDecoder()
   vorbis_comment_clear(&mVorbisComment);
 }
 
-nsresult
+void
 VorbisDataDecoder::Shutdown()
 {
-  //mReader = nullptr;
-  return NS_OK;
 }
 
 RefPtr<MediaDataDecoder::InitPromise>
@@ -74,11 +72,11 @@ VorbisDataDecoder::Init()
   if (!XiphExtradataToHeaders(headers, headerLens,
                               mInfo.mCodecSpecificConfig->Elements(),
                               mInfo.mCodecSpecificConfig->Length())) {
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
   for (size_t i = 0; i < headers.Length(); i++) {
     if (NS_FAILED(DecodeHeader(headers[i], headerLens[i]))) {
-      return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
     }
   }
 
@@ -86,12 +84,12 @@ VorbisDataDecoder::Init()
 
   int r = vorbis_synthesis_init(&mVorbisDsp, &mVorbisInfo);
   if (r) {
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 
   r = vorbis_block_init(&mVorbisDsp, &mVorbisBlock);
   if (r) {
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 
   if (mInfo.mRate != (uint32_t)mVorbisDsp.vi->rate) {
@@ -105,7 +103,7 @@ VorbisDataDecoder::Init()
 
   AudioConfig::ChannelLayout layout(mVorbisDsp.vi->channels);
   if (!layout.IsValid()) {
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 
   return InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__);
@@ -124,14 +122,12 @@ VorbisDataDecoder::DecodeHeader(const unsigned char* aData, size_t aLength)
   return r == 0 ? NS_OK : NS_ERROR_FAILURE;
 }
 
-nsresult
+void
 VorbisDataDecoder::Input(MediaRawData* aSample)
 {
   MOZ_ASSERT(mCallback->OnReaderTaskQueue());
   mTaskQueue->Dispatch(NewRunnableMethod<RefPtr<MediaRawData>>(
                        this, &VorbisDataDecoder::ProcessDecode, aSample));
-
-  return NS_OK;
 }
 
 void
@@ -141,14 +137,16 @@ VorbisDataDecoder::ProcessDecode(MediaRawData* aSample)
   if (mIsFlushing) {
     return;
   }
-  if (DoDecode(aSample) == -1) {
-    mCallback->Error(MediaDataDecoderError::DECODE_ERROR);
-  } else if (mTaskQueue->IsEmpty()) {
+
+  MediaResult rv = DoDecode(aSample);
+  if (NS_FAILED(rv)) {
+    mCallback->Error(rv);
+  } else {
     mCallback->InputExhausted();
   }
 }
 
-int
+MediaResult
 VorbisDataDecoder::DoDecode(MediaRawData* aSample)
 {
   MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
@@ -156,7 +154,7 @@ VorbisDataDecoder::DoDecode(MediaRawData* aSample)
   const unsigned char* aData = aSample->Data();
   size_t aLength = aSample->Size();
   int64_t aOffset = aSample->mOffset;
-  uint64_t aTstampUsecs = aSample->mTime;
+  int64_t aTstampUsecs = aSample->mTime;
   int64_t aTotalFrames = 0;
 
   MOZ_ASSERT(mPacketCount >= 3);
@@ -167,40 +165,32 @@ VorbisDataDecoder::DoDecode(MediaRawData* aSample)
     mLastFrameTime = Some(aSample->mTime);
   }
 
-  ogg_packet pkt = InitVorbisPacket(aData, aLength, false, false, -1, mPacketCount++);
-  bool first_packet = mPacketCount == 4;
+  ogg_packet pkt = InitVorbisPacket(aData, aLength, false, aSample->mEOS,
+                                    aSample->mTimecode, mPacketCount++);
 
-  if (vorbis_synthesis(&mVorbisBlock, &pkt) != 0) {
-    return -1;
+  int err = vorbis_synthesis(&mVorbisBlock, &pkt);
+  if (err) {
+    return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                       RESULT_DETAIL("vorbis_synthesis:%d", err));
   }
 
-  if (vorbis_synthesis_blockin(&mVorbisDsp,
-                               &mVorbisBlock) != 0) {
-    return -1;
+  err = vorbis_synthesis_blockin(&mVorbisDsp, &mVorbisBlock);
+  if (err) {
+    return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                       RESULT_DETAIL("vorbis_synthesis_blockin:%d", err));
   }
 
   VorbisPCMValue** pcm = 0;
   int32_t frames = vorbis_synthesis_pcmout(&mVorbisDsp, &pcm);
-  // If the first packet of audio in the media produces no data, we
-  // still need to produce an AudioData for it so that the correct media
-  // start time is calculated.  Otherwise we'd end up with a media start
-  // time derived from the timecode of the first packet that produced
-  // data.
-  if (frames == 0 && first_packet) {
-    mCallback->Output(new AudioData(aOffset,
-                                    aTstampUsecs,
-                                    0,
-                                    0,
-                                    AlignedAudioBuffer(),
-                                    mVorbisDsp.vi->channels,
-                                    mVorbisDsp.vi->rate));
+  if (frames == 0) {
+    return NS_OK;
   }
   while (frames > 0) {
     uint32_t channels = mVorbisDsp.vi->channels;
     uint32_t rate = mVorbisDsp.vi->rate;
     AlignedAudioBuffer buffer(frames*channels);
     if (!buffer) {
-      return -1;
+      return MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__);
     }
     for (uint32_t j = 0; j < channels; ++j) {
       VorbisPCMValue* channel = pcm[j];
@@ -211,19 +201,21 @@ VorbisDataDecoder::DoDecode(MediaRawData* aSample)
 
     CheckedInt64 duration = FramesToUsecs(frames, rate);
     if (!duration.isValid()) {
-      NS_WARNING("Int overflow converting WebM audio duration");
-      return -1;
+      return MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+                         RESULT_DETAIL("Overflow converting audio duration"));
     }
     CheckedInt64 total_duration = FramesToUsecs(mFrames, rate);
     if (!total_duration.isValid()) {
-      NS_WARNING("Int overflow converting WebM audio total_duration");
-      return -1;
+      return MediaResult(
+        NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+        RESULT_DETAIL("Overflow converting audio total_duration"));
     }
 
     CheckedInt64 time = total_duration + aTstampUsecs;
     if (!time.isValid()) {
-      NS_WARNING("Int overflow adding total_duration and aTstampUsecs");
-      return -1;
+      return MediaResult(
+        NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+        RESULT_DETAIL("Overflow adding total_duration and aTstampUsecs"));
     };
 
     if (!mAudioConverter) {
@@ -231,7 +223,9 @@ VorbisDataDecoder::DoDecode(MediaRawData* aSample)
                      rate);
       AudioConfig out(channels, rate);
       if (!in.IsValid() || !out.IsValid()) {
-       return -1;
+        return MediaResult(
+          NS_ERROR_DOM_MEDIA_FATAL_ERR,
+          RESULT_DETAIL("Invalid channel layout:%u", channels));
       }
       mAudioConverter = MakeUnique<AudioConverter>(in, out);
     }
@@ -248,14 +242,16 @@ VorbisDataDecoder::DoDecode(MediaRawData* aSample)
                                     channels,
                                     rate));
     mFrames += frames;
-    if (vorbis_synthesis_read(&mVorbisDsp, frames) != 0) {
-      return -1;
+    err = vorbis_synthesis_read(&mVorbisDsp, frames);
+    if (err) {
+      return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                         RESULT_DETAIL("vorbis_synthesis_read:%d", err));
     }
 
     frames = vorbis_synthesis_pcmout(&mVorbisDsp, &pcm);
   }
 
-  return aTotalFrames > 0 ? 1 : 0;
+  return NS_OK;
 }
 
 void
@@ -265,15 +261,14 @@ VorbisDataDecoder::ProcessDrain()
   mCallback->DrainComplete();
 }
 
-nsresult
+void
 VorbisDataDecoder::Drain()
 {
   MOZ_ASSERT(mCallback->OnReaderTaskQueue());
   mTaskQueue->Dispatch(NewRunnableMethod(this, &VorbisDataDecoder::ProcessDrain));
-  return NS_OK;
 }
 
-nsresult
+void
 VorbisDataDecoder::Flush()
 {
   MOZ_ASSERT(mCallback->OnReaderTaskQueue());
@@ -287,15 +282,13 @@ VorbisDataDecoder::Flush()
   });
   SyncRunnable::DispatchToThread(mTaskQueue, r);
   mIsFlushing = false;
-  return NS_OK;
 }
 
 /* static */
 bool
 VorbisDataDecoder::IsVorbis(const nsACString& aMimeType)
 {
-  return aMimeType.EqualsLiteral("audio/webm; codecs=vorbis") ||
-         aMimeType.EqualsLiteral("audio/ogg; codecs=vorbis");
+  return aMimeType.EqualsLiteral("audio/vorbis");
 }
 
 /* static */ const AudioConfig::Channel*

@@ -11,7 +11,7 @@
  */
 
 callback DecodeSuccessCallback = void (AudioBuffer decodedData);
-callback DecodeErrorCallback = void ();
+callback DecodeErrorCallback = void (DOMException error);
 
 enum AudioContextState {
     "suspended",
@@ -24,7 +24,8 @@ dictionary PeriodicWaveConstraints {
 };
 
 [Constructor,
- Constructor(AudioChannel audioChannelType)]
+ Constructor(AudioChannel audioChannelType),
+ Pref="dom.webaudio.enabled"]
 interface AudioContext : EventTarget {
 
     readonly attribute AudioDestinationNode destination;
@@ -51,6 +52,9 @@ interface AudioContext : EventTarget {
     // AudioNode creation
     [NewObject, Throws]
     AudioBufferSourceNode createBufferSource();
+
+    [NewObject, Throws]
+    ConstantSourceNode createConstantSource();
 
     [NewObject, Throws]
     MediaStreamAudioDestinationNode createMediaStreamDestination();

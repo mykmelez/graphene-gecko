@@ -38,14 +38,14 @@ enum FormControlsTypes {
   NS_FORM_INPUT_ELEMENT  = 0x80  // 0b10000000
 };
 
-enum ButtonElementTypes {
+enum ButtonElementTypes : uint8_t {
   NS_FORM_BUTTON_BUTTON = NS_FORM_BUTTON_ELEMENT + 1,
   NS_FORM_BUTTON_RESET,
   NS_FORM_BUTTON_SUBMIT,
   eButtonElementTypesMax
 };
 
-enum InputElementTypes {
+enum InputElementTypes : uint8_t {
   NS_FORM_INPUT_BUTTON = NS_FORM_INPUT_ELEMENT + 1,
   NS_FORM_INPUT_CHECKBOX,
   NS_FORM_INPUT_COLOR,
@@ -66,6 +66,8 @@ enum InputElementTypes {
   NS_FORM_INPUT_TIME,
   NS_FORM_INPUT_URL,
   NS_FORM_INPUT_RANGE,
+  NS_FORM_INPUT_WEEK,
+  NS_FORM_INPUT_DATETIME_LOCAL,
   eInputElementTypesMax
 };
 
@@ -265,9 +267,14 @@ nsIFormControl::IsSingleLineTextControl(bool aExcludePassword, uint32_t aType)
          aType == NS_FORM_INPUT_TEL ||
          aType == NS_FORM_INPUT_URL ||
          // TODO: those are temporary until bug 773205 is fixed.
-         aType == NS_FORM_INPUT_DATE ||
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+         // On Android/B2G, date/time input appears as a normal text box.
          aType == NS_FORM_INPUT_TIME ||
+#endif
+         aType == NS_FORM_INPUT_DATE ||
          aType == NS_FORM_INPUT_MONTH ||
+         aType == NS_FORM_INPUT_WEEK ||
+         aType == NS_FORM_INPUT_DATETIME_LOCAL ||
          (!aExcludePassword && aType == NS_FORM_INPUT_PASSWORD);
 }
 

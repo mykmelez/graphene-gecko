@@ -10,9 +10,9 @@ define(function (require, exports, module) {
   // Dependencies
   const React = require("devtools/client/shared/vendor/react");
   const { createFactories } = require("./rep-utils");
-  const { ObjectBox } = createFactories(require("./object-box"));
   const { Caption } = createFactories(require("./caption"));
   const { PropRep } = createFactories(require("./prop-rep"));
+  const { MODE } = require("./constants");
   // Shortcuts
   const { span } = React.DOM;
   /**
@@ -24,16 +24,18 @@ define(function (require, exports, module) {
 
     propTypes: {
       object: React.PropTypes.object,
-      mode: React.PropTypes.string,
+      // @TODO Change this to Object.values once it's supported in Node's version of V8
+      mode: React.PropTypes.oneOf(Object.keys(MODE).map(key => MODE[key])),
     },
 
     getTitle: function (object) {
+      let className = object && object.class ? object.class : "Object";
       if (this.props.objectLink) {
         return this.props.objectLink({
           object: object
-        }, object.class);
+        }, className);
       }
-      return "Object";
+      return className;
     },
 
     safePropIterator: function (object, max) {
@@ -75,10 +77,9 @@ define(function (require, exports, module) {
         let objectLink = this.props.objectLink || span;
 
         props.push(Caption({
-          key: "more",
           object: objectLink({
             object: object
-          }, "more…")
+          }, (Object.keys(object).length - max) + " more…")
         }));
       } else if (props.length > 0) {
         // Remove the last comma.
@@ -97,7 +98,8 @@ define(function (require, exports, module) {
         return props;
       }
 
-      let mode = this.props.mode;
+      // Hardcode tiny mode to avoid recursive handling.
+      let mode = MODE.TINY;
 
       try {
         for (let name in object) {
@@ -115,7 +117,6 @@ define(function (require, exports, module) {
           let t = typeof value;
           if (filter(t, value)) {
             props.push(PropRep({
-              key: name,
               mode: mode,
               name: name,
               object: value,
@@ -136,28 +137,26 @@ define(function (require, exports, module) {
       let props = this.safePropIterator(object);
       let objectLink = this.props.objectLink || span;
 
-      if (this.props.mode == "tiny" || !props.length) {
+      if (this.props.mode === MODE.TINY || !props.length) {
         return (
-          ObjectBox({className: "object"},
-            objectLink({className: "objectTitle"}, this.getTitle())
+          span({className: "objectBox objectBox-object"},
+            objectLink({className: "objectTitle"}, this.getTitle(object))
           )
         );
       }
 
       return (
-        ObjectBox({className: "object"},
+        span({className: "objectBox objectBox-object"},
           this.getTitle(object),
           objectLink({
             className: "objectLeftBrace",
-            role: "presentation",
             object: object
-          }, "{"),
-          props,
+          }, " { "),
+          ...props,
           objectLink({
             className: "objectRightBrace",
-            role: "presentation",
             object: object
-          }, "}")
+          }, " }")
         )
       );
     },

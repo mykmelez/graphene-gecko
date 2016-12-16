@@ -12,13 +12,13 @@
 #include "mozilla/OwningNonNull.h"
 #include "mozilla/PseudoElementHashEntry.h"
 #include "mozilla/RefPtr.h"
-#include "nsCSSProperty.h"
+#include "nsCSSPropertyID.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsDataHashtable.h"
 #include "nsIStyleRuleProcessor.h"
 #include "nsTArray.h"
 
-class nsCSSPropertySet;
+class nsCSSPropertyIDSet;
 class nsIFrame;
 class nsIStyleRule;
 class nsPresContext;
@@ -28,7 +28,9 @@ namespace mozilla {
 
 class EffectSet;
 class RestyleTracker;
+class StyleAnimationValue;
 struct AnimationPerformanceWarning;
+struct AnimationProperty;
 struct NonOwningAnimationTarget;
 
 namespace dom {
@@ -162,14 +164,14 @@ public:
   }
 
   static bool HasAnimationsForCompositor(const nsIFrame* aFrame,
-                                         nsCSSProperty aProperty);
+                                         nsCSSPropertyID aProperty);
 
   static nsTArray<RefPtr<dom::Animation>>
   GetAnimationsForCompositor(const nsIFrame* aFrame,
-                             nsCSSProperty aProperty);
+                             nsCSSPropertyID aProperty);
 
   static void ClearIsRunningOnCompositor(const nsIFrame* aFrame,
-                                         nsCSSProperty aProperty);
+                                         nsCSSPropertyID aProperty);
 
   // Update animation cascade results for the specified (pseudo-)element
   // but only if we have marked the cascade as needing an update due a
@@ -185,8 +187,8 @@ public:
                             CSSPseudoElementType aPseudoType,
                             nsStyleContext* aStyleContext);
 
-  // Update the mWinsInCascade member for each property in effects targetting
-  // the specified (pseudo-)element.
+  // Update the mPropertiesWithImportantRules and
+  // mPropertiesForAnimationsLevel members of the corresponding EffectSet.
   //
   // This can be expensive so we should only call it if styles that apply
   // above the animation level of the cascade might have changed. For all
@@ -212,8 +214,27 @@ public:
   // |aProperty|.
   static void SetPerformanceWarning(
     const nsIFrame* aFrame,
-    nsCSSProperty aProperty,
+    nsCSSPropertyID aProperty,
     const AnimationPerformanceWarning& aWarning);
+
+  // Returns the base style of (pseudo-)element for |aProperty|.
+  // If there is no cached base style for the property, a new base style value
+  // is resolved with |aStyleContext|. The new resolved base style is cached
+  // until ClearBaseStyles is called.
+  static StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty,
+                                          nsStyleContext* aStyleContext,
+                                          dom::Element& aElement,
+                                          CSSPseudoElementType aPseudoType);
+
+  // Returns the base style corresponding to |aFrame|.
+  // This function should be called only after restyle process has done, i.e.
+  // |aFrame| has a resolved style context.
+  static StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty,
+                                          const nsIFrame* aFrame);
+
+  // Clear cached base styles of (pseudo-)element.
+  static void ClearBaseStyles(dom::Element& aElement,
+                              CSSPseudoElementType aPseudoType);
 
 private:
   ~EffectCompositor() = default;
@@ -235,7 +256,7 @@ private:
   static void
   GetOverriddenProperties(nsStyleContext* aStyleContext,
                           EffectSet& aEffectSet,
-                          nsCSSPropertySet& aPropertiesOverridden);
+                          nsCSSPropertyIDSet& aPropertiesOverridden);
 
   static void
   UpdateCascadeResults(EffectSet& aEffectSet,

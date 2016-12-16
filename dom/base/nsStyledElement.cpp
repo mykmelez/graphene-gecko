@@ -14,7 +14,7 @@
 #include "nsDOMCSSAttrDeclaration.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIDocument.h"
-#include "mozilla/css/Declaration.h"
+#include "mozilla/DeclarationBlockInlines.h"
 #include "nsCSSParser.h"
 #include "mozilla/css/Loader.h"
 #include "nsIDOMMutationEvent.h"
@@ -25,14 +25,18 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
+NS_IMPL_QUERY_INTERFACE_INHERITED(nsStyledElement,
+                                  nsStyledElementBase,
+                                  nsStyledElement)
+
 //----------------------------------------------------------------------
 // nsIContent methods
 
 bool
-nsStyledElementNotElementCSSInlineStyle::ParseAttribute(int32_t aNamespaceID,
-                                                        nsIAtom* aAttribute,
-                                                        const nsAString& aValue,
-                                                        nsAttrValue& aResult)
+nsStyledElement::ParseAttribute(int32_t aNamespaceID,
+                                nsIAtom* aAttribute,
+                                const nsAString& aValue,
+                                nsAttrValue& aResult)
 {
   if (aAttribute == nsGkAtoms::style && aNamespaceID == kNameSpaceID_None) {
     SetMayHaveStyle();
@@ -45,9 +49,9 @@ nsStyledElementNotElementCSSInlineStyle::ParseAttribute(int32_t aNamespaceID,
 }
 
 nsresult
-nsStyledElementNotElementCSSInlineStyle::SetInlineStyleDeclaration(css::Declaration* aDeclaration,
-                                                                   const nsAString* aSerialized,
-                                                                   bool aNotify)
+nsStyledElement::SetInlineStyleDeclaration(DeclarationBlock* aDeclaration,
+                                           const nsAString* aSerialized,
+                                           bool aNotify)
 {
   SetMayHaveStyle();
   bool modification = false;
@@ -77,7 +81,7 @@ nsStyledElementNotElementCSSInlineStyle::SetInlineStyleDeclaration(css::Declarat
     modification = !!mAttrsAndChildren.GetAttr(nsGkAtoms::style);
   }
 
-  nsAttrValue attrValue(aDeclaration, aSerialized);
+  nsAttrValue attrValue(do_AddRef(aDeclaration), aSerialized);
 
   // XXXbz do we ever end up with ADDITION here?  I doubt it.
   uint8_t modType = modification ?
@@ -89,16 +93,16 @@ nsStyledElementNotElementCSSInlineStyle::SetInlineStyleDeclaration(css::Declarat
                           aNotify, kDontCallAfterSetAttr);
 }
 
-css::Declaration*
-nsStyledElementNotElementCSSInlineStyle::GetInlineStyleDeclaration()
+DeclarationBlock*
+nsStyledElement::GetInlineStyleDeclaration()
 {
   if (!MayHaveStyle()) {
     return nullptr;
   }
   const nsAttrValue* attrVal = mAttrsAndChildren.GetAttr(nsGkAtoms::style);
 
-  if (attrVal && attrVal->Type() == nsAttrValue::eGeckoCSSDeclaration) {
-    return attrVal->GetGeckoCSSDeclarationValue();
+  if (attrVal && attrVal->Type() == nsAttrValue::eCSSDeclaration) {
+    return attrVal->GetCSSDeclarationValue();
   }
 
   return nullptr;
@@ -108,7 +112,7 @@ nsStyledElementNotElementCSSInlineStyle::GetInlineStyleDeclaration()
 // Others and helpers
 
 nsICSSDeclaration*
-nsStyledElementNotElementCSSInlineStyle::Style()
+nsStyledElement::Style()
 {
   Element::nsDOMSlots *slots = DOMSlots();
 
@@ -124,19 +128,13 @@ nsStyledElementNotElementCSSInlineStyle::Style()
 }
 
 nsresult
-nsStyledElementNotElementCSSInlineStyle::ReparseStyleAttribute(bool aForceInDataDoc)
+nsStyledElement::ReparseStyleAttribute(bool aForceInDataDoc)
 {
   if (!MayHaveStyle()) {
     return NS_OK;
   }
   const nsAttrValue* oldVal = mAttrsAndChildren.GetAttr(nsGkAtoms::style);
-  
-  nsAttrValue::ValueType desiredType =
-    OwnerDoc()->GetStyleBackendType() == StyleBackendType::Gecko ?
-      nsAttrValue::eGeckoCSSDeclaration :
-      nsAttrValue::eServoCSSDeclaration;
-
-  if (oldVal && oldVal->Type() != desiredType) {
+  if (oldVal && oldVal->Type() != nsAttrValue::eCSSDeclaration) {
     nsAttrValue attrValue;
     nsAutoString stringValue;
     oldVal->ToString(stringValue);
@@ -150,10 +148,21 @@ nsStyledElementNotElementCSSInlineStyle::ReparseStyleAttribute(bool aForceInData
   return NS_OK;
 }
 
+nsICSSDeclaration*
+nsStyledElement::GetExistingStyle()
+{
+  Element::nsDOMSlots* slots = GetExistingDOMSlots();
+  if (!slots) {
+    return nullptr;
+  }
+
+  return slots->mStyle;
+}
+
 void
-nsStyledElementNotElementCSSInlineStyle::ParseStyleAttribute(const nsAString& aValue,
-                                                             nsAttrValue& aResult,
-                                                             bool aForceInDataDoc)
+nsStyledElement::ParseStyleAttribute(const nsAString& aValue,
+                                     nsAttrValue& aResult,
+                                     bool aForceInDataDoc)
 {
   nsIDocument* doc = OwnerDoc();
   bool isNativeAnon = IsInNativeAnonymousSubtree();
@@ -166,6 +175,7 @@ nsStyledElementNotElementCSSInlineStyle::ParseStyleAttribute(const nsAString& aV
 
   if (aForceInDataDoc ||
       !doc->IsLoadedAsData() ||
+      GetExistingStyle() ||
       doc->IsStaticDocument()) {
     bool isCSS = true; // assume CSS until proven otherwise
 

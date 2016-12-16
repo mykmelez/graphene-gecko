@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 
+
 /**
  * Test for bug 549340.
  * Test for browser.js::contentAreaClick() util.
@@ -45,7 +45,7 @@ var gTests = [
       gPrefService.setBoolPref("browser.altClickSave", true);
     },
     clean: function() {
-      gPrefService.clearUserPref("browser.altClickSave"); 
+      gPrefService.clearUserPref("browser.altClickSave");
     },
     event: { shiftKey: true,
              altKey: true },
@@ -60,7 +60,7 @@ var gTests = [
       gPrefService.setBoolPref("browser.altClickSave", true);
     },
     clean: function() {
-      gPrefService.clearUserPref("browser.altClickSave"); 
+      gPrefService.clearUserPref("browser.altClickSave");
     },
     event: { shiftKey: true,
              altKey: true },
@@ -85,7 +85,7 @@ var gTests = [
       gPrefService.setBoolPref("browser.altClickSave", true);
     },
     clean: function() {
-      gPrefService.clearUserPref("browser.altClickSave"); 
+      gPrefService.clearUserPref("browser.altClickSave");
     },
     event: { altKey: true },
     targets: [ "commonlink", "maplink" ],
@@ -99,7 +99,7 @@ var gTests = [
       gPrefService.setBoolPref("browser.altClickSave", true);
     },
     clean: function() {
-      gPrefService.clearUserPref("browser.altClickSave"); 
+      gPrefService.clearUserPref("browser.altClickSave");
     },
     event: { altKey: true },
     targets: [ "mathxlink", "svgxlink" ],
@@ -183,7 +183,7 @@ function test() {
   waitForExplicitFinish();
 
   gTestWin = openDialog(location, "", "chrome,all,dialog=no", "about:blank");
-  whenDelayedStartupFinished(gTestWin, function () {
+  whenDelayedStartupFinished(gTestWin, function() {
     info("Browser window opened");
     waitForFocus(function() {
       info("Browser window focused");
@@ -199,7 +199,7 @@ function test() {
 
 // Click handler used to steal click events.
 var gClickHandler = {
-  handleEvent: function (event) {
+  handleEvent: function(event) {
     let linkId = event.target.id || event.target.localName;
     is(event.type, "click",
        gCurrentTest.desc + ":Handler received a click event on " + linkId);
@@ -215,7 +215,7 @@ var gClickHandler = {
       isnot(gInvokedMethods.indexOf(aExpectedMethodName), -1,
             gCurrentTest.desc + ":" + aExpectedMethodName + " was invoked");
     });
-    
+
     if (gInvokedMethods.length != gCurrentTest.expectedInvokedMethods.length) {
       ok(false, "Wrong number of invoked methods");
       gInvokedMethods.forEach(method => info(method + " was invoked"));
@@ -230,7 +230,7 @@ var gClickHandler = {
 
 // Wraps around the methods' replacement mock function.
 function wrapperMethod(aInvokedMethods, aMethodName) {
-  return function () {
+  return function() {
     aInvokedMethods.push(aMethodName);
     // At least getShortcutOrURIAndPostData requires to return url
     return (aMethodName == "getShortcutOrURIAndPostData") ? arguments.url : arguments[0];
@@ -242,7 +242,7 @@ function setupTestBrowserWindow() {
   gTestWin.addEventListener("click", gClickHandler, true);
 
   // Replace methods.
-  gReplacedMethods.forEach(function (aMethodName) {
+  gReplacedMethods.forEach(function(aMethodName) {
     gTestWin["old_" + aMethodName] = gTestWin[aMethodName];
     gTestWin[aMethodName] = wrapperMethod(gInvokedMethods, aMethodName);
   });
@@ -297,7 +297,7 @@ function finishTest() {
   gTestWin.removeEventListener("click", gClickHandler, true);
 
   // Restore original methods.
-  gReplacedMethods.forEach(function (aMethodName) {
+  gReplacedMethods.forEach(function(aMethodName) {
     gTestWin[aMethodName] = gTestWin["old_" + aMethodName];
     delete gTestWin["old_" + aMethodName];
   });

@@ -52,6 +52,7 @@ class IAPZCTreeManager;
 } // namespace layers
 namespace widget {
 class RectTextureImage;
+class WidgetRenderingContext;
 } // namespace widget
 } // namespace mozilla
 
@@ -297,12 +298,13 @@ public:
   nsChildView();
 
   // nsIWidget interface
-  NS_IMETHOD              Create(nsIWidget* aParent,
-                                 nsNativeWidget aNativeParent,
-                                 const LayoutDeviceIntRect& aRect,
-                                 nsWidgetInitData* aInitData = nullptr) override;
+  virtual MOZ_MUST_USE nsresult Create(nsIWidget* aParent,
+                                       nsNativeWidget aNativeParent,
+                                       const LayoutDeviceIntRect& aRect,
+                                       nsWidgetInitData* aInitData = nullptr)
+                                       override;
 
-  NS_IMETHOD              Destroy() override;
+  virtual void            Destroy() override;
 
   NS_IMETHOD              Show(bool aState) override;
   virtual bool            IsVisible() const override;
@@ -311,8 +313,6 @@ public:
   virtual nsIWidget*      GetParent(void) override;
   virtual float           GetDPI() override;
 
-  NS_IMETHOD              ConstrainPosition(bool aAllowSlop,
-                                            int32_t *aX, int32_t *aY) override;
   NS_IMETHOD              Move(double aX, double aY) override;
   NS_IMETHOD              Resize(double aWidth, double aHeight, bool aRepaint) override;
   NS_IMETHOD              Resize(double aX, double aY,
@@ -321,9 +321,9 @@ public:
   NS_IMETHOD              Enable(bool aState) override;
   virtual bool            IsEnabled() const override;
   NS_IMETHOD              SetFocus(bool aRaise) override;
-  NS_IMETHOD              GetBounds(LayoutDeviceIntRect& aRect) override;
-  NS_IMETHOD              GetClientBounds(LayoutDeviceIntRect& aRect) override;
-  NS_IMETHOD              GetScreenBounds(LayoutDeviceIntRect& aRect) override;
+  virtual LayoutDeviceIntRect GetBounds() override;
+  virtual LayoutDeviceIntRect GetClientBounds() override;
+  virtual LayoutDeviceIntRect GetScreenBounds() override;
 
   // Returns the "backing scale factor" of the view's window, which is the
   // ratio of pixels in the window's backing store to Cocoa points. Prior to
@@ -357,13 +357,12 @@ public:
   NS_IMETHOD              DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                                         nsEventStatus& aStatus) override;
 
-  virtual bool            ComputeShouldAccelerate() override;
+  virtual bool            WidgetTypeSupportsAcceleration() override;
   virtual bool            ShouldUseOffMainThreadCompositing() override;
 
   NS_IMETHOD        SetCursor(nsCursor aCursor) override;
   NS_IMETHOD        SetCursor(imgIContainer* aCursor, uint32_t aHotspotX, uint32_t aHotspotY) override;
 
-  NS_IMETHOD        CaptureRollupEvents(nsIRollupListener * aListener, bool aDoCapture) override;
   NS_IMETHOD        SetTitle(const nsAString& title) override;
 
   NS_IMETHOD        GetAttention(int32_t aCycleCount) override;
@@ -372,6 +371,7 @@ public:
 
   NS_IMETHOD        ActivateNativeMenuItemAt(const nsAString& indexString) override;
   NS_IMETHOD        ForceUpdateNativeMenuAt(const nsAString& indexString) override;
+  NS_IMETHOD        GetSelectionAsPlaintext(nsAString& aResult) override;
 
   NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
                                     const InputContextAction& aAction) override;
@@ -442,9 +442,9 @@ public:
   virtual void CreateCompositor() override;
   virtual void PrepareWindowEffects() override;
   virtual void CleanupWindowEffects() override;
-  virtual bool PreRender(LayerManagerComposite* aManager) override;
-  virtual void PostRender(LayerManagerComposite* aManager) override;
-  virtual void DrawWindowOverlay(LayerManagerComposite* aManager,
+  virtual bool PreRender(mozilla::widget::WidgetRenderingContext* aContext) override;
+  virtual void PostRender(mozilla::widget::WidgetRenderingContext* aContext) override;
+  virtual void DrawWindowOverlay(mozilla::widget::WidgetRenderingContext* aManager,
                                  LayoutDeviceIntRect aRect) override;
 
   virtual void UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) override;
@@ -470,7 +470,7 @@ public:
 
   nsCocoaWindow*    GetXULWindowWidget();
 
-  NS_IMETHOD        ReparentNativeWidget(nsIWidget* aNewParent) override;
+  virtual void      ReparentNativeWidget(nsIWidget* aNewParent) override;
 
   mozilla::widget::TextInputHandler* GetTextInputHandler()
   {
@@ -511,7 +511,7 @@ public:
                             int32_t aPanelX, int32_t aPanelY,
                             nsString& aCommitted) override;
 
-  NS_IMETHOD SetPluginFocused(bool& aFocused) override;
+  virtual void SetPluginFocused(bool& aFocused) override;
 
   bool IsPluginFocused() { return mPluginFocused; }
 
@@ -599,6 +599,7 @@ protected:
   int mDevPixelCornerRadius;
   bool mIsCoveringTitlebar;
   bool mIsFullscreen;
+  bool mIsOpaque;
   LayoutDeviceIntRect mTitlebarRect;
 
   // The area of mTitlebarCGContext that needs to be redrawn during the next

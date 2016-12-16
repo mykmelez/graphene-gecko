@@ -23,6 +23,7 @@
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsIDOMWindow.h"
+#include "nsIDOMWindowUtils.h"
 #include "nsRefreshDriver.h"
 #include "nsString.h"
 #include "nsView.h"
@@ -66,15 +67,23 @@ RecenterDisplayPort(mozilla::layers::FrameMetrics& aFrameMetrics)
 }
 
 static CSSPoint
-ScrollFrameTo(nsIScrollableFrame* aFrame, const CSSPoint& aPoint, bool& aSuccessOut)
+ScrollFrameTo(nsIScrollableFrame* aFrame, const FrameMetrics& aMetrics, bool& aSuccessOut)
 {
   aSuccessOut = false;
+  CSSPoint targetScrollPosition = aMetrics.GetScrollOffset();
 
   if (!aFrame) {
-    return aPoint;
+    return targetScrollPosition;
   }
 
-  CSSPoint targetScrollPosition = aPoint;
+  CSSPoint geckoScrollPosition = CSSPoint::FromAppUnits(aFrame->GetScrollPosition());
+
+  // If the repaint request was triggered due to a previous main-thread scroll
+  // offset update sent to the APZ, then we don't need to do another scroll here
+  // and we can just return.
+  if (!aMetrics.GetScrollOffsetUpdated()) {
+    return geckoScrollPosition;
+  }
 
   // If the frame is overflow:hidden on a particular axis, we don't want to allow
   // user-driven scroll on that axis. Simply set the scroll position on that axis
@@ -83,7 +92,6 @@ ScrollFrameTo(nsIScrollableFrame* aFrame, const CSSPoint& aPoint, bool& aSuccess
   // (by design). Note also that when we run into this case, even if both axes
   // have overflow:hidden, we want to set aSuccessOut to true, so that the displayport
   // follows the async scroll position rather than the gecko scroll position.
-  CSSPoint geckoScrollPosition = CSSPoint::FromAppUnits(aFrame->GetScrollPosition());
   if (aFrame->GetScrollbarStyles().mVertical == NS_STYLE_OVERFLOW_HIDDEN) {
     targetScrollPosition.y = geckoScrollPosition.y;
   }
@@ -129,7 +137,7 @@ ScrollFrame(nsIContent* aContent,
   }
   bool scrollUpdated = false;
   CSSPoint apzScrollOffset = aMetrics.GetScrollOffset();
-  CSSPoint actualScrollOffset = ScrollFrameTo(sf, apzScrollOffset, scrollUpdated);
+  CSSPoint actualScrollOffset = ScrollFrameTo(sf, aMetrics, scrollUpdated);
 
   if (scrollUpdated) {
     if (aMetrics.IsScrollInfoLayer()) {
@@ -169,7 +177,7 @@ ScrollFrame(nsIContent* aContent,
   // get another repaint request when APZ confirms. In the interval while this
   // is happening we can just leave the callback transform as it was.
   bool mainThreadScrollChanged =
-    sf && sf->CurrentScrollGeneration() != aMetrics.GetScrollGeneration();
+    sf && sf->CurrentScrollGeneration() != aMetrics.GetScrollGeneration() && nsLayoutUtils::CanScrollOriginClobberApz(sf->LastScrollOrigin());
   if (aContent && !mainThreadScrollChanged) {
     CSSPoint scrollDelta = apzScrollOffset - actualScrollOffset;
     aContent->SetProperty(nsGkAtoms::apzCallbackTransform, new CSSPoint(scrollDelta),
@@ -338,18 +346,24 @@ APZCCallbackHelper::InitializeRootDisplayport(nsIPresShell* aPresShell)
   }
 }
 
+nsPresContext*
+APZCCallbackHelper::GetPresContextForContent(nsIContent* aContent)
+{
+  nsIDocument* doc = aContent->GetComposedDoc();
+  if (!doc) {
+      return nullptr;
+  }
+  nsIPresShell* shell = doc->GetShell();
+  if (!shell) {
+      return nullptr;
+  }
+  return shell->GetPresContext();
+}
+
 nsIPresShell*
 APZCCallbackHelper::GetRootContentDocumentPresShellForContent(nsIContent* aContent)
 {
-    nsIDocument* doc = aContent->GetComposedDoc();
-    if (!doc) {
-        return nullptr;
-    }
-    nsIPresShell* shell = doc->GetShell();
-    if (!shell) {
-        return nullptr;
-    }
-    nsPresContext* context = shell->GetPresContext();
+    nsPresContext* context = GetPresContextForContent(aContent);
     if (!context) {
         return nullptr;
     }
@@ -464,6 +478,7 @@ APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
                                                   uint64_t aTime,
                                                   const LayoutDevicePoint& aRefPoint,
                                                   Modifiers aModifiers,
+                                                  int32_t aClickCount,
                                                   nsIWidget* aWidget)
 {
   MOZ_ASSERT(aMsg == eMouseMove || aMsg == eMouseDown ||
@@ -475,12 +490,18 @@ APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
   event.mTime = aTime;
   event.button = WidgetMouseEvent::eLeftButton;
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+  if (aMsg == eMouseLongTap) {
+    event.mFlags.mOnlyChromeDispatch = true;
+  }
   event.mIgnoreRootScrollFrame = true;
   if (aMsg != eMouseMove) {
-    event.mClickCount = 1;
+    event.mClickCount = aClickCount;
   }
   event.mModifiers = aModifiers;
-
+  // Real touch events will generate corresponding pointer events. We set
+  // convertToPointer to false to prevent the synthesized mouse events generate
+  // pointer events again.
+  event.convertToPointer = false;
   return DispatchWidgetEvent(event);
 }
 
@@ -498,8 +519,9 @@ APZCCallbackHelper::DispatchMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
 
   bool defaultPrevented = false;
   nsContentUtils::SendMouseEvent(aPresShell, aType, aPoint.x, aPoint.y,
-      aButton, aClickCount, aModifiers, aIgnoreRootScrollFrame, 0,
-      aInputSourceArg, false, &defaultPrevented, false);
+      aButton, nsIDOMWindowUtils::MOUSE_BUTTONS_NOT_SPECIFIED, aClickCount,
+      aModifiers, aIgnoreRootScrollFrame, 0, aInputSourceArg, false,
+      &defaultPrevented, false, /* aIsWidgetEventSynthesized = */ false);
   return defaultPrevented;
 }
 
@@ -507,6 +529,7 @@ APZCCallbackHelper::DispatchMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
 void
 APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
                                        Modifiers aModifiers,
+                                       int32_t aClickCount,
                                        nsIWidget* aWidget)
 {
   if (aWidget->Destroyed()) {
@@ -515,9 +538,9 @@ APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
   APZCCH_LOG("Dispatching single-tap component events to %s\n",
     Stringify(aPoint).c_str());
   int time = 0;
-  DispatchSynthesizedMouseEvent(eMouseMove, time, aPoint, aModifiers, aWidget);
-  DispatchSynthesizedMouseEvent(eMouseDown, time, aPoint, aModifiers, aWidget);
-  DispatchSynthesizedMouseEvent(eMouseUp, time, aPoint, aModifiers, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseMove, time, aPoint, aModifiers, aClickCount, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseDown, time, aPoint, aModifiers, aClickCount, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseUp, time, aPoint, aModifiers, aClickCount, aWidget);
 }
 
 static dom::Element*
@@ -557,7 +580,7 @@ GetRootDocumentElementFor(nsIWidget* aWidget)
 static nsIFrame*
 UpdateRootFrameForTouchTargetDocument(nsIFrame* aRootFrame)
 {
-#if defined(MOZ_ANDROID_APZ)
+#if defined(MOZ_WIDGET_ANDROID)
   // Re-target so that the hit test is performed relative to the frame for the
   // Root Content Document instead of the Root Document which are different in
   // Android. See bug 1229752 comment 16 for an explanation of why this is necessary.
@@ -883,6 +906,35 @@ APZCCallbackHelper::IsScrollInProgress(nsIScrollableFrame* aFrame)
   return aFrame->IsProcessingAsyncScroll()
          || nsLayoutUtils::CanScrollOriginClobberApz(aFrame->LastScrollOrigin())
          || aFrame->LastSmoothScrollOrigin();
+}
+
+/* static */ void
+APZCCallbackHelper::NotifyPinchGesture(PinchGestureInput::PinchGestureType aType,
+                                       LayoutDeviceCoord aSpanChange,
+                                       Modifiers aModifiers,
+                                       nsIWidget* aWidget)
+{
+  EventMessage msg;
+  switch (aType) {
+    case PinchGestureInput::PINCHGESTURE_START:
+      msg = eMagnifyGestureStart;
+      break;
+    case PinchGestureInput::PINCHGESTURE_SCALE:
+      msg = eMagnifyGestureUpdate;
+      break;
+    case PinchGestureInput::PINCHGESTURE_END:
+      msg = eMagnifyGesture;
+      break;
+    case PinchGestureInput::PINCHGESTURE_SENTINEL:
+    default:
+      MOZ_ASSERT_UNREACHABLE("Invalid gesture type");
+      return;
+  }
+
+  WidgetSimpleGestureEvent event(true, msg, aWidget);
+  event.mDelta = aSpanChange;
+  event.mModifiers = aModifiers;
+  DispatchWidgetEvent(event);
 }
 
 } // namespace layers

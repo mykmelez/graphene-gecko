@@ -10,6 +10,7 @@
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/SizePrintfMacros.h"
+#include "mozilla/Sprintf.h"
 
 #include <algorithm>
 
@@ -23,6 +24,8 @@
 #include "vm/SPSProfiler.h"
 
 #include "jsscriptinlines.h"
+
+#include "vm/TypeInference-inl.h"
 
 using mozilla::Maybe;
 
@@ -330,7 +333,7 @@ JitcodeGlobalEntry::createScriptString(JSContext* cx, JSScript* script, size_t* 
     size_t linenoLength = 0;
     char linenoStr[15];
     if (hasName || (script->functionNonDelazifying() || script->isForEval())) {
-        linenoLength = JS_snprintf(linenoStr, 15, "%" PRIuSIZE, script->lineno());
+        linenoLength = SprintfLiteral(linenoStr, "%" PRIuSIZE, script->lineno());
         hasLineno = true;
     }
 
@@ -446,19 +449,12 @@ JitcodeGlobalTable::lookupForSamplerInfallible(void* ptr, JSRuntime* rt, uint32_
         rejoinEntry.setGeneration(sampleBufferGen);
     }
 
-#ifdef DEBUG
-    // JitcodeGlobalEntries are marked during the beginning of the sweep
-    // phase. A read barrier is not needed, as any JS frames sampled during
-    // the sweep phase of the GC must be on stack, and on-stack frames must
-    // already be marked at the beginning of the sweep phase. This assumption
-    // is verified below.
-    if (rt->isHeapBusy() &&
-        rt->gc.stats.currentPhase() >= gcstats::PHASE_FINALIZE_START &&
-        rt->gc.stats.currentPhase() <= gcstats::PHASE_FINALIZE_END)
-    {
-        MOZ_ASSERT(entry->isMarkedFromAnyThread(rt));
-    }
-#endif
+    // JitcodeGlobalEntries are marked at the end of the mark phase. A read
+    // barrier is not needed. Any JS frames sampled during the sweep phase of
+    // the GC must be on stack, and on-stack frames must already be marked at
+    // the beginning of the sweep phase. It's not possible to assert this here
+    // as we may not be running on the main thread when called from the gecko
+    // profiler.
 
     return *entry;
 }
@@ -728,36 +724,36 @@ JitcodeGlobalTable::setAllEntriesAsExpired(JSRuntime* rt)
 struct Unconditionally
 {
     template <typename T>
-    static bool ShouldMark(T* thingp) { return true; }
+    static bool ShouldTrace(T* thingp) { return true; }
 };
 
 void
-JitcodeGlobalTable::markUnconditionally(JSTracer* trc)
+JitcodeGlobalTable::trace(JSTracer* trc)
 {
-    // Mark all entries unconditionally. This is done during minor collection
-    // to account for tenuring.
+    // Trace all entries unconditionally. This is done during minor collection
+    // to tenure and update object pointers.
 
     MOZ_ASSERT(trc->runtime()->spsProfiler.enabled());
 
     AutoSuppressProfilerSampling suppressSampling(trc->runtime());
     for (Range r(*this); !r.empty(); r.popFront())
-        r.front()->mark<Unconditionally>(trc);
+        r.front()->trace<Unconditionally>(trc);
 }
 
 struct IfUnmarked
 {
     template <typename T>
-    static bool ShouldMark(T* thingp) { return !IsMarkedUnbarriered(thingp); }
+    static bool ShouldTrace(T* thingp) { return !IsMarkedUnbarriered(thingp); }
 };
 
 template <>
-bool IfUnmarked::ShouldMark<TypeSet::Type>(TypeSet::Type* type)
+bool IfUnmarked::ShouldTrace<TypeSet::Type>(TypeSet::Type* type)
 {
     return !TypeSet::IsTypeMarked(type);
 }
 
 bool
-JitcodeGlobalTable::markIteratively(JSTracer* trc)
+JitcodeGlobalTable::markIteratively(GCMarker* marker)
 {
     // JitcodeGlobalTable must keep entries that are in the sampler buffer
     // alive. This conditionality is akin to holding the entries weakly.
@@ -781,14 +777,14 @@ JitcodeGlobalTable::markIteratively(JSTracer* trc)
     // The approach above obviates the need for read barriers. The assumption
     // above is checked in JitcodeGlobalTable::lookupForSampler.
 
-    MOZ_ASSERT(!trc->runtime()->isHeapMinorCollecting());
+    MOZ_ASSERT(!marker->runtime()->isHeapMinorCollecting());
 
-    AutoSuppressProfilerSampling suppressSampling(trc->runtime());
-    uint32_t gen = trc->runtime()->profilerSampleBufferGen();
-    uint32_t lapCount = trc->runtime()->profilerSampleBufferLapCount();
+    AutoSuppressProfilerSampling suppressSampling(marker->runtime());
+    uint32_t gen = marker->runtime()->profilerSampleBufferGen();
+    uint32_t lapCount = marker->runtime()->profilerSampleBufferLapCount();
 
     // If the profiler is off, all entries are considered to be expired.
-    if (!trc->runtime()->spsProfiler.enabled())
+    if (!marker->runtime()->spsProfiler.enabled())
         gen = UINT32_MAX;
 
     bool markedAny = false;
@@ -813,7 +809,7 @@ JitcodeGlobalTable::markIteratively(JSTracer* trc)
         if (!entry->zone()->isCollecting() || entry->zone()->isGCFinished())
             continue;
 
-        markedAny |= entry->mark<IfUnmarked>(trc);
+        markedAny |= entry->trace<IfUnmarked>(marker);
     }
 
     return markedAny;
@@ -836,11 +832,11 @@ JitcodeGlobalTable::sweep(JSRuntime* rt)
     }
 }
 
-template <class ShouldMarkProvider>
+template <class ShouldTraceProvider>
 bool
-JitcodeGlobalEntry::BaseEntry::markJitcode(JSTracer* trc)
+JitcodeGlobalEntry::BaseEntry::traceJitcode(JSTracer* trc)
 {
-    if (ShouldMarkProvider::ShouldMark(&jitcode_)) {
+    if (ShouldTraceProvider::ShouldTrace(&jitcode_)) {
         TraceManuallyBarrieredEdge(trc, &jitcode_, "jitcodglobaltable-baseentry-jitcode");
         return true;
     }
@@ -860,11 +856,11 @@ JitcodeGlobalEntry::BaseEntry::isJitcodeAboutToBeFinalized()
     return IsAboutToBeFinalizedUnbarriered(&jitcode_);
 }
 
-template <class ShouldMarkProvider>
+template <class ShouldTraceProvider>
 bool
-JitcodeGlobalEntry::BaselineEntry::mark(JSTracer* trc)
+JitcodeGlobalEntry::BaselineEntry::trace(JSTracer* trc)
 {
-    if (ShouldMarkProvider::ShouldMark(&script_)) {
+    if (ShouldTraceProvider::ShouldTrace(&script_)) {
         TraceManuallyBarrieredEdge(trc, &script_, "jitcodeglobaltable-baselineentry-script");
         return true;
     }
@@ -884,42 +880,42 @@ JitcodeGlobalEntry::BaselineEntry::isMarkedFromAnyThread()
            script_->arena()->allocatedDuringIncremental;
 }
 
-template <class ShouldMarkProvider>
+template <class ShouldTraceProvider>
 bool
-JitcodeGlobalEntry::IonEntry::mark(JSTracer* trc)
+JitcodeGlobalEntry::IonEntry::trace(JSTracer* trc)
 {
-    bool markedAny = false;
+    bool tracedAny = false;
 
     for (unsigned i = 0; i < numScripts(); i++) {
-        if (ShouldMarkProvider::ShouldMark(&sizedScriptList()->pairs[i].script)) {
+        if (ShouldTraceProvider::ShouldTrace(&sizedScriptList()->pairs[i].script)) {
             TraceManuallyBarrieredEdge(trc, &sizedScriptList()->pairs[i].script,
                                        "jitcodeglobaltable-ionentry-script");
-            markedAny = true;
+            tracedAny = true;
         }
     }
 
     if (!optsAllTypes_)
-        return markedAny;
+        return tracedAny;
 
     for (IonTrackedTypeWithAddendum* iter = optsAllTypes_->begin();
          iter != optsAllTypes_->end(); iter++)
     {
-        if (ShouldMarkProvider::ShouldMark(&iter->type)) {
-            TypeSet::MarkTypeUnbarriered(trc, &iter->type, "jitcodeglobaltable-ionentry-type");
-            markedAny = true;
+        if (ShouldTraceProvider::ShouldTrace(&iter->type)) {
+            iter->type.trace(trc);
+            tracedAny = true;
         }
-        if (iter->hasAllocationSite() && ShouldMarkProvider::ShouldMark(&iter->script)) {
+        if (iter->hasAllocationSite() && ShouldTraceProvider::ShouldTrace(&iter->script)) {
             TraceManuallyBarrieredEdge(trc, &iter->script,
                                        "jitcodeglobaltable-ionentry-type-addendum-script");
-            markedAny = true;
-        } else if (iter->hasConstructor() && ShouldMarkProvider::ShouldMark(&iter->constructor)) {
+            tracedAny = true;
+        } else if (iter->hasConstructor() && ShouldTraceProvider::ShouldTrace(&iter->constructor)) {
             TraceManuallyBarrieredEdge(trc, &iter->constructor,
                                        "jitcodeglobaltable-ionentry-type-addendum-constructor");
-            markedAny = true;
+            tracedAny = true;
         }
     }
 
-    return markedAny;
+    return tracedAny;
 }
 
 void
@@ -971,12 +967,12 @@ JitcodeGlobalEntry::IonEntry::isMarkedFromAnyThread()
     return true;
 }
 
-template <class ShouldMarkProvider>
+template <class ShouldTraceProvider>
 bool
-JitcodeGlobalEntry::IonCacheEntry::mark(JSTracer* trc)
+JitcodeGlobalEntry::IonCacheEntry::trace(JSTracer* trc)
 {
     JitcodeGlobalEntry& entry = RejoinEntry(trc->runtime(), *this, nativeStartAddr());
-    return entry.mark<ShouldMarkProvider>(trc);
+    return entry.trace<ShouldTraceProvider>(trc);
 }
 
 void
@@ -1649,17 +1645,17 @@ JS::ForEachProfiledFrameOp::FrameHandle::frameKind() const
 }
 
 JS_PUBLIC_API(void)
-JS::ForEachProfiledFrame(JSRuntime* rt, void* addr, ForEachProfiledFrameOp& op)
+JS::ForEachProfiledFrame(JSContext* cx, void* addr, ForEachProfiledFrameOp& op)
 {
-    js::jit::JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
+    js::jit::JitcodeGlobalTable* table = cx->jitRuntime()->getJitcodeGlobalTable();
     js::jit::JitcodeGlobalEntry& entry = table->lookupInfallible(addr);
 
     // Extract the stack for the entry.  Assume maximum inlining depth is <64
     const char* labels[64];
-    uint32_t depth = entry.callStackAtAddr(rt, addr, labels, 64);
+    uint32_t depth = entry.callStackAtAddr(cx, addr, labels, 64);
     MOZ_ASSERT(depth < 64);
     for (uint32_t i = depth; i != 0; i--) {
-        JS::ForEachProfiledFrameOp::FrameHandle handle(rt, entry, addr, labels[i - 1], i - 1);
+        JS::ForEachProfiledFrameOp::FrameHandle handle(cx, entry, addr, labels[i - 1], i - 1);
         op(handle);
     }
 }

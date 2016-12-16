@@ -26,24 +26,14 @@ function RemoteFinder(browser) {
 }
 
 RemoteFinder.prototype = {
-  destroy() {
-    this._browser.messageManager.sendAsyncMessage("Finder:Destroy");
-    if (this._messageManager) {
-      this._messageManager.removeMessageListener("Finder:Result", this);
-      this._messageManager.removeMessageListener("Finder:MatchesResult", this);
-      this._messageManager.removeMessageListener("Finder:CurrentSelectionResult",this);
-      this._messageManager.removeMessageListener("Finder:HighlightFinished",this);
-    }
-    this._listeners.clear();
-    this._browser = this._messageManager = null;
-  },
+  destroy() {},
 
   swapBrowser: function(aBrowser) {
     if (this._messageManager) {
       this._messageManager.removeMessageListener("Finder:Result", this);
       this._messageManager.removeMessageListener("Finder:MatchesResult", this);
-      this._messageManager.removeMessageListener("Finder:CurrentSelectionResult",this);
-      this._messageManager.removeMessageListener("Finder:HighlightFinished",this);
+      this._messageManager.removeMessageListener("Finder:CurrentSelectionResult", this);
+      this._messageManager.removeMessageListener("Finder:HighlightFinished", this);
     }
     else {
       aBrowser.messageManager.sendAsyncMessage("Finder:Initialize");
@@ -61,15 +51,15 @@ RemoteFinder.prototype = {
     this._listeners.clear();
   },
 
-  addResultListener: function (aListener) {
+  addResultListener: function(aListener) {
     this._listeners.add(aListener);
   },
 
-  removeResultListener: function (aListener) {
+  removeResultListener: function(aListener) {
     this._listeners.delete(aListener);
   },
 
-  receiveMessage: function (aMessage) {
+  receiveMessage: function(aMessage) {
     // Only Finder:Result messages have the searchString field.
     let callback;
     let params;
@@ -136,35 +126,36 @@ RemoteFinder.prototype = {
     this._browser.messageManager.sendAsyncMessage("Finder:GetInitialSelection", {});
   },
 
-  fastFind: function (aSearchString, aLinksOnly, aDrawOutline) {
+  fastFind: function(aSearchString, aLinksOnly, aDrawOutline) {
     this._browser.messageManager.sendAsyncMessage("Finder:FastFind",
                                                   { searchString: aSearchString,
                                                     linksOnly: aLinksOnly,
                                                     drawOutline: aDrawOutline });
   },
 
-  findAgain: function (aFindBackwards, aLinksOnly, aDrawOutline) {
+  findAgain: function(aFindBackwards, aLinksOnly, aDrawOutline) {
     this._browser.messageManager.sendAsyncMessage("Finder:FindAgain",
                                                   { findBackwards: aFindBackwards,
                                                     linksOnly: aLinksOnly,
                                                     drawOutline: aDrawOutline });
   },
 
-  highlight: function (aHighlight, aWord) {
+  highlight: function(aHighlight, aWord, aLinksOnly) {
     this._browser.messageManager.sendAsyncMessage("Finder:Highlight",
                                                   { highlight: aHighlight,
+                                                    linksOnly: aLinksOnly,
                                                     word: aWord });
   },
 
-  enableSelection: function () {
+  enableSelection: function() {
     this._browser.messageManager.sendAsyncMessage("Finder:EnableSelection");
   },
 
-  removeSelection: function () {
+  removeSelection: function() {
     this._browser.messageManager.sendAsyncMessage("Finder:RemoveSelection");
   },
 
-  focusContent: function () {
+  focusContent: function() {
     // Allow Finder listeners to cancel focusing the content.
     for (let l of this._listeners) {
       try {
@@ -180,8 +171,12 @@ RemoteFinder.prototype = {
     this._browser.messageManager.sendAsyncMessage("Finder:FocusContent");
   },
 
-  onFindbarClose: function () {
+  onFindbarClose: function() {
     this._browser.messageManager.sendAsyncMessage("Finder:FindbarClose");
+  },
+
+  onFindbarOpen: function() {
+    this._browser.messageManager.sendAsyncMessage("Finder:FindbarOpen");
   },
 
   onModalHighlightChange: function(aUseModalHighlight) {
@@ -190,7 +185,13 @@ RemoteFinder.prototype = {
     });
   },
 
-  keyPress: function (aEvent) {
+  onHighlightAllChange: function(aHighlightAll) {
+    this._browser.messageManager.sendAsyncMessage("Finder:HighlightAllChange", {
+      highlightAll: aHighlightAll
+    });
+  },
+
+  keyPress: function(aEvent) {
     this._browser.messageManager.sendAsyncMessage("Finder:KeyPress",
                                                   { keyCode: aEvent.keyCode,
                                                     ctrlKey: aEvent.ctrlKey,
@@ -199,10 +200,9 @@ RemoteFinder.prototype = {
                                                     shiftKey: aEvent.shiftKey });
   },
 
-  requestMatchesCount: function (aSearchString, aMatchLimit, aLinksOnly) {
+  requestMatchesCount: function(aSearchString, aLinksOnly) {
     this._browser.messageManager.sendAsyncMessage("Finder:MatchesCount",
                                                   { searchString: aSearchString,
-                                                    matchLimit: aMatchLimit,
                                                     linksOnly: aLinksOnly });
   }
 }
@@ -221,29 +221,30 @@ function RemoteFinderListener(global) {
 RemoteFinderListener.prototype = {
   MESSAGES: [
     "Finder:CaseSensitive",
-    "Finder:Destroy",
     "Finder:EntireWord",
     "Finder:FastFind",
     "Finder:FindAgain",
     "Finder:SetSearchStringToSelection",
     "Finder:GetInitialSelection",
     "Finder:Highlight",
+    "Finder:HighlightAllChange",
     "Finder:EnableSelection",
     "Finder:RemoveSelection",
     "Finder:FocusContent",
     "Finder:FindbarClose",
+    "Finder:FindbarOpen",
     "Finder:KeyPress",
     "Finder:MatchesCount",
     "Finder:ModalHighlightChange"
   ],
 
-  onFindResult: function (aData) {
+  onFindResult: function(aData) {
     this._global.sendAsyncMessage("Finder:Result", aData);
   },
 
   // When the child receives messages with results of requestMatchesCount,
   // it passes them forward to the parent.
-  onMatchesCountResult: function (aData) {
+  onMatchesCountResult: function(aData) {
     this._global.sendAsyncMessage("Finder:MatchesResult", aData);
   },
 
@@ -251,14 +252,10 @@ RemoteFinderListener.prototype = {
     this._global.sendAsyncMessage("Finder:HighlightFinished", aData);
   },
 
-  receiveMessage: function (aMessage) {
+  receiveMessage: function(aMessage) {
     let data = aMessage.data;
 
     switch (aMessage.name) {
-      case "Finder:Destroy":
-        this._finder.destroy();
-        break;
-
       case "Finder:CaseSensitive":
         this._finder.caseSensitive = data.caseSensitive;
         break;
@@ -292,7 +289,11 @@ RemoteFinderListener.prototype = {
         break;
 
       case "Finder:Highlight":
-        this._finder.highlight(data.highlight, data.word);
+        this._finder.highlight(data.highlight, data.word, data.linksOnly);
+        break;
+
+      case "Finder:HighlightAllChange":
+        this._finder.onHighlightAllChange(data.highlightAll);
         break;
 
       case "Finder:EnableSelection":
@@ -311,12 +312,16 @@ RemoteFinderListener.prototype = {
         this._finder.onFindbarClose();
         break;
 
+      case "Finder:FindbarOpen":
+        this._finder.onFindbarOpen();
+        break;
+
       case "Finder:KeyPress":
         this._finder.keyPress(data);
         break;
 
       case "Finder:MatchesCount":
-        this._finder.requestMatchesCount(data.searchString, data.matchLimit, data.linksOnly);
+        this._finder.requestMatchesCount(data.searchString, data.linksOnly);
         break;
 
       case "Finder:ModalHighlightChange":

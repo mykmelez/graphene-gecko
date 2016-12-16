@@ -10,6 +10,17 @@
  * liability, trademark and document use rules apply.
  */
 
+dictionary AudioBufferSourceOptions {
+             AudioBuffer? buffer;
+             float        detune = 0;
+             boolean      loop = false;
+             double       loopEnd = 0;
+             double       loopStart = 0;
+             float        playbackRate = 1;
+};
+
+[Pref="dom.webaudio.enabled",
+ Constructor(AudioContext context, optional AudioBufferSourceOptions options)]
 interface AudioBufferSourceNode : AudioNode {
 
     attribute AudioBuffer? buffer;

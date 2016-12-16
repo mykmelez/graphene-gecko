@@ -57,6 +57,9 @@ bool
 InvokeFunction(JSContext* cx, HandleObject obj, bool constructing, uint32_t argc, Value* argv,
                MutableHandleValue rval)
 {
+    TraceLoggerThread* logger = TraceLoggerForMainThread(cx->runtime());
+    TraceLogStartEvent(logger, TraceLogger_Call);
+
     AutoArrayRooter argvRoot(cx, argc + 1 + constructing, argv);
 
     // Data in the argument vector is arranged for a JIT -> JIT call.
@@ -71,7 +74,7 @@ InvokeFunction(JSContext* cx, HandleObject obj, bool constructing, uint32_t argc
         }
 
         ConstructArgs cargs(cx);
-        if (!cargs.init(argc))
+        if (!cargs.init(cx, argc))
             return false;
 
         for (uint32_t i = 0; i < argc; i++)
@@ -102,7 +105,7 @@ InvokeFunction(JSContext* cx, HandleObject obj, bool constructing, uint32_t argc
     }
 
     InvokeArgs args(cx);
-    if (!args.init(argc))
+    if (!args.init(cx, argc))
         return false;
 
     for (size_t i = 0; i < argc; i++)
@@ -137,7 +140,7 @@ CheckOverRecursed(JSContext* cx)
 }
 
 // This function can get called in two contexts.  In the usual context, it's
-// called with ealyCheck=false, after the scope chain has been initialized on
+// called with earlyCheck=false, after the env chain has been initialized on
 // a baseline frame.  In this case, it's ok to throw an exception, so a failed
 // stack check returns false, and a successful stack check promps a check for
 // an interrupt from the runtime, which may also cause a false return.
@@ -182,38 +185,39 @@ CheckOverRecursedWithExtra(JSContext* cx, BaselineFrame* frame,
 }
 
 JSObject*
-BindVar(JSContext* cx, HandleObject scopeChain)
+BindVar(JSContext* cx, HandleObject envChain)
 {
-    JSObject* obj = scopeChain;
+    JSObject* obj = envChain;
     while (!obj->isQualifiedVarObj())
-        obj = obj->enclosingScope();
+        obj = obj->enclosingEnvironment();
     MOZ_ASSERT(obj);
     return obj;
 }
 
 bool
-DefVar(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain)
+DefVar(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject envChain)
 {
     // Given the ScopeChain, extract the VarObj.
-    RootedObject obj(cx, BindVar(cx, scopeChain));
+    RootedObject obj(cx, BindVar(cx, envChain));
     return DefVarOperation(cx, obj, dn, attrs);
 }
 
 bool
-DefLexical(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain)
+DefLexical(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject envChain)
 {
     // Find the extensible lexical scope.
-    Rooted<ClonedBlockObject*> lexical(cx, &NearestEnclosingExtensibleLexicalScope(scopeChain));
+    Rooted<LexicalEnvironmentObject*> lexicalEnv(cx,
+        &NearestEnclosingExtensibleLexicalEnvironment(envChain));
 
     // Find the variables object.
-    RootedObject varObj(cx, BindVar(cx, scopeChain));
-    return DefLexicalOperation(cx, lexical, varObj, dn, attrs);
+    RootedObject varObj(cx, BindVar(cx, envChain));
+    return DefLexicalOperation(cx, lexicalEnv, varObj, dn, attrs);
 }
 
 bool
 DefGlobalLexical(JSContext* cx, HandlePropertyName dn, unsigned attrs)
 {
-    Rooted<ClonedBlockObject*> globalLexical(cx, &cx->global()->lexicalScope());
+    Rooted<LexicalEnvironmentObject*> globalLexical(cx, &cx->global()->lexicalEnvironment());
     return DefLexicalOperation(cx, globalLexical, cx->global(), dn, attrs);
 }
 
@@ -411,6 +415,16 @@ StringFromCharCode(JSContext* cx, int32_t code)
     return NewStringCopyN<CanGC>(cx, &c, 1);
 }
 
+JSString*
+StringFromCodePoint(JSContext* cx, int32_t codePoint)
+{
+    RootedValue rval(cx, Int32Value(codePoint));
+    if (!str_fromCodePoint_one_arg(cx, rval, &rval))
+        return nullptr;
+
+    return rval.toString();
+}
+
 bool
 SetProperty(JSContext* cx, HandleObject obj, HandlePropertyName name, HandleValue value,
             bool strict, jsbytecode* pc)
@@ -469,9 +483,9 @@ MallocWrapper(JSRuntime* rt, size_t nbytes)
 }
 
 JSObject*
-NewCallObject(JSContext* cx, HandleShape shape, HandleObjectGroup group, uint32_t lexicalBegin)
+NewCallObject(JSContext* cx, HandleShape shape, HandleObjectGroup group)
 {
-    JSObject* obj = CallObject::create(cx, shape, group, lexicalBegin);
+    JSObject* obj = CallObject::create(cx, shape, group);
     if (!obj)
         return nullptr;
 
@@ -485,9 +499,9 @@ NewCallObject(JSContext* cx, HandleShape shape, HandleObjectGroup group, uint32_
 }
 
 JSObject*
-NewSingletonCallObject(JSContext* cx, HandleShape shape, uint32_t lexicalBegin)
+NewSingletonCallObject(JSContext* cx, HandleShape shape)
 {
-    JSObject* obj = CallObject::createSingleton(cx, shape, lexicalBegin);
+    JSObject* obj = CallObject::createSingleton(cx, shape);
     if (!obj)
         return nullptr;
 
@@ -546,7 +560,7 @@ CreateThis(JSContext* cx, HandleObject callee, HandleObject newTarget, MutableHa
     if (callee->is<JSFunction>()) {
         RootedFunction fun(cx, &callee->as<JSFunction>());
         if (fun->isInterpreted() && fun->isConstructor()) {
-            JSScript* script = fun->getOrCreateScript(cx);
+            JSScript* script = JSFunction::getOrCreateScript(cx, fun);
             if (!script || !script->ensureHasTypes(cx))
                 return false;
             if (fun->isBoundFunction() || script->isDerivedClassConstructor()) {
@@ -564,9 +578,9 @@ CreateThis(JSContext* cx, HandleObject callee, HandleObject newTarget, MutableHa
 }
 
 void
-GetDynamicName(JSContext* cx, JSObject* scopeChain, JSString* str, Value* vp)
+GetDynamicName(JSContext* cx, JSObject* envChain, JSString* str, Value* vp)
 {
-    // Lookup a string on the scope chain, returning either the value found or
+    // Lookup a string on the env chain, returning either the value found or
     // undefined through rval. This function is infallible, and cannot GC or
     // invalidate.
 
@@ -589,7 +603,7 @@ GetDynamicName(JSContext* cx, JSObject* scopeChain, JSString* str, Value* vp)
     Shape* shape = nullptr;
     JSObject* scope = nullptr;
     JSObject* pobj = nullptr;
-    if (LookupNameNoGC(cx, atom->asPropertyName(), scopeChain, &scope, &pobj, &shape)) {
+    if (LookupNameNoGC(cx, atom->asPropertyName(), envChain, &scope, &pobj, &shape)) {
         if (FetchNameNoGC(pobj, shape, MutableHandleValue::fromMarkedLocation(vp)))
             return;
     }
@@ -702,20 +716,12 @@ DebugEpilogue(JSContext* cx, BaselineFrame* frame, jsbytecode* pc, bool ok)
     // In both cases we have to pop debug scopes.
     ok = Debugger::onLeaveFrame(cx, frame, pc, ok);
 
-    // Unwind to the outermost scope and set pc to the end of the script,
-    // regardless of error.
-    ScopeIter si(cx, frame, pc);
-    UnwindAllScopesInFrame(cx, si);
+    // Unwind to the outermost environment and set pc to the end of the
+    // script, regardless of error.
+    EnvironmentIter ei(cx, frame, pc);
+    UnwindAllEnvironmentsInFrame(cx, ei);
     JSScript* script = frame->script();
     frame->setOverridePc(script->lastPC());
-
-    if (frame->isFunctionFrame()) {
-        MOZ_ASSERT_IF(ok, frame->hasReturnValue());
-        DebugScopes::onPopCall(frame, cx);
-    } else if (frame->isStrictEvalFrame()) {
-        MOZ_ASSERT_IF(frame->hasCallObj(), frame->scopeChain()->as<CallObject>().isForEval());
-        DebugScopes::onPopStrictEvalScope(frame);
-    }
 
     if (!ok) {
         // Pop this frame by updating jitTop, so that the exception handling
@@ -777,6 +783,11 @@ FinalSuspend(JSContext* cx, HandleObject obj, BaselineFrame* frame, jsbytecode* 
     MOZ_ASSERT(*pc == JSOP_FINALYIELDRVAL);
 
     if (!GeneratorObject::finalSuspend(cx, obj)) {
+
+        TraceLoggerThread* logger = TraceLoggerForMainThread(cx->runtime());
+        TraceLogStopEvent(logger, TraceLogger_Engine);
+        TraceLogStopEvent(logger, TraceLogger_Scripts);
+
         // Leave this frame and propagate the exception to the caller.
         return DebugEpilogue(cx, frame, pc, /* ok = */ false);
     }
@@ -835,28 +846,29 @@ GeneratorThrowOrClose(JSContext* cx, BaselineFrame* frame, Handle<GeneratorObjec
 }
 
 bool
-InitGlobalOrEvalScopeObjects(JSContext* cx, BaselineFrame* frame)
+CheckGlobalOrEvalDeclarationConflicts(JSContext* cx, BaselineFrame* frame)
 {
     RootedScript script(cx, frame->script());
-    RootedObject scopeChain(cx, frame->scopeChain());
-    RootedObject varObj(cx, BindVar(cx, scopeChain));
+    RootedObject envChain(cx, frame->environmentChain());
+    RootedObject varObj(cx, BindVar(cx, envChain));
 
     if (script->isForEval()) {
-        // Strict eval needs its own call object.
+        // Strict eval and eval in parameter default expressions have their
+        // own call objects.
         //
         // Non-strict eval may introduce 'var' bindings that conflict with
         // lexical bindings in an enclosing lexical scope.
-        if (script->strict()) {
-            if (!frame->initStrictEvalScopeObjects(cx))
-                return false;
-        } else {
-            if (!CheckEvalDeclarationConflicts(cx, script, scopeChain, varObj))
+        if (!script->bodyScope()->hasEnvironment()) {
+            MOZ_ASSERT(!script->strict() &&
+                       (!script->enclosingScope()->is<FunctionScope>() ||
+                        !script->enclosingScope()->as<FunctionScope>().hasParameterExprs()));
+            if (!CheckEvalDeclarationConflicts(cx, script, envChain, varObj))
                 return false;
         }
     } else {
-        Rooted<ClonedBlockObject*> lexicalScope(cx,
-            &NearestEnclosingExtensibleLexicalScope(scopeChain));
-        if (!CheckGlobalDeclarationConflicts(cx, script, lexicalScope, varObj))
+        Rooted<LexicalEnvironmentObject*> lexicalEnv(cx,
+            &NearestEnclosingExtensibleLexicalEnvironment(envChain));
+        if (!CheckGlobalDeclarationConflicts(cx, script, lexicalEnv, varObj))
             return false;
     }
 
@@ -866,14 +878,14 @@ InitGlobalOrEvalScopeObjects(JSContext* cx, BaselineFrame* frame)
 bool
 GlobalNameConflictsCheckFromIon(JSContext* cx, HandleScript script)
 {
-    Rooted<ClonedBlockObject*> lexicalScope(cx, &cx->global()->lexicalScope());
-    return CheckGlobalDeclarationConflicts(cx, script, lexicalScope, cx->global());
+    Rooted<LexicalEnvironmentObject*> globalLexical(cx, &cx->global()->lexicalEnvironment());
+    return CheckGlobalDeclarationConflicts(cx, script, globalLexical, cx->global());
 }
 
 bool
-InitFunctionScopeObjects(JSContext* cx, BaselineFrame* frame)
+InitFunctionEnvironmentObjects(JSContext* cx, BaselineFrame* frame)
 {
-    return frame->initFunctionScopeObjects(cx);
+    return frame->initFunctionEnvironmentObjects(cx);
 }
 
 bool
@@ -992,50 +1004,76 @@ GlobalHasLiveOnDebuggerStatement(JSContext* cx)
 }
 
 bool
-PushBlockScope(JSContext* cx, BaselineFrame* frame, Handle<StaticBlockScope*> block)
+PushLexicalEnv(JSContext* cx, BaselineFrame* frame, Handle<LexicalScope*> scope)
 {
-    return frame->pushBlock(cx, block);
+    return frame->pushLexicalEnvironment(cx, scope);
 }
 
 bool
-PopBlockScope(JSContext* cx, BaselineFrame* frame)
+PopLexicalEnv(JSContext* cx, BaselineFrame* frame)
 {
-    frame->popBlock(cx);
+    frame->popOffEnvironmentChain<LexicalEnvironmentObject>();
     return true;
 }
 
 bool
-DebugLeaveThenPopBlockScope(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
+DebugLeaveThenPopLexicalEnv(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
 {
-    MOZ_ALWAYS_TRUE(DebugLeaveBlock(cx, frame, pc));
-    frame->popBlock(cx);
+    MOZ_ALWAYS_TRUE(DebugLeaveLexicalEnv(cx, frame, pc));
+    frame->popOffEnvironmentChain<LexicalEnvironmentObject>();
     return true;
 }
 
 bool
-FreshenBlockScope(JSContext* cx, BaselineFrame* frame)
+FreshenLexicalEnv(JSContext* cx, BaselineFrame* frame)
 {
-    return frame->freshenBlock(cx);
+    return frame->freshenLexicalEnvironment(cx);
 }
 
 bool
-DebugLeaveThenFreshenBlockScope(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
+DebugLeaveThenFreshenLexicalEnv(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
 {
-    MOZ_ALWAYS_TRUE(DebugLeaveBlock(cx, frame, pc));
-    return frame->freshenBlock(cx);
+    MOZ_ALWAYS_TRUE(DebugLeaveLexicalEnv(cx, frame, pc));
+    return frame->freshenLexicalEnvironment(cx);
 }
 
 bool
-DebugLeaveBlock(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
+RecreateLexicalEnv(JSContext* cx, BaselineFrame* frame)
+{
+    return frame->recreateLexicalEnvironment(cx);
+}
+
+bool
+DebugLeaveThenRecreateLexicalEnv(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
+{
+    MOZ_ALWAYS_TRUE(DebugLeaveLexicalEnv(cx, frame, pc));
+    return frame->recreateLexicalEnvironment(cx);
+}
+
+bool
+DebugLeaveLexicalEnv(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
 {
     MOZ_ASSERT(frame->script()->baselineScript()->hasDebugInstrumentation());
     if (cx->compartment()->isDebuggee())
-        DebugScopes::onPopBlock(cx, frame, pc);
+        DebugEnvironments::onPopLexical(cx, frame, pc);
     return true;
 }
 
 bool
-EnterWith(JSContext* cx, BaselineFrame* frame, HandleValue val, Handle<StaticWithScope*> templ)
+PushVarEnv(JSContext* cx, BaselineFrame* frame, HandleScope scope)
+{
+    return frame->pushVarEnvironment(cx, scope);
+}
+
+bool
+PopVarEnv(JSContext* cx, BaselineFrame* frame)
+{
+    frame->popOffEnvironmentChain<VarEnvironmentObject>();
+    return true;
+}
+
+bool
+EnterWith(JSContext* cx, BaselineFrame* frame, HandleValue val, Handle<WithScope*> templ)
 {
     return EnterWithOperation(cx, frame, val, templ);
 }
@@ -1043,7 +1081,9 @@ EnterWith(JSContext* cx, BaselineFrame* frame, HandleValue val, Handle<StaticWit
 bool
 LeaveWith(JSContext* cx, BaselineFrame* frame)
 {
-    frame->popWith(cx);
+    if (MOZ_UNLIKELY(frame->isDebuggee()))
+        DebugEnvironments::onPopWith(frame);
+    frame->popOffEnvironmentChain<WithEnvironmentObject>();
     return true;
 }
 
@@ -1085,14 +1125,13 @@ RecompileImpl(JSContext* cx, bool force)
     MOZ_ASSERT(iter.type() == JitFrame_Exit);
     ++iter;
 
-    bool isConstructing = iter.isConstructing();
     RootedScript script(cx, iter.script());
     MOZ_ASSERT(script->hasIonScript());
 
     if (!IsIonEnabled(cx))
         return true;
 
-    MethodStatus status = Recompile(cx, script, nullptr, nullptr, isConstructing, force);
+    MethodStatus status = Recompile(cx, script, nullptr, nullptr, force);
     if (status == Method_Error)
         return false;
 
@@ -1182,14 +1221,18 @@ AssertValidStringPtr(JSContext* cx, JSString* str)
     MOZ_ASSERT(str->length() <= JSString::MAX_LENGTH);
 
     gc::AllocKind kind = str->getAllocKind();
-    if (str->isFatInline())
-        MOZ_ASSERT(kind == gc::AllocKind::FAT_INLINE_STRING);
-    else if (str->isExternal())
+    if (str->isFatInline()) {
+        MOZ_ASSERT(kind == gc::AllocKind::FAT_INLINE_STRING ||
+                   kind == gc::AllocKind::FAT_INLINE_ATOM);
+    } else if (str->isExternal()) {
         MOZ_ASSERT(kind == gc::AllocKind::EXTERNAL_STRING);
-    else if (str->isAtom() || str->isFlat())
+    } else if (str->isAtom()) {
+        MOZ_ASSERT(kind == gc::AllocKind::ATOM);
+    } else if (str->isFlat()) {
         MOZ_ASSERT(kind == gc::AllocKind::STRING || kind == gc::AllocKind::FAT_INLINE_STRING);
-    else
+    } else {
         MOZ_ASSERT(kind == gc::AllocKind::STRING);
+    }
 #endif
 }
 
@@ -1277,6 +1320,14 @@ ThrowRuntimeLexicalError(JSContext* cx, unsigned errorNumber)
 }
 
 bool
+ThrowReadOnlyError(JSContext* cx, int32_t index)
+{
+    RootedValue val(cx, Int32Value(index));
+    ReportValueError(cx, JSMSG_READ_ONLY, JSDVG_IGNORE_STACK, val, nullptr);
+    return false;
+}
+
+bool
 ThrowBadDerivedReturn(JSContext* cx, HandleValue v)
 {
     ReportValueError(cx, JSMSG_BAD_DERIVED_RETURN, JSDVG_IGNORE_STACK, v, nullptr);
@@ -1302,6 +1353,39 @@ bool
 BaselineGetFunctionThis(JSContext* cx, BaselineFrame* frame, MutableHandleValue res)
 {
     return GetFunctionThis(cx, frame, res);
+}
+
+bool
+ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+{
+    RootedValue receiver(cx, ObjectValue(*proxy));
+    return Proxy::get(cx, proxy, receiver, id, vp);
+}
+
+bool
+ProxyGetPropertyByValue(JSContext* cx, HandleObject proxy, HandleValue idVal,
+                        MutableHandleValue vp)
+{
+    RootedId id(cx);
+    if (!ValueToId<CanGC>(cx, idVal, &id))
+        return false;
+
+    RootedValue receiver(cx, ObjectValue(*proxy));
+    return Proxy::get(cx, proxy, receiver, id, vp);
+}
+
+bool
+EqualStringsHelper(JSString* str1, JSString* str2)
+{
+    MOZ_ASSERT(str1->isAtom());
+    MOZ_ASSERT(!str2->isAtom());
+    MOZ_ASSERT(str1->length() == str2->length());
+
+    JSLinearString* str2Linear = str2->ensureLinear(nullptr);
+    if (!str2Linear)
+        return false;
+
+    return EqualChars(&str1->asLinear(), str2Linear);
 }
 
 } // namespace jit

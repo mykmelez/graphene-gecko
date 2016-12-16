@@ -1,5 +1,6 @@
 <!-- Any copyright is dedicated to the Public Domain.
      http://creativecommons.org/publicdomain/zero/1.0/ -->
+
 <!doctype html>
 
 <html>
@@ -25,6 +26,12 @@
       function executeTest() {
         var url = "html_har_post-data-test-page.html";
         var data = "{'first': 'John', 'last': 'Doe'}";
+        post(url, data);
+      }
+
+      function executeTest2(size) {
+        var url = "html_har_post-data-test-page.html";
+        var data = "x".repeat(size);
         post(url, data);
       }
     </script>

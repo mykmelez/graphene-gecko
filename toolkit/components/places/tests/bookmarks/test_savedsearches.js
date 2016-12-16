@@ -56,7 +56,7 @@ add_test(function test_savedsearches_bookmarks() {
     }
     rootNode.containerOpen = false;
   }
-  catch(ex) {
+  catch (ex) {
     do_throw("expandQueries=0 query error: " + ex);
   }
 
@@ -92,14 +92,14 @@ add_test(function test_savedsearches_bookmarks() {
       do_check_eq(item.itemId, bookmarkId);
 
       // XXX - FAILING - test live-update of query results - add a bookmark that matches the query
-      //var tmpBmId = PlacesUtils.bookmarks.insertBookmark(
+      // var tmpBmId = PlacesUtils.bookmarks.insertBookmark(
       //  root, uri("http://" + searchTerm + ".com"),
       //  PlacesUtils.bookmarks.DEFAULT_INDEX, searchTerm + "blah");
-      //do_check_eq(query.childCount, 2);
+      // do_check_eq(query.childCount, 2);
 
       // XXX - test live-update of query results - delete a bookmark that matches the query
-      //PlacesUtils.bookmarks.removeItem(tmpBMId);
-      //do_check_eq(query.childCount, 1);
+      // PlacesUtils.bookmarks.removeItem(tmpBMId);
+      // do_check_eq(query.childCount, 1);
 
       // test live-update of query results - add a folder that matches the query
       PlacesUtils.bookmarks.createFolder(
@@ -113,7 +113,7 @@ add_test(function test_savedsearches_bookmarks() {
     }
     rootNode.containerOpen = false;
   }
-  catch(ex) {
+  catch (ex) {
     do_throw("expandQueries=1 bookmarks query: " + ex);
   }
 
@@ -198,12 +198,12 @@ add_task(function* test_savedsearches_history() {
     try {
       tmpFolderNode = root.getChild(1);
       do_throw("query was not removed");
-    } catch(ex) {}
+    } catch (ex) {}
 
     tmpFolderNode.containerOpen = false;
     rootNode.containerOpen = false;
   }
-  catch(ex) {
+  catch (ex) {
     do_throw("expandQueries=1 bookmarks query: " + ex);
   }
 });

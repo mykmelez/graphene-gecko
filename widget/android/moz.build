@@ -6,6 +6,7 @@
 
 DIRS += [
     'bindings',
+    'fennec',
     'jni',
 ]
 
@@ -23,15 +24,20 @@ EXPORTS += [
     'GeneratedJNIWrappers.h',
 ]
 
+EXPORTS.mozilla.widget += [
+    'AndroidCompositorWidget.h',
+]
+
 UNIFIED_SOURCES += [
+    'AndroidAlerts.cpp',
     'AndroidBridge.cpp',
+    'AndroidCompositorWidget.cpp',
     'AndroidContentController.cpp',
-    'AndroidDirectTexture.cpp',
-    'AndroidGraphicBuffer.cpp',
     'AndroidJavaWrappers.cpp',
     'AndroidJNI.cpp',
     'AndroidJNIWrapper.cpp',
     'ANRReporter.cpp',
+    'EventDispatcher.cpp',
     'GeneratedJNIWrappers.cpp',
     'GfxInfo.cpp',
     'NativeJSContainer.cpp',
@@ -62,4 +68,7 @@ LOCAL_INCLUDES += [
 
 CXXFLAGS += ['-Wno-error=shadow']
 
+OS_LIBS += ['android']
+
 #DEFINES['DEBUG_WIDGETS'] = True
+

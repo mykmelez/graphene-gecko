@@ -38,14 +38,14 @@ function Sanitizer() {
 }
 Sanitizer.prototype = {
   // warning to the caller: this one may raise an exception (e.g. bug #265028)
-  clearItem: function (aItemName)
+  clearItem: function(aItemName)
   {
     this.items[aItemName].clear();
   },
 
   prefDomain: "",
 
-  getNameFromPreference: function (aPreferenceName)
+  getNameFromPreference: function(aPreferenceName)
   {
     return aPreferenceName.substr(this.prefDomain.length);
   },
@@ -234,7 +234,6 @@ Sanitizer.prototype = {
         let seenException;
         let yieldCounter = 0;
         let refObj = {};
-        TelemetryStopwatch.start("FX_SANITIZE_COOKIES", refObj);
 
         // Clear cookies.
         TelemetryStopwatch.start("FX_SANITIZE_COOKIES_2", refObj);
@@ -287,12 +286,11 @@ Sanitizer.prototype = {
         // complete, we introduce a soft timeout. Once this timeout has
         // elapsed, we proceed with the shutdown of Firefox.
         let promiseClearPluginCookies;
-        TelemetryStopwatch.start("FX_SANITIZE_PLUGINS", refObj);
         try {
           // We don't want to wait for this operation to complete...
           promiseClearPluginCookies = this.promiseClearPluginCookies(range);
 
-          //... at least, not for more than 10 seconds.
+          // ... at least, not for more than 10 seconds.
           yield Promise.race([
             promiseClearPluginCookies,
             new Promise(resolve => setTimeout(resolve, 10000 /* 10 seconds */))
@@ -306,10 +304,6 @@ Sanitizer.prototype = {
           // If this exception is raised before the soft timeout, it
           // will appear in `seenException`. Otherwise, it's too late
           // to do anything about it.
-        }).then(() => {
-          // Finally, update statistics.
-          TelemetryStopwatch.finish("FX_SANITIZE_PLUGINS", refObj);
-          TelemetryStopwatch.finish("FX_SANITIZE_COOKIES", refObj);
         });
 
         if (seenException) {
@@ -361,15 +355,9 @@ Sanitizer.prototype = {
 
     offlineApps: {
       clear: Task.async(function* (range) {
-        let refObj = {};
-        TelemetryStopwatch.start("FX_SANITIZE_OFFLINEAPPS", refObj);
-        try {
-          Components.utils.import("resource:///modules/offlineAppCache.jsm");
-          // This doesn't wait for the cleanup to be complete.
-          OfflineAppCacheHelper.clear();
-        } finally {
-          TelemetryStopwatch.finish("FX_SANITIZE_OFFLINEAPPS", refObj);
-        }
+        Components.utils.import("resource:///modules/offlineAppCache.jsm");
+        // This doesn't wait for the cleanup to be complete.
+        OfflineAppCacheHelper.clear();
       })
     },
 
@@ -545,20 +533,6 @@ Sanitizer.prototype = {
             cps.removeAllDomains(null);
           } else {
             cps.removeAllDomainsSince(startDateMS, null);
-          }
-        } catch (ex) {
-          seenException = ex;
-        }
-
-        try {
-          // Clear "Never remember passwords for this site", which is not handled by
-          // the permission manager
-          // (Note the login manager doesn't support date ranges yet, and bug
-          //  1058438 is calling for loginSaving stuff to end up in the
-          // permission manager)
-          let hosts = Services.logins.getAllDisabledHosts();
-          for (let host of hosts) {
-            Services.logins.setLoginSavingEnabled(host, true);
           }
         } catch (ex) {
           seenException = ex;
@@ -757,7 +731,7 @@ Sanitizer.TIMESPAN_24HOURS    = 6;
 // in the uSec-since-epoch format that PRTime likes.  If we should
 // clear everything, return null.  Use ts if it is defined; otherwise
 // use the timeSpan pref.
-Sanitizer.getClearRange = function (ts) {
+Sanitizer.getClearRange = function(ts) {
   if (ts === undefined)
     ts = Sanitizer.prefs.getIntPref("timeSpan");
   if (ts === Sanitizer.TIMESPAN_EVERYTHING)
@@ -807,7 +781,7 @@ Sanitizer.__defineGetter__("prefs", function()
 Sanitizer.showUI = function(aParentWindow)
 {
   let win = AppConstants.platform == "macosx" ?
-    null: // make this an app-modal window on Mac
+    null : // make this an app-modal window on Mac
     aParentWindow;
   Services.ww.openWindow(win,
                          "chrome://browser/content/sanitize.xul",

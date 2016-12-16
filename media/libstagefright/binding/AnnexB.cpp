@@ -18,7 +18,7 @@ namespace mp4_demuxer
 static const uint8_t kAnnexBDelimiter[] = { 0, 0, 0, 1 };
 
 bool
-AnnexB::ConvertSampleToAnnexB(mozilla::MediaRawData* aSample)
+AnnexB::ConvertSampleToAnnexB(mozilla::MediaRawData* aSample, bool aAddSPS)
 {
   MOZ_ASSERT(aSample);
 
@@ -59,7 +59,7 @@ AnnexB::ConvertSampleToAnnexB(mozilla::MediaRawData* aSample)
   }
 
   // Prepend the Annex B NAL with SPS and PPS tables to keyframes.
-  if (aSample->mKeyframe) {
+  if (aAddSPS && aSample->mKeyframe) {
     RefPtr<MediaByteBuffer> annexB =
       ConvertExtraDataToAnnexB(aSample->mExtraData);
     if (!samplewriter->Prepend(annexB->Elements(), annexB->Length())) {
@@ -99,7 +99,6 @@ AnnexB::ConvertExtraDataToAnnexB(const mozilla::MediaByteBuffer* aExtraData)
 
     // MP4Box adds extra bytes that we ignore. I don't know what they do.
   }
-  reader.DiscardRemaining();
 
   return annexB.forget();
 }
@@ -330,9 +329,49 @@ AnnexB::HasSPS(const mozilla::MediaByteBuffer* aExtraData)
     return false;
   }
   uint8_t numSps = reader.ReadU8() & 0x1f;
-  reader.DiscardRemaining();
 
   return numSps > 0;
+}
+
+bool
+AnnexB::HasPPS(const mozilla::MediaRawData* aSample)
+{
+  return HasPPS(aSample->mExtraData);
+}
+
+bool
+AnnexB::HasPPS(const mozilla::MediaByteBuffer* aExtraData)
+{
+  if (!aExtraData) {
+    return false;
+  }
+
+  ByteReader reader(aExtraData);
+  const uint8_t* ptr = reader.Read(5);
+  if (!ptr || !reader.CanRead8()) {
+    return false;
+  }
+  uint8_t numSps = reader.ReadU8() & 0x1f;
+  // Skip over the included SPS.
+  for (uint8_t i = 0; i < numSps; i++) {
+    if (reader.Remaining() < 3) {
+      return false;
+    }
+    uint16_t length = reader.ReadU16();
+    if ((reader.PeekU8() & 0x1f) != 7) {
+      // Not an SPS NAL type.
+      return false;
+    }
+    if (!reader.Read(length)) {
+      return false;
+    }
+  }
+  if (!reader.CanRead8()) {
+    return false;
+  }
+  uint8_t numPps = reader.ReadU8();
+
+  return numPps > 0;
 }
 
 bool

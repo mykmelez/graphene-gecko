@@ -2,8 +2,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import datetime
-import errno
 import json
 import socket
 import time
@@ -30,6 +28,9 @@ class Message(object):
     def __eq__(self, other):
         return self.id == other.id
 
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
 
 class Command(Message):
     TYPE = 0
@@ -40,7 +41,7 @@ class Command(Message):
         self.params = params
 
     def __str__(self):
-        return "<Command id=%s, name=%s, params=%s>" % (self.id, self.name, self.params)
+        return "<Command id={0}, name={1}, params={2}>".format(self.id, self.name, self.params)
 
     def to_msg(self):
         msg = [Command.TYPE, self.id, self.name, self.params]
@@ -63,7 +64,7 @@ class Response(Message):
         self.result = result
 
     def __str__(self):
-        return "<Response id=%s, error=%s, result=%s>" % (self.id, self.error, self.result)
+        return "<Response id={0}, error={1}, result={2}>".format(self.id, self.error, self.result)
 
     def to_msg(self):
         msg = [Response.TYPE, self.id, self.error, self.result]
@@ -116,24 +117,31 @@ class TcpTransport(object):
     Supported protocol levels are 1 and above.
     """
     max_packet_length = 4096
-    connection_lost_msg = "Connection to Marionette server is lost. Check gecko.log for errors."
 
-    def __init__(self, addr, port, socket_timeout=360.0):
+    def __init__(self, addr, port, socket_timeout=60.0):
         """If `socket_timeout` is `0` or `0.0`, non-blocking socket mode
         will be used.  Setting it to `1` or `None` disables timeouts on
         socket operations altogether.
         """
         self.addr = addr
         self.port = port
-        self.socket_timeout = socket_timeout
+        self._socket_timeout = socket_timeout
 
         self.protocol = 1
         self.application_type = None
         self.last_id = 0
-        self.expected_responses = []
+        self.expected_response = None
+        self.sock = None
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(self.socket_timeout)
+    @property
+    def socket_timeout(self):
+        return self._socket_timeout
+
+    @socket_timeout.setter
+    def socket_timeout(self, value):
+        if self.sock:
+            self.sock.settimeout(value)
+        self._socket_timeout = value
 
     def _unmarshal(self, packet):
         msg = None
@@ -173,7 +181,7 @@ class TcpTransport(object):
                 pass
             else:
                 if not chunk:
-                    raise IOError(self.connection_lost_msg)
+                    raise socket.error("No data received over socket")
 
             sep = data.find(":")
             if sep > -1:
@@ -185,19 +193,22 @@ class TcpTransport(object):
                         msg = self._unmarshal(remaining)
                         self.last_id = msg.id
 
-                        if isinstance(msg, Response) and self.protocol >= 3:
-                            if msg not in self.expected_responses:
-                                raise Exception("Received unexpected response: %s" % msg)
-                            else:
-                                self.expected_responses.remove(msg)
+                        if self.protocol >= 3:
+                            self.last_id = msg.id
+
+                            # keep reading incoming responses until
+                            # we receive the user's expected response
+                            if isinstance(msg, Response) and msg != self.expected_response:
+                                return self.receive(unmarshal)
 
                         return msg
+
                     else:
                         return remaining
 
                 bytes_to_recv = int(length) - len(remaining)
 
-        raise socket.timeout("connection timed out after %ds" % self.socket_timeout)
+        raise socket.timeout("Connection timed out after {}s".format(self.socket_timeout))
 
     def connect(self):
         """Connect to the server and process the hello message we expect
@@ -206,6 +217,9 @@ class TcpTransport(object):
         Returns a tuple of the protocol level and the application type.
         """
         try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(self.socket_timeout)
+
             self.sock.connect((self.addr, self.port))
         except:
             # Unset self.sock so that the next attempt to send will cause
@@ -232,26 +246,20 @@ class TcpTransport(object):
 
         if isinstance(obj, Message):
             data = obj.to_msg()
-            self.expected_responses.append(obj)
+            if isinstance(obj, Command):
+                self.expected_response = obj
         else:
             data = json.dumps(obj)
-        payload = "%s:%s" % (len(data), data)
+        payload = "{0}:{1}".format(len(data), data)
 
         totalsent = 0
         while totalsent < len(payload):
-            try:
-                sent = self.sock.send(payload[totalsent:])
-                if sent == 0:
-                    raise IOError("socket error after sending %d of %d bytes" %
-                                  (totalsent, len(payload)))
-                else:
-                    totalsent += sent
-
-            except IOError as e:
-                if e.errno == errno.EPIPE:
-                    raise IOError("%s: %s" % (str(e), self.connection_lost_msg))
-                else:
-                    raise e
+            sent = self.sock.send(payload[totalsent:])
+            if sent == 0:
+                raise IOError("Socket error after sending {0} of {1} bytes"
+                              .format(totalsent, len(payload)))
+            else:
+                totalsent += sent
 
     def respond(self, obj):
         """Send a response to a command.  This can be an arbitrary JSON
@@ -278,31 +286,15 @@ class TcpTransport(object):
     def close(self):
         """Close the socket."""
         if self.sock:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except IOError as exc:
+                # Errno 57 is "socket not connected", which we don't care about here.
+                if exc.errno != 57:
+                    raise
+
             self.sock.close()
+            self.sock = None
 
     def __del__(self):
         self.close()
-        self.sock = None
-
-
-def wait_for_port(host, port, timeout=60):
-    """Wait for the specified host/port to become available."""
-    starttime = datetime.datetime.now()
-    poll_interval = 0.1
-    while datetime.datetime.now() - starttime < datetime.timedelta(seconds=timeout):
-        sock = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.5)
-            sock.connect((host, port))
-            data = sock.recv(16)
-            sock.close()
-            if ":" in data:
-                return True
-        except socket.error:
-            pass
-        finally:
-            if sock is not None:
-                sock.close()
-        time.sleep(poll_interval)
-    return False

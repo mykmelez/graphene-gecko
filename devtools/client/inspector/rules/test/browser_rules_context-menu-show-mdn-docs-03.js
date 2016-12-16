@@ -14,7 +14,7 @@
 
 "use strict";
 
-const { PrefObserver } = require("devtools/client/styleeditor/utils");
+const { PrefObserver } = require("devtools/client/shared/prefs");
 const PREF_ENABLE_MDN_DOCS_TOOLTIP =
   "devtools.inspector.mdnDocsTooltip.enabled";
 const PROPERTY_NAME_CLASS = "ruleview-propertyname";
@@ -105,7 +105,7 @@ function* testMdnContextMenuItemVisibility(view, shouldBeVisible) {
   let node = root.querySelector("." + PROPERTY_NAME_CLASS).firstChild;
   let allMenuItems = openStyleContextMenuAndGetAllItems(view, node);
   let menuitemShowMdnDocs = allMenuItems.find(item => item.label ===
-    _STRINGS.GetStringFromName("styleinspector.contextmenu.showMdnDocs"));
+    STYLE_INSPECTOR_L10N.getStr("styleinspector.contextmenu.showMdnDocs"));
 
   let isVisible = menuitemShowMdnDocs.visible;
   is(isVisible, shouldBeVisible,

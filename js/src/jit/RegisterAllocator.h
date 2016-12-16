@@ -280,7 +280,7 @@ class RegisterAllocator
         graph(graph),
         allRegisters_(RegisterSet::All())
     {
-        if (mir->compilingAsmJS()) {
+        if (mir->compilingWasm()) {
 #if defined(JS_CODEGEN_X64)
             allRegisters_.take(AnyRegister(HeapReg));
 #elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
@@ -340,6 +340,7 @@ class RegisterAllocator
     }
 
     LMoveGroup* getInputMoveGroup(LInstruction* ins);
+    LMoveGroup* getFixReuseMoveGroup(LInstruction* ins);
     LMoveGroup* getMoveGroupAfter(LInstruction* ins);
 
     CodePosition minimalDefEnd(LNode* ins) {

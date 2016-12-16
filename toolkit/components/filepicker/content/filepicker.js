@@ -235,10 +235,10 @@ function selectOnOK()
     // try to normalize - if this fails we will ignore the error
     // because we will notice the
     // error later and show a fitting error alert.
-    try{
+    try {
       file.normalize();
-    } catch(e) {
-      //promptService.alert(window, "Problem", "normalize failed, continuing");
+    } catch (e) {
+      // promptService.alert(window, "Problem", "normalize failed, continuing");
     }
 
     var fileExists = file.exists();
@@ -263,7 +263,7 @@ function selectOnOK()
       isFile = file.isFile();
     }
 
-    switch(filePickerMode) {
+    switch (filePickerMode) {
     case nsIFilePicker.modeOpen:
     case nsIFilePicker.modeOpenMultiple:
       if (isFile) {
@@ -491,7 +491,7 @@ function setOKAction(file) {
   }
   else {
     document.documentElement.setAttribute("ondialogaccept", "return selectOnOK();");
-    switch(filePickerMode) {
+    switch (filePickerMode) {
     case nsIFilePicker.modeGetFolder:
       buttonLabel = gFilePickerBundle.getString("selectFolderButtonLabel");
       break;
@@ -621,7 +621,7 @@ function populateAncestorList(directory) {
 function goUp() {
   try {
     var parent = sfile.parent;
-  } catch(ex) { dump("can't get parent directory\n"); }
+  } catch (ex) { dump("can't get parent directory\n"); }
 
   if (parent) {
     gotoDirectory(parent);
@@ -661,9 +661,7 @@ function newDir() {
 
     var parent = file.parent;
     if (!(parent.exists() && parent.isDirectory() && parent.isWritable())) {
-      var oldParent = parent;
       while (!parent.exists()) {
-        oldParent = parent;
         parent = parent.parent;
       }
       if (parent.isFile()) {
@@ -704,7 +702,7 @@ function gotoDirectory(directory) {
     populateAncestorList(directory);
     treeView.setDirectory(directory);
     document.getElementById("errorShower").selectedIndex = 0;
-  } catch(ex) {
+  } catch (ex) {
     document.getElementById("errorShower").selectedIndex = 1;
   }
 
@@ -775,10 +773,9 @@ function processPath(path)
       }
       ++curFileStart;
     }
-  } else {
+  } else if (!processPathEntry(path, fileArray)) {
     // If we didn't start with a quote, assume we just have a single file.
-    if (!processPathEntry(path, fileArray))
-      return false;
+    return false;
   }
 
   return fileArray;
@@ -791,8 +788,8 @@ function processPathEntry(path, fileArray)
 
   try {
     file = sfile.clone().QueryInterface(nsILocalFile);
-  } catch(e) {
-    dump("Couldn't clone\n"+e);
+  } catch (e) {
+    dump("Couldn't clone\n" + e);
     return false;
   }
 
@@ -812,13 +809,13 @@ function processPathEntry(path, fileArray)
     file.initWithPath(filePath);
   else if ((filePath.indexOf("/../") > 0) ||
            (filePath.substr(-3) == "/..") ||
-           (filePath.substr(0,3) == "../") ||
+           (filePath.substr(0, 3) == "../") ||
            (filePath == "..")) {
     /* appendRelativePath doesn't allow .. */
-    try{
+    try {
       file.initWithPath(file.path + "/" + filePath);
     } catch (e) {
-      dump("Couldn't init path\n"+e);
+      dump("Couldn't init path\n" + e);
       return false;
     }
   }
@@ -826,7 +823,7 @@ function processPathEntry(path, fileArray)
     try {
       file.appendRelativePath(filePath);
     } catch (e) {
-      dump("Couldn't append path\n"+e);
+      dump("Couldn't append path\n" + e);
       return false;
     }
   }

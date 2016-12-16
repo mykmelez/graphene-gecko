@@ -87,7 +87,7 @@ static const uint8_t NS_FORM_AUTOCOMPLETE_OFF = 0;
 static const nsAttrValue::EnumTable kFormAutocompleteTable[] = {
   { "on",  NS_FORM_AUTOCOMPLETE_ON },
   { "off", NS_FORM_AUTOCOMPLETE_OFF },
-  { 0 }
+  { nullptr, 0 }
 };
 // Default autocomplete value is 'on'.
 static const nsAttrValue::EnumTable* kFormDefaultAutocomplete = &kFormAutocompleteTable[0];
@@ -119,6 +119,8 @@ HTMLFormElement::HTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNode
     mInvalidElementsCount(0),
     mEverTriedInvalidSubmit(false)
 {
+  // We start out valid.
+  AddStatesSilently(NS_EVENT_STATE_VALID);
 }
 
 HTMLFormElement::~HTMLFormElement()
@@ -161,6 +163,14 @@ NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLFormElement)
                                nsIRadioGroupContainer)
 NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
 
+// EventTarget
+void
+HTMLFormElement::AsyncEventRunning(AsyncEventDispatcher* aEvent)
+{
+  if (mFormPasswordEventDispatcher == aEvent) {
+    mFormPasswordEventDispatcher = nullptr;
+  }
+}
 
 // nsIDOMHTMLFormElement
 
@@ -481,7 +491,7 @@ HTMLFormElement::UnbindFromTree(bool aDeep, bool aNullParent)
 }
 
 nsresult
-HTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
+HTMLFormElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   aVisitor.mWantsWillHandleEvent = true;
   if (aVisitor.mEvent->mOriginalTarget == static_cast<nsIContent*>(this)) {
@@ -505,7 +515,7 @@ HTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
       mGeneratingReset = true;
     }
   }
-  return nsGenericHTMLElement::PreHandleEvent(aVisitor);
+  return nsGenericHTMLElement::GetEventTargetParent(aVisitor);
 }
 
 nsresult
@@ -687,7 +697,7 @@ HTMLFormElement::BuildSubmission(HTMLFormSubmission** aFormSubmission,
   if (aEvent) {
     InternalFormEvent* formEvent = aEvent->AsFormEvent();
     if (formEvent) {
-      nsIContent* originator = formEvent->originator;
+      nsIContent* originator = formEvent->mOriginator;
       if (originator) {
         if (!originator->IsHTMLElement()) {
           return NS_ERROR_UNEXPECTED;
@@ -819,7 +829,7 @@ HTMLFormElement::SubmitSubmission(HTMLFormSubmission* aFormSubmission)
     rv = linkHandler->OnLinkClickSync(this, actionURI,
                                       target.get(),
                                       NullString(),
-                                      postDataStream, nullptr,
+                                      postDataStream, nullptr, false,
                                       getter_AddRefs(docShell),
                                       getter_AddRefs(mSubmittingRequest));
     NS_ENSURE_SUBMIT_SUCCESS(rv);
@@ -1158,8 +1168,8 @@ HTMLFormElement::PostPasswordEvent()
   }
 
   mFormPasswordEventDispatcher =
-    new FormPasswordEventDispatcher(this,
-                                    NS_LITERAL_STRING("DOMFormHasPassword"));
+    new AsyncEventDispatcher(this, NS_LITERAL_STRING("DOMFormHasPassword"),
+                             true, true);
   mFormPasswordEventDispatcher->PostDOMEvent();
 }
 
@@ -1336,6 +1346,8 @@ nsresult
 HTMLFormElement::RemoveElement(nsGenericHTMLFormElement* aChild,
                                bool aUpdateValidity)
 {
+  RemoveElementFromPastNamesMap(aChild);
+
   //
   // Remove it from the radio group if it's a radio button
   //
@@ -1486,23 +1498,8 @@ HTMLFormElement::RemoveElementFromTableInternal(
 
 nsresult
 HTMLFormElement::RemoveElementFromTable(nsGenericHTMLFormElement* aElement,
-                                        const nsAString& aName,
-                                        RemoveElementReason aRemoveReason)
+                                        const nsAString& aName)
 {
-  // If the element is being removed from the form, we have to remove it from
-  // the past names map.
-  if (aRemoveReason == ElementRemoved) {
-    uint32_t oldCount = mPastNameLookupTable.Count();
-    for (auto iter = mPastNameLookupTable.Iter(); !iter.Done(); iter.Next()) {
-      if (static_cast<void*>(aElement) == iter.Data()) {
-        iter.Remove();
-      }
-    }
-    if (oldCount != mPastNameLookupTable.Count()) {
-      ++mExpandoAndGeneration.generation;
-    }
-  }
-
   return mControls->RemoveElementFromTable(aElement, aName);
 }
 
@@ -1535,7 +1532,7 @@ HTMLFormElement::NamedGetter(const nsAString& aName, bool &aFound)
 void
 HTMLFormElement::GetSupportedNames(nsTArray<nsString >& aRetval)
 {
-  // TODO https://www.w3.org/Bugs/Public/show_bug.cgi?id=22320
+  // TODO https://github.com/whatwg/html/issues/1731
 }
 
 already_AddRefed<nsISupports>
@@ -1932,14 +1929,6 @@ HTMLFormElement::CheckValidFormSubmission()
   NS_ASSERTION(!HasAttr(kNameSpaceID_None, nsGkAtoms::novalidate),
                "We shouldn't be there if novalidate is set!");
 
-  // Don't do validation for a form submit done by a sandboxed document that
-  // doesn't have 'allow-forms', the submit will have been blocked and the
-  // HTML5 spec says we shouldn't validate in this case.
-  nsIDocument* doc = GetComposedDoc();
-  if (doc && (doc->GetSandboxFlags() & SANDBOXED_FORMS)) {
-    return true;
-  }
-
   // When .submit() is called aEvent = nullptr so we can rely on that to know if
   // we have to check the validity of the form.
   nsCOMPtr<nsIObserverService> service =
@@ -2025,6 +2014,41 @@ One should be implemented!");
   }
 
   return true;
+}
+
+bool
+HTMLFormElement::SubmissionCanProceed(Element* aSubmitter)
+{
+#ifdef DEBUG
+  if (aSubmitter) {
+    nsCOMPtr<nsIFormControl> fc = do_QueryInterface(aSubmitter);
+    MOZ_ASSERT(fc);
+
+    uint32_t type = fc->GetType();
+    MOZ_ASSERT(type == NS_FORM_INPUT_SUBMIT ||
+               type == NS_FORM_INPUT_IMAGE ||
+               type == NS_FORM_BUTTON_SUBMIT,
+               "aSubmitter is not a submit control?");
+  }
+#endif
+
+  // Modified step 2 of
+  // https://html.spec.whatwg.org/multipage/forms.html#concept-form-submit --
+  // we're not checking whether the node document is disconnected yet...
+  if (OwnerDoc()->GetSandboxFlags() & SANDBOXED_FORMS) {
+    return false;
+  }
+
+  if (HasAttr(kNameSpaceID_None, nsGkAtoms::novalidate)) {
+    return true;
+  }
+
+  if (aSubmitter &&
+      aSubmitter->HasAttr(kNameSpaceID_None, nsGkAtoms::formnovalidate)) {
+    return true;
+  }
+
+  return CheckValidFormSubmission();
 }
 
 void
@@ -2500,6 +2524,8 @@ HTMLFormElement::AddImageElementToTable(HTMLImageElement* aChild,
 nsresult
 HTMLFormElement::RemoveImageElement(HTMLImageElement* aChild)
 {
+  RemoveElementFromPastNamesMap(aChild);
+
   size_t index = mImageElements.IndexOf(aChild);
   NS_ENSURE_STATE(index != mImageElements.NoIndex);
 
@@ -2509,19 +2535,8 @@ HTMLFormElement::RemoveImageElement(HTMLImageElement* aChild)
 
 nsresult
 HTMLFormElement::RemoveImageElementFromTable(HTMLImageElement* aElement,
-                                             const nsAString& aName,
-                                             RemoveElementReason aRemoveReason)
+                                             const nsAString& aName)
 {
-  // If the element is being removed from the form, we have to remove it from
-  // the past names map.
-  if (aRemoveReason == ElementRemoved) {
-    for (auto iter = mPastNameLookupTable.Iter(); !iter.Done(); iter.Next()) {
-      if (static_cast<void*>(aElement) == iter.Data()) {
-        iter.Remove();
-      }
-    }
-  }
-
   return RemoveElementFromTableInternal(mImageNameLookupTable, aElement, aName);
 }
 
@@ -2534,7 +2549,28 @@ HTMLFormElement::AddToPastNamesMap(const nsAString& aName,
   // previous entry with the same name, if any.
   nsCOMPtr<nsIContent> node = do_QueryInterface(aChild);
   if (node) {
-    mPastNameLookupTable.Put(aName, aChild);
+    mPastNameLookupTable.Put(aName, node);
+    node->SetFlags(MAY_BE_IN_PAST_NAMES_MAP);
+  }
+}
+
+void
+HTMLFormElement::RemoveElementFromPastNamesMap(Element* aElement)
+{
+  if (!aElement->HasFlag(MAY_BE_IN_PAST_NAMES_MAP)) {
+    return;
+  }
+
+  aElement->UnsetFlags(MAY_BE_IN_PAST_NAMES_MAP);
+
+  uint32_t oldCount = mPastNameLookupTable.Count();
+  for (auto iter = mPastNameLookupTable.Iter(); !iter.Done(); iter.Next()) {
+    if (aElement == iter.Data()) {
+      iter.Remove();
+    }
+  }
+  if (oldCount != mPastNameLookupTable.Count()) {
+    ++mExpandoAndGeneration.generation;
   }
 }
 

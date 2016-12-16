@@ -564,6 +564,15 @@ protected:
              mACP.acpEnd == aACP.acpStart;
     }
 
+    bool EqualsExceptDirection(
+           const SelectionChangeDataBase& aChangedSelection) const
+    {
+      MOZ_ASSERT(!mDirty);
+      MOZ_ASSERT(aChangedSelection.IsValid());
+      return aChangedSelection.Length() == static_cast<uint32_t>(Length()) &&
+             aChangedSelection.mOffset == static_cast<uint32_t>(StartOffset());
+    }
+
   private:
     TS_SELECTION_ACP mACP;
     WritingMode mWritingMode;
@@ -583,6 +592,30 @@ protected:
    * Note that this is also called by ContentForTSFRef().
    */
   Selection& SelectionForTSFRef();
+
+  class MOZ_STACK_CLASS AutoSetTemporarySelection final
+  {
+  public:
+    AutoSetTemporarySelection(Selection& aSelection)
+      : mSelection(aSelection)
+    {
+      mDirty = mSelection.IsDirty();
+      if (mDirty) {
+        mSelection.CollapseAt(0);
+      }
+    }
+
+    ~AutoSetTemporarySelection()
+    {
+      if (mDirty) {
+        mSelection.MarkDirty();
+      }
+    }
+
+ private:
+    Selection& mSelection;
+    bool mDirty;
+  };
 
   struct PendingAction final
   {
@@ -785,9 +818,9 @@ protected:
 
     // Returns true if layout of the character at the aOffset has not been
     // calculated.
-    bool IsLayoutChangedAfter(uint32_t aOffset) const
+    bool IsLayoutChangedAt(uint32_t aOffset) const
     {
-      return mInitialized && (mMinTextModifiedOffset < aOffset);
+      return IsLayoutChanged() && (mMinTextModifiedOffset <= aOffset);
     }
     // Returns true if layout of the content has been changed, i.e., the new
     // layout has not been calculated.
@@ -836,6 +869,12 @@ protected:
   Content mContentForTSF;
 
   Content& ContentForTSFRef();
+
+  // CanAccessActualContentDirectly() returns true when TSF/TIP can access
+  // actual content directly.  In other words, mContentForTSF and/or
+  // mSelectionForTSF doesn't cache content or they matches with actual
+  // contents due to no pending text/selection change notifications.
+  bool CanAccessActualContentDirectly() const;
 
   // While mContentForTSF is valid, this returns the text stored by it.
   // Otherwise, return the current text content retrieved by eQueryTextContent.
@@ -970,7 +1009,8 @@ protected:
   static DWORD sClientId;
 
   // Enables/Disables hack for specific TIP.
-  static bool sCreateNativeCaretForATOK;
+  static bool sCreateNativeCaretForLegacyATOK;
+  static bool sDoNotReturnNoLayoutErrorToATOKOfCompositionString;
   static bool sDoNotReturnNoLayoutErrorToMSSimplifiedTIP;
   static bool sDoNotReturnNoLayoutErrorToMSTraditionalTIP;
   static bool sDoNotReturnNoLayoutErrorToFreeChangJie;

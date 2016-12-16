@@ -4,12 +4,12 @@ const gCompleteState = Ci.nsIWebProgressListener.STATE_STOP +
                        Ci.nsIWebProgressListener.STATE_IS_NETWORK;
 
 var gFrontProgressListener = {
-  onProgressChange: function (aWebProgress, aRequest,
-                              aCurSelfProgress, aMaxSelfProgress,
-                              aCurTotalProgress, aMaxTotalProgress) {
+  onProgressChange: function(aWebProgress, aRequest,
+                             aCurSelfProgress, aMaxSelfProgress,
+                             aCurTotalProgress, aMaxTotalProgress) {
   },
 
-  onStateChange: function (aWebProgress, aRequest, aStateFlags, aStatus) {
+  onStateChange: function(aWebProgress, aRequest, aStateFlags, aStatus) {
     var state = "onStateChange";
     info("FrontProgress: " + state + " 0x" + aStateFlags.toString(16));
     ok(gFrontNotificationsPos < gFrontNotifications.length, "Got an expected notification for the front notifications listener");
@@ -17,18 +17,18 @@ var gFrontProgressListener = {
     gFrontNotificationsPos++;
   },
 
-  onLocationChange: function (aWebProgress, aRequest, aLocationURI, aFlags) {
+  onLocationChange: function(aWebProgress, aRequest, aLocationURI, aFlags) {
     var state = "onLocationChange";
     info("FrontProgress: " + state + " " + aLocationURI.spec);
     ok(gFrontNotificationsPos < gFrontNotifications.length, "Got an expected notification for the front notifications listener");
     is(state, gFrontNotifications[gFrontNotificationsPos], "Got a notification for the front notifications listener");
     gFrontNotificationsPos++;
   },
-  
-  onStatusChange: function (aWebProgress, aRequest, aStatus, aMessage) {
+
+  onStatusChange: function(aWebProgress, aRequest, aStatus, aMessage) {
   },
 
-  onSecurityChange: function (aWebProgress, aRequest, aState) {
+  onSecurityChange: function(aWebProgress, aRequest, aState) {
     var state = "onSecurityChange";
     info("FrontProgress: " + state + " 0x" + aState.toString(16));
     ok(gFrontNotificationsPos < gFrontNotifications.length, "Got an expected notification for the front notifications listener");
@@ -38,7 +38,7 @@ var gFrontProgressListener = {
 }
 
 var gAllProgressListener = {
-  onStateChange: function (aBrowser, aWebProgress, aRequest, aStateFlags, aStatus) {
+  onStateChange: function(aBrowser, aWebProgress, aRequest, aStateFlags, aStatus) {
     var state = "onStateChange";
     info("AllProgress: " + state + " 0x" + aStateFlags.toString(16));
     ok(aBrowser == gTestBrowser, state + " notification came from the correct browser");
@@ -53,8 +53,8 @@ var gAllProgressListener = {
     }
   },
 
-  onLocationChange: function (aBrowser, aWebProgress, aRequest, aLocationURI,
-                              aFlags) {
+  onLocationChange: function(aBrowser, aWebProgress, aRequest, aLocationURI,
+                             aFlags) {
     var state = "onLocationChange";
     info("AllProgress: " + state + " " + aLocationURI.spec);
     ok(aBrowser == gTestBrowser, state + " notification came from the correct browser");
@@ -62,13 +62,13 @@ var gAllProgressListener = {
     is(state, gAllNotifications[gAllNotificationsPos], "Got a notification for the all notifications listener");
     gAllNotificationsPos++;
   },
-  
-  onStatusChange: function (aBrowser, aWebProgress, aRequest, aStatus, aMessage) {
+
+  onStatusChange: function(aBrowser, aWebProgress, aRequest, aStatus, aMessage) {
     var state = "onStatusChange";
     ok(aBrowser == gTestBrowser, state + " notification came from the correct browser");
   },
 
-  onSecurityChange: function (aBrowser, aWebProgress, aRequest, aState) {
+  onSecurityChange: function(aBrowser, aWebProgress, aRequest, aState) {
     var state = "onSecurityChange";
     info("AllProgress: " + state + " 0x" + aState.toString(16));
     ok(aBrowser == gTestBrowser, state + " notification came from the correct browser");

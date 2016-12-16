@@ -76,6 +76,19 @@ public:
   bool mEngineIsRunning;
 };
 
+class InputObserver :  public webrtc::ViEInputObserver
+{
+public:
+  explicit InputObserver(CamerasParent* aParent)
+    : mParent(aParent) {};
+  virtual void DeviceChange();
+
+  friend CamerasParent;
+
+private:
+  RefPtr<CamerasParent> mParent;
+};
+
 class CamerasParent :  public PCamerasParent,
                        public nsIObserver
 {
@@ -86,17 +99,23 @@ public:
   static already_AddRefed<CamerasParent> Create();
 
   // Messages received form the child. These run on the IPC/PBackground thread.
-  virtual bool RecvAllocateCaptureDevice(const int&, const nsCString&, const nsCString&) override;
-  virtual bool RecvReleaseCaptureDevice(const int&, const int &) override;
-  virtual bool RecvNumberOfCaptureDevices(const int&) override;
-  virtual bool RecvNumberOfCapabilities(const int&, const nsCString&) override;
-  virtual bool RecvGetCaptureCapability(const int&, const nsCString&, const int&) override;
-  virtual bool RecvGetCaptureDevice(const int&, const int&) override;
-  virtual bool RecvStartCapture(const int&, const int&, const CaptureCapability&) override;
-  virtual bool RecvStopCapture(const int&, const int&) override;
-  virtual bool RecvReleaseFrame(mozilla::ipc::Shmem&&) override;
-  virtual bool RecvAllDone() override;
+  virtual mozilla::ipc::IPCResult RecvAllocateCaptureDevice(const CaptureEngine&, const nsCString&,
+                                                            const nsCString&) override;
+  virtual mozilla::ipc::IPCResult RecvReleaseCaptureDevice(const CaptureEngine&,
+                                                           const int&) override;
+  virtual mozilla::ipc::IPCResult RecvNumberOfCaptureDevices(const CaptureEngine&) override;
+  virtual mozilla::ipc::IPCResult RecvNumberOfCapabilities(const CaptureEngine&,
+                                                           const nsCString&) override;
+  virtual mozilla::ipc::IPCResult RecvGetCaptureCapability(const CaptureEngine&, const nsCString&,
+                                                           const int&) override;
+  virtual mozilla::ipc::IPCResult RecvGetCaptureDevice(const CaptureEngine&, const int&) override;
+  virtual mozilla::ipc::IPCResult RecvStartCapture(const CaptureEngine&, const int&,
+                                                   const CaptureCapability&) override;
+  virtual mozilla::ipc::IPCResult RecvStopCapture(const CaptureEngine&, const int&) override;
+  virtual mozilla::ipc::IPCResult RecvReleaseFrame(mozilla::ipc::Shmem&&) override;
+  virtual mozilla::ipc::IPCResult RecvAllDone() override;
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
+  virtual mozilla::ipc::IPCResult RecvEnsureInitialized(const CaptureEngine&) override;
 
   nsIThread* GetBackgroundThread() { return mPBackgroundThread; };
   bool IsShuttingDown() { return !mChildIsAlive
@@ -121,8 +140,8 @@ protected:
   virtual ~CamerasParent();
 
   // We use these helpers for shutdown and for the respective IPC commands.
-  void StopCapture(const int& aCapEngine, const int& capnum);
-  int ReleaseCaptureDevice(const int& aCapEngine, const int& capnum);
+  void StopCapture(const CaptureEngine& aCapEngine, const int& capnum);
+  int ReleaseCaptureDevice(const CaptureEngine& aCapEngine, const int& capnum);
 
   bool SetupEngine(CaptureEngine aCapEngine);
   bool EnsureInitialized(int aEngine);
@@ -153,6 +172,7 @@ protected:
   // Above 2 are PBackground only, but this is potentially
   // read cross-thread.
   mozilla::Atomic<bool> mWebRTCAlive;
+  nsTArray<InputObserver*> mObservers;
 };
 
 PCamerasParent* CreateCamerasParent();

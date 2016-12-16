@@ -75,8 +75,6 @@ struct SurfaceMemoryCounter
   { }
 
   const SurfaceKey& Key() const { return mKey; }
-  Maybe<gfx::IntSize>& SubframeSize() { return mSubframeSize; }
-  const Maybe<gfx::IntSize>& SubframeSize() const { return mSubframeSize; }
   MemoryCounter& Values() { return mValues; }
   const MemoryCounter& Values() const { return mValues; }
   SurfaceMemoryCounterType Type() const { return mType; }
@@ -84,7 +82,6 @@ struct SurfaceMemoryCounter
 
 private:
   const SurfaceKey mKey;
-  Maybe<gfx::IntSize> mSubframeSize;
   MemoryCounter mValues;
   const SurfaceMemoryCounterType mType;
   const bool mIsLocked;
@@ -307,6 +304,8 @@ protected:
 
   virtual nsresult StartAnimation() = 0;
   virtual nsresult StopAnimation() = 0;
+
+  void SendOnUnlockedDraw(uint32_t aFlags);
 
   // Member data shared by all implementations of this abstract class
   RefPtr<ProgressTracker>     mProgressTracker;

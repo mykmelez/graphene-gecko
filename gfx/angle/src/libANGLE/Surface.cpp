@@ -17,6 +17,7 @@
 #include "libANGLE/Config.h"
 #include "libANGLE/Framebuffer.h"
 #include "libANGLE/Texture.h"
+#include "libANGLE/formatutils.h"
 #include "libANGLE/renderer/EGLImplFactory.h"
 
 namespace egl
@@ -44,7 +45,9 @@ Surface::Surface(EGLint surfaceType, const egl::Config *config, const AttributeM
       mRenderBuffer(EGL_BACK_BUFFER),
       mSwapBehavior(EGL_NONE),
       mOrientation(0),
-      mTexture()
+      mTexture(),
+      mBackFormat(config->renderTargetFormat),
+      mDSFormat(config->depthStencilFormat)
 {
     mPostSubBufferRequested = (attributes.get(EGL_POST_SUB_BUFFER_SUPPORTED_NV, EGL_FALSE) == EGL_TRUE);
     mFlexibleSurfaceCompatibilityRequested =
@@ -135,6 +138,11 @@ Error Surface::swap()
     return mImplementation->swap();
 }
 
+Error Surface::swapWithDamage(EGLint *rects, EGLint n_rects)
+{
+    return mImplementation->swapWithDamage(rects, n_rects);
+}
+
 Error Surface::postSubBuffer(EGLint x, EGLint y, EGLint width, EGLint height)
 {
     return mImplementation->postSubBuffer(x, y, width, height);
@@ -203,19 +211,23 @@ EGLint Surface::getHeight() const
 Error Surface::bindTexImage(gl::Texture *texture, EGLint buffer)
 {
     ASSERT(!mTexture.get());
+    ANGLE_TRY(mImplementation->bindTexImage(texture, buffer));
 
     texture->bindTexImageFromSurface(this);
     mTexture.set(texture);
-    return mImplementation->bindTexImage(texture, buffer);
+
+    return Error(EGL_SUCCESS);
 }
 
 Error Surface::releaseTexImage(EGLint buffer)
 {
+    ANGLE_TRY(mImplementation->releaseTexImage(buffer));
+
     ASSERT(mTexture.get());
     mTexture->releaseTexImageFromSurface();
     mTexture.set(nullptr);
 
-    return mImplementation->releaseTexImage(buffer);
+    return Error(EGL_SUCCESS);
 }
 
 void Surface::releaseTexImageFromTexture()
@@ -229,10 +241,10 @@ gl::Extents Surface::getAttachmentSize(const gl::FramebufferAttachment::Target &
     return gl::Extents(getWidth(), getHeight(), 1);
 }
 
-GLenum Surface::getAttachmentInternalFormat(const gl::FramebufferAttachment::Target &target) const
+const gl::Format &Surface::getAttachmentFormat(
+    const gl::FramebufferAttachment::Target &target) const
 {
-    const egl::Config *config = getConfig();
-    return (target.binding() == GL_BACK ? config->renderTargetFormat : config->depthStencilFormat);
+    return (target.binding() == GL_BACK ? mBackFormat : mDSFormat);
 }
 
 GLsizei Surface::getAttachmentSamples(const gl::FramebufferAttachment::Target &target) const
@@ -295,12 +307,13 @@ PbufferSurface::PbufferSurface(rx::EGLImplFactory *implFactory,
 
 PbufferSurface::PbufferSurface(rx::EGLImplFactory *implFactory,
                                const Config *config,
-                               EGLClientBuffer shareHandle,
+                               EGLenum buftype,
+                               EGLClientBuffer clientBuffer,
                                const AttributeMap &attribs)
     : Surface(EGL_PBUFFER_BIT, config, attribs)
 {
     mImplementation =
-        implFactory->createPbufferFromClientBuffer(mState, config, shareHandle, attribs);
+        implFactory->createPbufferFromClientBuffer(mState, config, buftype, clientBuffer, attribs);
 }
 
 PbufferSurface::~PbufferSurface()

@@ -66,7 +66,7 @@
       gFindBar.onFindCommand();
 
       yield testFind();
-      yield testFindAgain();
+      yield* testFindAgain();
       yield testCaseSensitivity();
       yield testHighlight();
     }
@@ -111,7 +111,7 @@
       let promise = once(gFindBar, "find");
 
       // Put some text in the find box.
-      let event = document.createEvent("KeyEvents");
+      let event = document.createEvent("KeyboardEvent");
       event.initKeyEvent("keypress", true, true, null, false, false,
                          false, false, 0, query.charCodeAt(0));
       gFindBar._findField.inputField.dispatchEvent(event);
@@ -122,7 +122,7 @@
       yield checkSelection();
     }
 
-    function testFindAgain() {
+    function* testFindAgain() {
       info("Testing repeating normal find.");
       let promise = once(gFindBar, "findagain");
 
@@ -173,7 +173,7 @@
     }
   ]]></script>
 
-  <browser type="content-primary" flex="1" id="content" src="about:blank"/>
-  <browser type="content-primary" flex="1" id="content-remote" remote="true" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content-remote" remote="true" src="about:blank"/>
   <findbar id="FindToolbar" browserid="content"/>
 </window>

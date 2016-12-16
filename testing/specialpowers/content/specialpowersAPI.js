@@ -503,6 +503,13 @@ SpecialPowersAPI.prototype = {
         listeners.push({ name: name, listener: listener });
       },
 
+      promiseOneMessage: name => new Promise(resolve => {
+        chromeScript.addMessageListener(name, function listener(message) {
+          chromeScript.removeMessageListener(name, listener);
+          resolve(message);
+        });
+      }),
+
       removeMessageListener: (name, listener) => {
         listeners = listeners.filter(
           o => (o.name != name || o.listener != listener)
@@ -620,8 +627,10 @@ SpecialPowersAPI.prototype = {
    * Try will tell what needs to be fixed up.
    */
   getFullComponents: function() {
-    return typeof this.Components.classes == 'object' ? this.Components
-                                                      : Components;
+    if (this.Components && typeof this.Components.classes == 'object') {
+      return this.Components;
+    }
+    return Components;
   },
 
   /*
@@ -630,7 +639,8 @@ SpecialPowersAPI.prototype = {
    * to untrusted content, and wrapping it confuses QI and identity checks.
    */
   get Cc() { return wrapPrivileged(this.getFullComponents().classes); },
-  get Ci() { return this.Components.interfaces; },
+  get Ci() { return this.Components ? this.Components.interfaces
+                                    : Components.interfaces; },
   get Cu() { return wrapPrivileged(this.getFullComponents().utils); },
   get Cr() { return wrapPrivileged(this.Components.results); },
 
@@ -1162,50 +1172,6 @@ SpecialPowersAPI.prototype = {
     }
   },
 
-  // Disables the app install prompt for the duration of this test. There is
-  // no need to re-enable the prompt at the end of the test.
-  //
-  // The provided callback is invoked once the prompt is disabled.
-  autoConfirmAppInstall: function(cb) {
-    this.pushPrefEnv({set: [['dom.mozApps.auto_confirm_install', true]]}, cb);
-  },
-
-  autoConfirmAppUninstall: function(cb) {
-    this.pushPrefEnv({set: [['dom.mozApps.auto_confirm_uninstall', true]]}, cb);
-  },
-
-  // Allow tests to install addons without signing the package, for convenience.
-  allowUnsignedAddons: function() {
-    this._sendSyncMessage("SPWebAppService", {
-      op: "allow-unsigned-addons"
-    });
-  },
-
-  // Turn on debug information from UserCustomizations.jsm
-  debugUserCustomizations: function(value) {
-    this._sendSyncMessage("SPWebAppService", {
-      op: "debug-customizations",
-      value: value
-    });
-  },
-
-  // Force-registering an app in the registry
-  injectApp: function(aAppId, aApp) {
-    this._sendSyncMessage("SPWebAppService", {
-      op: "inject-app",
-      appId: aAppId,
-      app: aApp
-    });
-  },
-
-  // Removing app from the registry
-  rejectApp: function(aAppId) {
-    this._sendSyncMessage("SPWebAppService", {
-      op: "reject-app",
-      appId: aAppId
-    });
-  },
-
   _proxiedObservers: {
     "specialpowers-http-notify-request": function(aMessage) {
       let uri = aMessage.json.uri;
@@ -1419,6 +1385,13 @@ SpecialPowersAPI.prototype = {
     this._getMUDV(window).textZoom = zoom;
   },
 
+  getOverrideDPPX: function(window) {
+    return this._getMUDV(window).overrideDPPX;
+  },
+  setOverrideDPPX: function(window, dppx) {
+    this._getMUDV(window).overrideDPPX = dppx;
+  },
+
   emulateMedium: function(window, mediaType) {
     this._getMUDV(window).emulateMedium(mediaType);
   },
@@ -1576,6 +1549,14 @@ SpecialPowersAPI.prototype = {
     Cc["@mozilla.org/eventlistenerservice;1"].
       getService(Ci.nsIEventListenerService).
       removeSystemEventListener(target, type, listener, useCapture);
+  },
+
+  // helper method to check if the event is consumed by either default group's
+  // event listener or system group's event listener.
+  defaultPreventedInAnyGroup: function(event) {
+    // FYI: Event.defaultPrevented returns false in content context if the
+    //      event is consumed only by system group's event listeners.
+    return event.defaultPrevented;
   },
 
   getDOMRequestService: function() {
@@ -1793,16 +1774,6 @@ SpecialPowersAPI.prototype = {
       // It's an URL.
       let uri = Services.io.newURI(arg, null, null);
       principal = secMan.createCodebasePrincipal(uri, {});
-    } else if (arg.manifestURL) {
-      // It's a thing representing an app.
-      let appsSvc = Cc["@mozilla.org/AppsService;1"]
-                      .getService(Ci.nsIAppsService)
-      let app = appsSvc.getAppByManifestURL(arg.manifestURL);
-      if (!app) {
-        throw "No app for this manifest!";
-      }
-
-      principal = app.principal;
     } else if (arg.nodePrincipal) {
       // It's a document.
       // In some tests the arg is a wrapped DOM element, so we unwrap it first.
@@ -1919,11 +1890,28 @@ SpecialPowersAPI.prototype = {
     return this._sendSyncMessage('SPCleanUpSTSData', {origin: origin, flags: flags || 0});
   },
 
-  loadExtension: function(id, ext, handler) {
-    if (!id) {
-      let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
-      id = uuidGenerator.generateUUID().number;
+  _nextExtensionID: 0,
+  _extensionListeners: null,
+
+  loadExtension: function(ext, handler) {
+    if (this._extensionListeners == null) {
+      this._extensionListeners = new Set();
+
+      this._addMessageListener("SPExtensionMessage", msg => {
+        for (let listener of this._extensionListeners) {
+          try {
+            listener(msg);
+          } catch (e) {
+            Cu.reportError(e);
+          }
+        }
+      });
     }
+
+    // Note, this is not the addon is as used by the AddonManager etc,
+    // this is just an identifier used for specialpowers messaging
+    // between this content process and the chrome process.
+    let id = this._nextExtensionID++;
 
     let resolveStartup, resolveUnload, rejectStartup;
     let startupPromise = new Promise((resolve, reject) => {
@@ -1933,7 +1921,7 @@ SpecialPowersAPI.prototype = {
     let unloadPromise = new Promise(resolve => { resolveUnload = resolve; });
 
     startupPromise.catch(() => {
-      this._removeMessageListener("SPExtensionMessage", listener);
+      this._extensionListeners.delete(listener);
     });
 
     handler = Cu.waiveXrays(handler);
@@ -1942,8 +1930,6 @@ SpecialPowersAPI.prototype = {
     let sp = this;
     let state = "uninitialized";
     let extension = {
-      id,
-
       get state() { return state; },
 
       startup() {
@@ -1970,11 +1956,13 @@ SpecialPowersAPI.prototype = {
         if (msg.data.type == "extensionStarted") {
           state = "running";
           resolveStartup();
+        } else if (msg.data.type == "extensionSetId") {
+          extension.id = msg.data.args[0];
         } else if (msg.data.type == "extensionFailed") {
           state = "failed";
           rejectStartup("startup failed");
         } else if (msg.data.type == "extensionUnloaded") {
-          this._removeMessageListener("SPExtensionMessage", listener);
+          this._extensionListeners.delete(listener);
           state = "unloaded";
           resolveUnload();
         } else if (msg.data.type in handler) {
@@ -1985,7 +1973,7 @@ SpecialPowersAPI.prototype = {
       }
     };
 
-    this._addMessageListener("SPExtensionMessage", listener);
+    this._extensionListeners.add(listener);
     return extension;
   },
 
@@ -2086,9 +2074,14 @@ SpecialPowersAPI.prototype = {
                                 {nativeAnonymousChildList, subtree});
   },
 
-  clearAppPrivateData: function(appId, browserOnly) {
-    return this._sendAsyncMessage('SPClearAppPrivateData',
-                                  { appId: appId, browserOnly: browserOnly });
+  doCommand(window, cmd) {
+    return this._getDocShell(window).doCommand(cmd);
+  },
+
+  setCommandNode(window, node) {
+    return this._getDocShell(window).contentViewer
+               .QueryInterface(Ci.nsIContentViewerEdit)
+               .setCommandNode(node);
   },
 };
 

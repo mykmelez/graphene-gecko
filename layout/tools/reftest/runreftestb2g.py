@@ -21,8 +21,9 @@ from remotereftest import RemoteReftestResolver, ReftestServer
 from runreftest import RefTest
 import reftestcommandline
 
+from marionette_harness import Marionette
 from mozdevice import DeviceManagerADB, DMError
-from marionette import Marionette
+
 
 class ProfileConfigParser(ConfigParser.RawConfigParser):
     """Subclass of RawConfigParser that outputs .ini files in the exact
@@ -254,16 +255,11 @@ class B2GRemoteReftest(RefTest):
         # Make sure we disable system updates
         prefs["app.update.enabled"] = False
         prefs["app.update.url"] = ""
-        prefs["app.update.url.override"] = ""
         # Disable webapp updates
         prefs["webapps.update.enabled"] = False
         # Disable tiles also
         prefs["browser.newtabpage.directory.source"] = ""
         prefs["browser.newtabpage.directory.ping"] = ""
-
-        if options.oop:
-            prefs['browser.tabs.remote.autostart'] = True
-            prefs['reftest.browser.iframe.enabled'] = True
 
         # Set the extra prefs.
         profile.set_preferences(prefs)
@@ -325,7 +321,10 @@ class B2GRemoteReftest(RefTest):
         return status
 
 
-def run_remote_reftests(parser, options):
+def run_test_harness(parser, options):
+    if options.mulet:
+        return run_mulet_reftests(parser, options)
+
     auto = B2GRemoteAutomation(None, "fennec")
 
     # create our Marionette instance
@@ -420,23 +419,7 @@ def run_remote_reftests(parser, options):
     return retVal
 
 
-def run(**kwargs):
-    # Mach gives us kwargs; this is a way to turn them back into an
-    # options object
-    parser = reftestcommandline.B2GArgumentParser()
-    parser.set_defaults(**kwargs)
-    options = parser.parse_args(kwargs["tests"])
-    return run_remote_reftests(parser, options)
-
-
-def main(args=sys.argv[1:]):
-    parser = reftestcommandline.B2GArgumentParser()
-    options = parser.parse_args(args)
-
-    if options.mulet:
-        return run_mulet_reftests(parser, options)
-    return run_remote_reftests(parser, options)
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = reftestcommandline.B2GArgumentParser()
+    options = parser.parse_args()
+    sys.exit(run_test_harness(parser, options))

@@ -14,6 +14,8 @@
 #include "mozilla/Move.h"
 #include "mozilla/TypeTraits.h"
 
+#include <type_traits>
+
 #include "jspubtd.h"
 
 #include "js/GCAnnotations.h"
@@ -21,6 +23,7 @@
 #include "js/GCPolicyAPI.h"
 #include "js/HeapAPI.h"
 #include "js/TypeDecls.h"
+#include "js/UniquePtr.h"
 #include "js/Utility.h"
 
 /*
@@ -122,6 +125,14 @@ class MutableHandleBase {};
 template <typename T>
 class HeapBase {};
 
+// Cannot use FOR_EACH_HEAP_ABLE_GC_POINTER_TYPE, as this would import too many macros into scope
+template <typename T> struct IsHeapConstructibleType    { static constexpr bool value = false; };
+#define DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE(T) \
+    template <> struct IsHeapConstructibleType<T> { static constexpr bool value = true; };
+FOR_EACH_PUBLIC_GC_POINTER_TYPE(DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE)
+FOR_EACH_PUBLIC_TAGGED_GC_POINTER_TYPE(DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE)
+#undef DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE
+
 template <typename T>
 class PersistentRootedBase {};
 
@@ -133,14 +144,10 @@ template<typename T>
 struct PersistentRootedMarker;
 } /* namespace gc */
 
-#define DECLARE_POINTER_COMPARISON_OPS(T)                                                \
-    bool operator==(const T& other) const { return get() == other; }                              \
-    bool operator!=(const T& other) const { return get() != other; }
-
 // Important: Return a reference so passing a Rooted<T>, etc. to
 // something that takes a |const T&| is not a GC hazard.
-#define DECLARE_POINTER_CONSTREF_OPS(T)                                                  \
-    operator const T&() const { return get(); }                                                  \
+#define DECLARE_POINTER_CONSTREF_OPS(T)                                                           \
+    operator const T&() const { return get(); }                                                   \
     const T& operator->() const { return get(); }
 
 // Assignment operators on a base class are hidden by the implicitly defined
@@ -156,7 +163,7 @@ struct PersistentRootedMarker;
         return *this;                                                                             \
     }                                                                                             \
 
-#define DELETE_ASSIGNMENT_OPS(Wrapper, T)                                                 \
+#define DELETE_ASSIGNMENT_OPS(Wrapper, T)                                                         \
     template <typename S> Wrapper<T>& operator=(S) = delete;                                      \
     Wrapper<T>& operator=(const Wrapper<T>&) = delete;
 
@@ -213,18 +220,23 @@ AssertGCThingIsNotAnObjectSubclass(js::gc::Cell* cell) {}
  * Heap<T> objects should only be used on the heap. GC references stored on the
  * C/C++ stack must use Rooted/Handle/MutableHandle instead.
  *
- * Type T must be one of: JS::Value, jsid, JSObject*, JSString*, JSScript*
+ * Type T must be a public GC pointer type.
  */
 template <typename T>
 class Heap : public js::HeapBase<T>
 {
+    // Please note: this can actually also be used by nsXBLMaybeCompiled<T>, for legacy reasons.
+    static_assert(js::IsHeapConstructibleType<T>::value,
+                  "Type T must be a public GC pointer type");
   public:
+    using ElementType = T;
+
     Heap() {
         static_assert(sizeof(T) == sizeof(Heap<T>),
                       "Heap<T> must be binary compatible with T.");
         init(GCPolicy<T>::initial());
     }
-    explicit Heap(T p) { init(p); }
+    explicit Heap(const T& p) { init(p); }
 
     /*
      * For Heap, move semantics are equivalent to copy semantics. In C++, a
@@ -240,29 +252,36 @@ class Heap : public js::HeapBase<T>
 
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_POINTER_ASSIGN_OPS(Heap, T);
-    DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
+
+    const T* address() const { return &ptr; }
+
+    void exposeToActiveJS() const {
+        js::BarrierMethods<T>::exposeToJS(ptr);
+    }
+    const T& get() const {
+        exposeToActiveJS();
+        return ptr;
+    }
+    const T& unbarrieredGet() const {
+        return ptr;
+    }
 
     T* unsafeGet() { return &ptr; }
 
-    /*
-     * Set the pointer to a value which will cause a crash if it is
-     * dereferenced.
-     */
-    void setToCrashOnTouch() {
-        ptr = reinterpret_cast<T>(crashOnTouchPointer);
+    explicit operator bool() const {
+        return bool(js::BarrierMethods<T>::asGCThingOrNull(ptr));
     }
-
-    bool isSetToCrashOnTouch() {
-        return ptr == crashOnTouchPointer;
+    explicit operator bool() {
+        return bool(js::BarrierMethods<T>::asGCThingOrNull(ptr));
     }
 
   private:
-    void init(T newPtr) {
+    void init(const T& newPtr) {
         ptr = newPtr;
         post(GCPolicy<T>::initial(), ptr);
     }
 
-    void set(T newPtr) {
+    void set(const T& newPtr) {
         T tmp = ptr;
         ptr = newPtr;
         post(tmp, ptr);
@@ -272,12 +291,51 @@ class Heap : public js::HeapBase<T>
         js::BarrierMethods<T>::postBarrier(&ptr, prev, next);
     }
 
-    enum {
-        crashOnTouchPointer = 1
-    };
-
     T ptr;
 };
+
+static MOZ_ALWAYS_INLINE bool
+ObjectIsTenured(JSObject* obj)
+{
+    return !js::gc::IsInsideNursery(reinterpret_cast<js::gc::Cell*>(obj));
+}
+
+static MOZ_ALWAYS_INLINE bool
+ObjectIsTenured(const Heap<JSObject*>& obj)
+{
+    return ObjectIsTenured(obj.unbarrieredGet());
+}
+
+static MOZ_ALWAYS_INLINE bool
+ObjectIsMarkedGray(JSObject* obj)
+{
+    /*
+     * GC things residing in the nursery cannot be gray: they have no mark bits.
+     * All live objects in the nursery are moved to tenured at the beginning of
+     * each GC slice, so the gray marker never sees nursery things.
+     */
+    if (js::gc::IsInsideNursery(reinterpret_cast<js::gc::Cell*>(obj)))
+        return false;
+    return js::gc::detail::CellIsMarkedGray(reinterpret_cast<js::gc::Cell*>(obj));
+}
+
+static MOZ_ALWAYS_INLINE bool
+ObjectIsMarkedGray(const JS::Heap<JSObject*>& obj)
+{
+    return ObjectIsMarkedGray(obj.unbarrieredGet());
+}
+
+static MOZ_ALWAYS_INLINE bool
+ScriptIsMarkedGray(JSScript* script)
+{
+    return js::gc::detail::CellIsMarkedGray(reinterpret_cast<js::gc::Cell*>(script));
+}
+
+static MOZ_ALWAYS_INLINE bool
+ScriptIsMarkedGray(const Heap<JSScript*>& script)
+{
+    return ScriptIsMarkedGray(script.unbarrieredGet());
+}
 
 /**
  * The TenuredHeap<T> class is similar to the Heap<T> class above in that it
@@ -312,15 +370,14 @@ template <typename T>
 class TenuredHeap : public js::HeapBase<T>
 {
   public:
+    using ElementType = T;
+
     TenuredHeap() : bits(0) {
         static_assert(sizeof(T) == sizeof(TenuredHeap<T>),
                       "TenuredHeap<T> must be binary compatible with T.");
     }
     explicit TenuredHeap(T p) : bits(0) { setPtr(p); }
     explicit TenuredHeap(const TenuredHeap<T>& p) : bits(0) { setPtr(p.getPtr()); }
-
-    bool operator==(const TenuredHeap<T>& other) { return bits == other.bits; }
-    bool operator!=(const TenuredHeap<T>& other) { return bits != other.bits; }
 
     void setPtr(T newPtr) {
         MOZ_ASSERT((reinterpret_cast<uintptr_t>(newPtr) & flagsMask) == 0);
@@ -344,11 +401,26 @@ class TenuredHeap : public js::HeapBase<T>
         return (bits & flag) != 0;
     }
 
-    T getPtr() const { return reinterpret_cast<T>(bits & ~flagsMask); }
+    T unbarrieredGetPtr() const { return reinterpret_cast<T>(bits & ~flagsMask); }
     uintptr_t getFlags() const { return bits & flagsMask; }
+
+    void exposeToActiveJS() const {
+        js::BarrierMethods<T>::exposeToJS(unbarrieredGetPtr());
+    }
+    T getPtr() const {
+        exposeToActiveJS();
+        return unbarrieredGetPtr();
+    }
 
     operator T() const { return getPtr(); }
     T operator->() const { return getPtr(); }
+
+    explicit operator bool() const {
+        return bool(js::BarrierMethods<T>::asGCThingOrNull(unbarrieredGetPtr()));
+    }
+    explicit operator bool() {
+        return bool(js::BarrierMethods<T>::asGCThingOrNull(unbarrieredGetPtr()));
+    }
 
     TenuredHeap<T>& operator=(T p) {
         setPtr(p);
@@ -383,6 +455,8 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T>
     friend class JS::MutableHandle<T>;
 
   public:
+    using ElementType = T;
+
     /* Creates a handle from a handle of a type convertible to T. */
     template <typename S>
     MOZ_IMPLICIT Handle(Handle<S> handle,
@@ -443,7 +517,6 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T>
     MOZ_IMPLICIT Handle(MutableHandle<S>& root,
                         typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
 
-    DECLARE_POINTER_COMPARISON_OPS(T);
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_NONPOINTER_ACCESSOR_METHODS(*ptr);
 
@@ -470,6 +543,8 @@ template <typename T>
 class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T>
 {
   public:
+    using ElementType = T;
+
     inline MOZ_IMPLICIT MutableHandle(Rooted<T>* root);
     inline MOZ_IMPLICIT MutableHandle(PersistentRooted<T>* root);
 
@@ -478,7 +553,7 @@ class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T>
     MutableHandle(decltype(nullptr)) = delete;
 
   public:
-    void set(T v) {
+    void set(const T& v) {
         *ptr = v;
     }
 
@@ -514,11 +589,20 @@ template <typename T>
 struct BarrierMethods<T*>
 {
     static T* initial() { return nullptr; }
+    static gc::Cell* asGCThingOrNull(T* v) {
+        if (!v)
+            return nullptr;
+        MOZ_ASSERT(uintptr_t(v) > 32);
+        return reinterpret_cast<gc::Cell*>(v);
+    }
     static void postBarrier(T** vp, T* prev, T* next) {
         if (next)
             JS::AssertGCThingIsNotAnObjectSubclass(reinterpret_cast<js::gc::Cell*>(next));
     }
-    static void relocate(T** vp) {}
+    static void exposeToJS(T* t) {
+        if (t)
+            js::gc::ExposeGCThingToActiveJS(JS::GCCellPtr(t));
+    }
 };
 
 template <>
@@ -534,16 +618,30 @@ struct BarrierMethods<JSObject*>
     static void postBarrier(JSObject** vp, JSObject* prev, JSObject* next) {
         JS::HeapObjectPostBarrier(vp, prev, next);
     }
+    static void exposeToJS(JSObject* obj) {
+        if (obj)
+            JS::ExposeObjectToActiveJS(obj);
+    }
 };
 
 template <>
 struct BarrierMethods<JSFunction*>
 {
     static JSFunction* initial() { return nullptr; }
+    static gc::Cell* asGCThingOrNull(JSFunction* v) {
+        if (!v)
+            return nullptr;
+        MOZ_ASSERT(uintptr_t(v) > 32);
+        return reinterpret_cast<gc::Cell*>(v);
+    }
     static void postBarrier(JSFunction** vp, JSFunction* prev, JSFunction* next) {
         JS::HeapObjectPostBarrier(reinterpret_cast<JSObject**>(vp),
                                   reinterpret_cast<JSObject*>(prev),
                                   reinterpret_cast<JSObject*>(next));
+    }
+    static void exposeToJS(JSFunction* fun) {
+        if (fun)
+            JS::ExposeObjectToActiveJS(reinterpret_cast<JSObject*>(fun));
     }
 };
 
@@ -580,7 +678,9 @@ struct JS_PUBLIC_API(MovableCellHasher<JS::Heap<T>>)
     static bool hasHash(const Lookup& l) { return MovableCellHasher<T>::hasHash(l); }
     static bool ensureHash(const Lookup& l) { return MovableCellHasher<T>::ensureHash(l); }
     static HashNumber hash(const Lookup& l) { return MovableCellHasher<T>::hash(l); }
-    static bool match(const Key& k, const Lookup& l) { return MovableCellHasher<T>::match(k, l); }
+    static bool match(const Key& k, const Lookup& l) {
+        return MovableCellHasher<T>::match(k.unbarrieredGet(), l);
+    }
     static void rekey(Key& k, const Key& newKey) { k.unsafeSet(newKey); }
 };
 
@@ -660,22 +760,22 @@ class MOZ_RAII Rooted : public js::RootedBase<T>
         *stack = reinterpret_cast<Rooted<void*>*>(this);
     }
 
+    inline js::RootedListHeads& rootLists(JS::RootingContext* cx) {
+        return rootLists(static_cast<js::ContextFriendFields*>(cx));
+    }
     inline js::RootedListHeads& rootLists(js::ContextFriendFields* cx) {
-        return rootLists(reinterpret_cast<JSContext*>(cx));
+        if (JS::Zone* zone = cx->zone_)
+            return JS::shadow::Zone::asShadowZone(zone)->stackRoots_;
+        MOZ_ASSERT(cx->isJSContext);
+        return cx->roots.stackRoots_;
     }
     inline js::RootedListHeads& rootLists(JSContext* cx) {
-        if (JS::Zone* zone = js::GetContextZone(cx))
-            return JS::shadow::Zone::asShadowZone(zone)->stackRoots_;
-        return rootLists(js::GetRuntime(cx));
-    }
-    inline js::RootedListHeads& rootLists(js::PerThreadDataFriendFields* pt) {
-        return pt->roots.stackRoots_;
-    }
-    inline js::RootedListHeads& rootLists(JSRuntime* rt) {
-        return js::PerThreadDataFriendFields::getMainThread(rt)->roots.stackRoots_;
+        return rootLists(js::ContextFriendFields::get(cx));
     }
 
   public:
+    using ElementType = T;
+
     template <typename RootingContext>
     explicit Rooted(const RootingContext& cx)
       : ptr(GCPolicy<T>::initial())
@@ -701,11 +801,10 @@ class MOZ_RAII Rooted : public js::RootedBase<T>
      * This method is public for Rooted so that Codegen.py can use a Rooted
      * interchangeably with a MutableHandleValue.
      */
-    void set(T value) {
+    void set(const T& value) {
         ptr = value;
     }
 
-    DECLARE_POINTER_COMPARISON_OPS(T);
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_POINTER_ASSIGN_OPS(Rooted, T);
     DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
@@ -782,13 +881,14 @@ template <typename T>
 class MOZ_RAII FakeRooted : public RootedBase<T>
 {
   public:
+    using ElementType = T;
+
     template <typename CX>
     explicit FakeRooted(CX* cx) : ptr(JS::GCPolicy<T>::initial()) {}
 
     template <typename CX>
     FakeRooted(CX* cx, T initial) : ptr(initial) {}
 
-    DECLARE_POINTER_COMPARISON_OPS(T);
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_POINTER_ASSIGN_OPS(FakeRooted, T);
     DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
@@ -809,6 +909,8 @@ template <typename T>
 class FakeMutableHandle : public js::MutableHandleBase<T>
 {
   public:
+    using ElementType = T;
+
     MOZ_IMPLICIT FakeMutableHandle(T* t) {
         ptr = t;
     }
@@ -817,7 +919,7 @@ class FakeMutableHandle : public js::MutableHandleBase<T>
         ptr = root->address();
     }
 
-    void set(T v) {
+    void set(const T& v) {
         *ptr = v;
     }
 
@@ -874,7 +976,7 @@ template <typename T> class MaybeRooted<T, CanGC>
 template <typename T> class MaybeRooted<T, NoGC>
 {
   public:
-    typedef T HandleType;
+    typedef const T& HandleType;
     typedef FakeRooted<T> RootType;
     typedef FakeMutableHandle<T> MutableHandleType;
 
@@ -987,16 +1089,20 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
         roots.heapRoots_[kind].insertBack(reinterpret_cast<JS::PersistentRooted<void*>*>(this));
     }
 
-    js::RootLists& rootLists(js::PerThreadDataFriendFields* pt) { return pt->roots; }
-    js::RootLists& rootLists(JSRuntime* rt) {
-        return js::PerThreadDataFriendFields::getMainThread(rt)->roots;
+    js::RootLists& rootLists(JSContext* cx) {
+        return rootLists(JS::RootingContext::get(cx));
     }
-    js::RootLists& rootLists(JSContext* cx) { return rootLists(js::GetRuntime(cx)); }
-    js::RootLists& rootLists(js::ContextFriendFields* cx) {
-        return rootLists(reinterpret_cast<JSContext*>(cx));
+    js::RootLists& rootLists(JS::RootingContext* cx) {
+        MOZ_ASSERT(cx->isJSContext);
+        return cx->roots;
     }
 
+    // Disallow ExclusiveContext*.
+    js::RootLists& rootLists(js::ContextFriendFields* cx) = delete;
+
   public:
+    using ElementType = T;
+
     PersistentRooted() : ptr(GCPolicy<T>::initial()) {}
 
     template <typename RootingContext>
@@ -1050,7 +1156,6 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
         }
     }
 
-    DECLARE_POINTER_COMPARISON_OPS(T);
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_POINTER_ASSIGN_OPS(PersistentRooted, T);
     DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
@@ -1087,6 +1192,8 @@ class JS_PUBLIC_API(ObjectPtr)
     Heap<JSObject*> value;
 
   public:
+    using ElementType = JSObject*;
+
     ObjectPtr() : value(nullptr) {}
 
     explicit ObjectPtr(JSObject* obj) : value(obj) {}
@@ -1095,10 +1202,12 @@ class JS_PUBLIC_API(ObjectPtr)
     ~ObjectPtr() { MOZ_ASSERT(!value); }
 
     void finalize(JSRuntime* rt);
+    void finalize(JSContext* cx);
 
     void init(JSObject* obj) { value = obj; }
 
     JSObject* get() const { return value; }
+    JSObject* unbarrieredGet() const { return value.unbarrieredGet(); }
 
     void writeBarrierPre(JSContext* cx) {
         IncrementalObjectBarrier(value);
@@ -1117,11 +1226,53 @@ class JS_PUBLIC_API(ObjectPtr)
     JSObject& operator*() const { return *value; }
     JSObject* operator->() const { return value; }
     operator JSObject*() const { return value; }
+
+    explicit operator bool() const { return value.unbarrieredGet(); }
+    explicit operator bool() { return value.unbarrieredGet(); }
 };
 
 } /* namespace JS */
 
 namespace js {
+
+template <typename Outer, typename T, typename D>
+class UniquePtrOperations
+{
+    const UniquePtr<T, D>& uniquePtr() const { return static_cast<const Outer*>(this)->get(); }
+
+  public:
+    explicit operator bool() const { return !!uniquePtr(); }
+};
+
+template <typename Outer, typename T, typename D>
+class MutableUniquePtrOperations : public UniquePtrOperations<Outer, T, D>
+{
+    UniquePtr<T, D>& uniquePtr() { return static_cast<Outer*>(this)->get(); }
+
+  public:
+    MOZ_MUST_USE typename UniquePtr<T, D>::Pointer release() { return uniquePtr().release(); }
+};
+
+template <typename T, typename D>
+class RootedBase<UniquePtr<T, D>>
+  : public MutableUniquePtrOperations<JS::Rooted<UniquePtr<T, D>>, T, D>
+{ };
+
+template <typename T, typename D>
+class MutableHandleBase<UniquePtr<T, D>>
+  : public MutableUniquePtrOperations<JS::MutableHandle<UniquePtr<T, D>>, T, D>
+{ };
+
+template <typename T, typename D>
+class HandleBase<UniquePtr<T, D>>
+  : public UniquePtrOperations<JS::Handle<UniquePtr<T, D>>, T, D>
+{ };
+
+template <typename T, typename D>
+class PersistentRootedBase<UniquePtr<T, D>>
+  : public MutableUniquePtrOperations<JS::PersistentRooted<UniquePtr<T, D>>, T, D>
+{ };
+
 namespace gc {
 
 template <typename T, typename TraceCallbacks>
@@ -1163,6 +1314,177 @@ Swap(JS::TenuredHeap<T>& aX, JS::TenuredHeap<T>& aY)
 }
 
 } /* namespace mozilla */
+
+namespace js {
+namespace detail {
+
+// DefineComparisonOps is a trait which selects which wrapper classes to define
+// operator== and operator!= for. It supplies a getter function to extract the
+// value to compare. This is used to avoid triggering the automatic read
+// barriers where appropriate.
+//
+// If DefineComparisonOps is not specialized for a particular wrapper you may
+// get errors such as 'invalid operands to binary expression' or 'no match for
+// operator==' when trying to compare against instances of the wrapper.
+
+template <typename T>
+struct DefineComparisonOps : mozilla::FalseType {};
+
+template <typename T>
+struct DefineComparisonOps<JS::Heap<T>> : mozilla::TrueType {
+    static const T& get(const JS::Heap<T>& v) { return v.unbarrieredGet(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<JS::TenuredHeap<T>> : mozilla::TrueType {
+    static const T get(const JS::TenuredHeap<T>& v) { return v.unbarrieredGetPtr(); }
+};
+
+template <>
+struct DefineComparisonOps<JS::ObjectPtr> : mozilla::TrueType {
+    static const JSObject* get(const JS::ObjectPtr& v) { return v.unbarrieredGet(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<JS::Rooted<T>> : mozilla::TrueType {
+    static const T& get(const JS::Rooted<T>& v) { return v.get(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<JS::Handle<T>> : mozilla::TrueType {
+    static const T& get(const JS::Handle<T>& v) { return v.get(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<JS::MutableHandle<T>> : mozilla::TrueType {
+    static const T& get(const JS::MutableHandle<T>& v) { return v.get(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<JS::PersistentRooted<T>> : mozilla::TrueType {
+    static const T& get(const JS::PersistentRooted<T>& v) { return v.get(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<js::FakeRooted<T>> : mozilla::TrueType {
+    static const T& get(const js::FakeRooted<T>& v) { return v.get(); }
+};
+
+template <typename T>
+struct DefineComparisonOps<js::FakeMutableHandle<T>> : mozilla::TrueType {
+    static const T& get(const js::FakeMutableHandle<T>& v) { return v.get(); }
+};
+
+} /* namespace detail */
+} /* namespace js */
+
+// Overload operator== and operator!= for all types with the DefineComparisonOps
+// trait using the supplied getter.
+//
+// There are four cases:
+
+// Case 1: comparison between two wrapper objects.
+
+template <typename T, typename U>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           js::detail::DefineComparisonOps<U>::value, bool>::Type
+operator==(const T& a, const U& b) {
+    return js::detail::DefineComparisonOps<T>::get(a) == js::detail::DefineComparisonOps<U>::get(b);
+}
+
+template <typename T, typename U>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           js::detail::DefineComparisonOps<U>::value, bool>::Type
+operator!=(const T& a, const U& b) {
+    return !(a == b);
+}
+
+// Case 2: comparison between a wrapper object and its unwrapped element type.
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value, bool>::Type
+operator==(const T& a, const typename T::ElementType& b) {
+    return js::detail::DefineComparisonOps<T>::get(a) == b;
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value, bool>::Type
+operator!=(const T& a, const typename T::ElementType& b) {
+    return !(a == b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value, bool>::Type
+operator==(const typename T::ElementType& a, const T& b) {
+    return a == js::detail::DefineComparisonOps<T>::get(b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value, bool>::Type
+operator!=(const typename T::ElementType& a, const T& b) {
+    return !(a == b);
+}
+
+// Case 3: For pointer wrappers, comparison between the wrapper and a const
+// element pointer.
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator==(const typename mozilla::RemovePointer<typename T::ElementType>::Type* a, const T& b) {
+    return a == js::detail::DefineComparisonOps<T>::get(b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator!=(const typename mozilla::RemovePointer<typename T::ElementType>::Type* a, const T& b) {
+    return !(a == b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator==(const T& a, const typename mozilla::RemovePointer<typename T::ElementType>::Type* b) {
+    return js::detail::DefineComparisonOps<T>::get(a) == b;
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator!=(const T& a, const typename mozilla::RemovePointer<typename T::ElementType>::Type* b) {
+    return !(a == b);
+}
+
+// Case 4: For pointer wrappers, comparison between the wrapper and nullptr.
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator==(std::nullptr_t a, const T& b) {
+    return a == js::detail::DefineComparisonOps<T>::get(b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator!=(std::nullptr_t a, const T& b) {
+    return !(a == b);
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator==(const T& a, std::nullptr_t b) {
+    return js::detail::DefineComparisonOps<T>::get(a) == b;
+}
+
+template <typename T>
+typename mozilla::EnableIf<js::detail::DefineComparisonOps<T>::value &&
+                           mozilla::IsPointer<typename T::ElementType>::value, bool>::Type
+operator!=(const T& a, std::nullptr_t b) {
+    return !(a == b);
+}
 
 #undef DELETE_ASSIGNMENT_OPS
 

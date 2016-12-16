@@ -266,9 +266,6 @@ FRAME_STATE_BIT(Generic, 53, NS_FRAME_IS_NONDISPLAY)
 // Frame has a LayerActivityProperty property
 FRAME_STATE_BIT(Generic, 54, NS_FRAME_HAS_LAYER_ACTIVITY_PROPERTY)
 
-// Frame has VR content, and needs VR display items created
-FRAME_STATE_BIT(Generic, 57, NS_FRAME_HAS_VR_CONTENT)
-
 // Set for all descendants of MathML sub/supscript elements (other than the
 // base frame) to indicate that the SSTY font feature should be used.
 FRAME_STATE_BIT(Generic, 58, NS_FRAME_MATHML_SCRIPT_DESCENDANT)
@@ -309,6 +306,10 @@ FRAME_STATE_GROUP(FlexContainer, nsFlexContainerFrame)
 // Set for a flex container whose children have been reordered due to 'order'.
 // (Means that we have to be more thorough about checking them for sortedness.)
 FRAME_STATE_BIT(FlexContainer, 20, NS_STATE_FLEX_CHILDREN_REORDERED)
+
+// Set for a flex container that is emulating a legacy
+// 'display:-webkit-{inline-}box' container.
+FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_LEGACY_WEBKIT_BOX)
 
 // == Frame state bits that apply to grid container frames ====================
 
@@ -468,7 +469,7 @@ FRAME_STATE_BIT(Block, 21, NS_BLOCK_HAS_PUSHED_FLOATS)
 // nsBlockFrame::IsMarginRoot().
 //
 // This causes the BlockReflowInput's constructor to set the
-// BRS_ISBSTARTMARGINROOT and BRS_ISBENDMARGINROOT flags.
+// mIsBStartMarginRoot and mIsBEndMarginRoot flags.
 FRAME_STATE_BIT(Block, 22, NS_BLOCK_MARGIN_ROOT)
 
 // This indicates that a block frame should create its own float manager. This
@@ -593,6 +594,15 @@ FRAME_STATE_BIT(Placeholder, 21, PLACEHOLDER_FOR_ABSPOS)
 FRAME_STATE_BIT(Placeholder, 22, PLACEHOLDER_FOR_FIXEDPOS)
 FRAME_STATE_BIT(Placeholder, 23, PLACEHOLDER_FOR_POPUP)
 FRAME_STATE_BIT(Placeholder, 24, PLACEHOLDER_FOR_TOPLAYER)
+
+// This bit indicates that the out-of-flow frame's static position needs to be
+// determined using the CSS Box Alignment properties
+// ([align,justify]-[self,content]).  When this is set, the placeholder frame's
+// position doesn't represent the static position, as it usually would --
+// rather, it represents the logical start corner of the alignment containing
+// block.  Then, after we've determined the out-of-flow frame's size, we can
+// resolve the actual static position using the alignment properties.
+FRAME_STATE_BIT(Placeholder, 25, PLACEHOLDER_STATICPOS_NEEDS_CSSALIGN)
 
 
 // == Frame state bits that apply to table cell frames ========================

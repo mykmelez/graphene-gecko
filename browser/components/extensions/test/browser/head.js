@@ -10,11 +10,25 @@
  *          promisePopupShown promisePopupHidden
  *          openContextMenu closeContextMenu
  *          openExtensionContextMenu closeExtensionContextMenu
- *          imageBuffer getListStyleImage
+ *          openActionContextMenu openActionSubmenu closeActionContextMenu
+ *          imageBuffer getListStyleImage getPanelForNode
+ *          awaitExtensionPanel awaitPopupResize
+ *          promiseContentDimensions alterContent
  */
 
-var {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
-var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+const {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
+const {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+
+// We run tests under two different configurations, from browser.ini and
+// browser-remote.ini. When running from browser-remote.ini, the tests are
+// copied to the sub-directory "test-oop-extensions", which we detect here, and
+// use to select our configuration.
+if (gTestPath.includes("test-oop-extensions")) {
+  SpecialPowers.pushPrefEnv({set: [
+    ["dom.ipc.processCount", 1],
+    ["extensions.webextensions.remote", true],
+  ]});
+}
 
 // Bug 1239884: Our tests occasionally hit a long GC pause at unpredictable
 // times in debug builds, which results in intermittent timeouts. Until we have
@@ -82,6 +96,92 @@ function promisePopupHidden(popup) {
     popup.addEventListener("popuphidden", onPopupHidden);
   });
 }
+
+function promisePossiblyInaccurateContentDimensions(browser) {
+  return ContentTask.spawn(browser, null, function* () {
+    function copyProps(obj, props) {
+      let res = {};
+      for (let prop of props) {
+        res[prop] = obj[prop];
+      }
+      return res;
+    }
+
+    return {
+      window: copyProps(content,
+                        ["innerWidth", "innerHeight", "outerWidth", "outerHeight",
+                         "scrollX", "scrollY", "scrollMaxX", "scrollMaxY"]),
+      body: copyProps(content.document.body,
+                      ["clientWidth", "clientHeight", "scrollWidth", "scrollHeight"]),
+      root: copyProps(content.document.documentElement,
+                      ["clientWidth", "clientHeight", "scrollWidth", "scrollHeight"]),
+
+      isStandards: content.document.compatMode !== "BackCompat",
+    };
+  });
+}
+
+function delay(ms = 0) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function promiseContentDimensions(browser) {
+  // For remote browsers, each resize operation requires an asynchronous
+  // round-trip to resize the content window. Since there's a certain amount of
+  // unpredictability in the timing, mainly due to the unpredictability of
+  // reflows, we need to wait until the content window dimensions match the
+  // <browser> dimensions before returning data.
+
+  let dims = await promisePossiblyInaccurateContentDimensions(browser);
+  while (browser.clientWidth !== dims.window.innerWidth ||
+         browser.clientHeight !== dims.window.innerHeight) {
+    await delay(50);
+    dims = await promisePossiblyInaccurateContentDimensions(browser);
+  }
+
+  return dims;
+}
+
+async function awaitPopupResize(browser) {
+  await BrowserTestUtils.waitForEvent(browser, "WebExtPopupResized",
+                                      event => event.detail === "delayed");
+
+  return promiseContentDimensions(browser);
+}
+
+function alterContent(browser, task, arg = null) {
+  return Promise.all([
+    ContentTask.spawn(browser, arg, task),
+    awaitPopupResize(browser),
+  ]).then(([, dims]) => dims);
+}
+
+function getPanelForNode(node) {
+  while (node.localName != "panel") {
+    node = node.parentNode;
+  }
+  return node;
+}
+
+var awaitBrowserLoaded = browser => ContentTask.spawn(browser, null, () => {
+  if (content.document.readyState !== "complete") {
+    return ContentTaskUtils.waitForEvent(this, "load", true).then(() => {});
+  }
+});
+
+var awaitExtensionPanel = Task.async(function* (extension, win = window, awaitLoad = true) {
+  let {originalTarget: browser} = yield BrowserTestUtils.waitForEvent(
+    win.document, "WebExtPopupLoaded", true,
+    event => event.detail.extension.id === extension.id);
+
+  yield Promise.all([
+    promisePopupShown(getPanelForNode(browser)),
+
+    awaitLoad && awaitBrowserLoaded(browser, awaitLoad),
+  ]);
+
+  return browser;
+});
 
 function getBrowserActionWidget(extension) {
   return CustomizableUI.getWidget(makeWidgetId(extension.id) + "-browser-action");
@@ -160,6 +260,38 @@ function* closeExtensionContextMenu(itemToSelect) {
   let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
   EventUtils.synthesizeMouseAtCenter(itemToSelect, {});
   yield popupHiddenPromise;
+}
+
+function* openActionContextMenu(extension, kind, win = window) {
+  const menu = win.document.getElementById("toolbar-context-menu");
+  const id = `${makeWidgetId(extension.id)}-${kind}-action`;
+  const button = win.document.getElementById(id);
+  SetPageProxyState("valid");
+
+  const shown = BrowserTestUtils.waitForEvent(menu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(button, {type: "contextmenu"}, win);
+  yield shown;
+
+  return menu;
+}
+
+function* openActionSubmenu(submenuItem, win = window) {
+  const submenu = submenuItem.firstChild;
+  const shown = BrowserTestUtils.waitForEvent(submenu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(submenuItem, {}, win);
+  yield shown;
+  return submenu;
+}
+
+function closeActionContextMenu(itemToSelect, win = window) {
+  const menu = win.document.getElementById("toolbar-context-menu");
+  const hidden = BrowserTestUtils.waitForEvent(menu, "popuphidden");
+  if (itemToSelect) {
+    EventUtils.synthesizeMouseAtCenter(itemToSelect, {}, win);
+  } else {
+    menu.hidePopup();
+  }
+  return hidden;
 }
 
 function getPageActionPopup(extension, win = window) {

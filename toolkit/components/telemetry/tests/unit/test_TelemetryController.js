@@ -90,20 +90,19 @@ function checkPingFormat(aPing, aType, aHasClientId, aHasEnvironment) {
   Assert.equal("environment" in aPing, aHasEnvironment);
 }
 
-function run_test() {
-  do_test_pending();
-
+add_task(function* test_setup() {
   // Addon manager needs a profile directory
   do_get_profile();
   loadAddonManager("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
   // Make sure we don't generate unexpected pings due to pref changes.
-  setEmptyPrefWatchlist();
+  yield setEmptyPrefWatchlist();
 
   Services.prefs.setBoolPref(PREF_ENABLED, true);
   Services.prefs.setBoolPref(PREF_FHR_UPLOAD_ENABLED, true);
 
-  Telemetry.asyncFetchTelemetryData(wrapWithExceptionHandler(run_next_test));
-}
+  yield new Promise(resolve =>
+    Telemetry.asyncFetchTelemetryData(wrapWithExceptionHandler(resolve)));
+});
 
 add_task(function* asyncSetup() {
   yield TelemetryController.testSetup();
@@ -186,6 +185,8 @@ add_task(function* test_disableDataUpload() {
   // |TelemetryController.testReset|.
   Preferences.set(TelemetryController.Constants.PREF_SERVER, "http://localhost:" + PingServer.port);
 
+  // Stop the sending task and then start it again.
+  yield TelemetrySend.shutdown();
   // Reset the controller to spin the ping sending task.
   yield TelemetryController.testReset();
   ping = yield PingServer.promiseNextPing();
@@ -286,9 +287,6 @@ add_task(function* test_pingHasEnvironmentAndClientId() {
 });
 
 add_task(function* test_archivePings() {
-  const ARCHIVE_PATH =
-    OS.Path.join(OS.Constants.Path.profileDir, "datareporting", "archived");
-
   let now = new Date(2009, 10, 18, 12, 0, 0);
   fakeNow(now);
 
@@ -427,7 +425,7 @@ add_task(function* test_changePingAfterSubmission() {
                "The payload must not be changed after being submitted.");
 });
 
-add_task(function* test_telemetryEnabledUnexpectedValue(){
+add_task(function* test_telemetryEnabledUnexpectedValue() {
   // Remove the default value for toolkit.telemetry.enabled from the default prefs.
   // Otherwise, we wouldn't be able to set the pref to a string.
   let defaultPrefBranch = Services.prefs.getDefaultBranch(null);
@@ -456,7 +454,7 @@ add_task(function* test_telemetryEnabledUnexpectedValue(){
                "False must disable Telemetry recording.");
 });
 
-add_task(function* test_telemetryCleanFHRDatabase(){
+add_task(function* test_telemetryCleanFHRDatabase() {
   const FHR_DBNAME_PREF = "datareporting.healthreport.dbName";
   const CUSTOM_DB_NAME = "unlikely.to.be.used.sqlite";
   const DEFAULT_DB_NAME = "healthreport.sqlite";
@@ -504,7 +502,6 @@ add_task(function* test_telemetryCleanFHRDatabase(){
   }
 });
 
-add_task(function* stopServer(){
+add_task(function* stopServer() {
   yield PingServer.stop();
-  do_test_finished();
 });

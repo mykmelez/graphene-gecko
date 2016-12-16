@@ -17,23 +17,29 @@
 #include "mozilla/Compiler.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MacroArgs.h"
+#include "mozilla/StaticAnalysisFunctions.h"
+#include "mozilla/Types.h"
 #ifdef MOZ_DUMP_ASSERTION_STACK
 #include "nsTraceRefcnt.h"
 #endif
 
-#if defined(MOZ_CRASHREPORTER) && defined(MOZILLA_INTERNAL_API) && \
-    !defined(MOZILLA_EXTERNAL_LINKAGE) && defined(__cplusplus)
-namespace CrashReporter {
-// This declaration is present here as well as in nsExceptionHandler.h
-// nsExceptionHandler.h is not directly included in this file as it includes
-// windows.h, which can cause problems when it is imported into some files due
-// to the number of macros defined.
-// XXX If you change this definition - also change the definition in
-// nsExceptionHandler.h
-void AnnotateMozCrashReason(const char* aReason);
-} // namespace CrashReporter
+#if defined(MOZ_HAS_MOZGLUE) || defined(MOZILLA_INTERNAL_API)
+/*
+ * The crash reason set by MOZ_CRASH_ANNOTATE is consumed by the crash reporter
+ * if present. It is declared here (and defined in Assertions.cpp) to make it
+ * available to all code, even libraries that don't link with the crash reporter
+ * directly.
+ */
+MOZ_BEGIN_EXTERN_C
+extern MFBT_DATA const char* gMozCrashReason;
+MOZ_END_EXTERN_C
 
-#  define MOZ_CRASH_ANNOTATE(...) CrashReporter::AnnotateMozCrashReason("" __VA_ARGS__)
+static inline void
+AnnotateMozCrashReason(const char* reason)
+{
+  gMozCrashReason = reason;
+}
+#  define MOZ_CRASH_ANNOTATE(...) AnnotateMozCrashReason(__VA_ARGS__)
 #else
 #  define MOZ_CRASH_ANNOTATE(...) do { /* nothing */ } while (0)
 #endif
@@ -368,7 +374,7 @@ struct AssertionConditionType
 #define MOZ_ASSERT_HELPER1(expr) \
   do { \
     MOZ_VALIDATE_ASSERT_CONDITION_TYPE(expr); \
-    if (MOZ_UNLIKELY(!(expr))) { \
+    if (MOZ_UNLIKELY(!MOZ_CHECK_ASSERT_ASSIGNMENT(expr))) { \
       MOZ_ReportAssertionFailure(#expr, __FILE__, __LINE__); \
       MOZ_CRASH_ANNOTATE("MOZ_RELEASE_ASSERT(" #expr ")"); \
       MOZ_REALLY_CRASH(); \
@@ -378,7 +384,7 @@ struct AssertionConditionType
 #define MOZ_ASSERT_HELPER2(expr, explain) \
   do { \
     MOZ_VALIDATE_ASSERT_CONDITION_TYPE(expr); \
-    if (MOZ_UNLIKELY(!(expr))) { \
+    if (MOZ_UNLIKELY(!MOZ_CHECK_ASSERT_ASSIGNMENT(expr))) { \
       MOZ_ReportAssertionFailure(#expr " (" explain ")", __FILE__, __LINE__); \
       MOZ_CRASH_ANNOTATE("MOZ_RELEASE_ASSERT(" #expr ") (" explain ")"); \
       MOZ_REALLY_CRASH(); \
@@ -397,7 +403,7 @@ struct AssertionConditionType
 #  define MOZ_ASSERT(...) do { } while (0)
 #endif /* DEBUG */
 
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 #  define MOZ_DIAGNOSTIC_ASSERT MOZ_ASSERT
 #else
 #  define MOZ_DIAGNOSTIC_ASSERT MOZ_RELEASE_ASSERT
@@ -558,6 +564,8 @@ struct AssertionConditionType
          /* Do nothing. */ \
        } \
      } while (0)
+#  define MOZ_ALWAYS_OK(expr)        MOZ_ASSERT((expr).isOk())
+#  define MOZ_ALWAYS_ERR(expr)       MOZ_ASSERT((expr).isErr())
 #else
 #  define MOZ_ALWAYS_TRUE(expr) \
      do { \
@@ -568,6 +576,18 @@ struct AssertionConditionType
 #  define MOZ_ALWAYS_FALSE(expr) \
      do { \
        if ((expr)) { \
+         /* Silence MOZ_MUST_USE. */ \
+       } \
+     } while (0)
+#  define MOZ_ALWAYS_OK(expr) \
+     do { \
+       if ((expr).isOk()) { \
+         /* Silence MOZ_MUST_USE. */ \
+       } \
+     } while (0)
+#  define MOZ_ALWAYS_ERR(expr) \
+     do { \
+       if ((expr).isErr()) { \
          /* Silence MOZ_MUST_USE. */ \
        } \
      } while (0)

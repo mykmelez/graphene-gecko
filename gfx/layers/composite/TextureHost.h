@@ -17,7 +17,6 @@
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat, etc
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/CompositorTypes.h"  // for TextureFlags, etc
-#include "mozilla/layers/FenceUtils.h"  // for FenceHandle
 #include "mozilla/layers/LayersTypes.h"  // for LayerRenderState, etc
 #include "mozilla/layers/LayersSurfaces.h"
 #include "mozilla/mozalloc.h"           // for operator delete
@@ -44,7 +43,6 @@ class Compositor;
 class CompositableParentManager;
 class ReadLockDescriptor;
 class CompositorBridgeParent;
-class GrallocTextureHostOGL;
 class SurfaceDescriptor;
 class HostIPCAllocator;
 class ISurfaceAllocator;
@@ -394,11 +392,20 @@ public:
    * Lock the texture host for compositing.
    */
   virtual bool Lock() { return true; }
-
   /**
-   * Unlock the texture host after compositing.
+   * Unlock the texture host after compositing. Lock() and Unlock() should be
+   * called in pair.
    */
   virtual void Unlock() {}
+
+  /**
+   * Lock the texture host for compositing without using compositor.
+   */
+  virtual bool LockWithoutCompositor() { return true; }
+  /**
+   * Similar to Unlock(), but it should be called with LockWithoutCompositor().
+   */
+  virtual void UnlockWithoutCompositor() {}
 
   /**
    * Note that the texture host format can be different from its corresponding
@@ -411,6 +418,8 @@ public:
    * Apple's YCBCR_422 is R8G8B8X8.
    */
   virtual gfx::SurfaceFormat GetReadFormat() const { return GetFormat(); }
+
+  virtual YUVColorSpace GetYUVColorSpace() const { return YUVColorSpace::UNKNOWN; }
 
   /**
    * Called during the transaction. The TextureSource may or may not be composited.
@@ -576,31 +585,7 @@ public:
 
   int NumCompositableRefs() const { return mCompositableCount; }
 
-  /**
-   * Store a fence that will signal when the current buffer is no longer being read.
-   * Similar to android's GLConsumer::setReleaseFence()
-   */
-  bool SetReleaseFenceHandle(const FenceHandle& aReleaseFenceHandle);
-
-  /**
-   * Return a releaseFence's Fence and clear a reference to the Fence.
-   */
-  FenceHandle GetAndResetReleaseFenceHandle();
-
-  void SetAcquireFenceHandle(const FenceHandle& aAcquireFenceHandle);
-
-  /**
-   * Return a acquireFence's Fence and clear a reference to the Fence.
-   */
-  FenceHandle GetAndResetAcquireFenceHandle();
-
-  virtual void WaitAcquireFenceHandleSyncComplete() {};
-
   void SetLastFwdTransactionId(uint64_t aTransactionId);
-
-  virtual bool NeedsFenceHandle() { return false; }
-
-  virtual FenceHandle GetCompositorReleaseFence() { return FenceHandle(); }
 
   void DeserializeReadLock(const ReadLockDescriptor& aDesc,
                            ISurfaceAllocator* aAllocator);
@@ -611,14 +596,8 @@ public:
 
   virtual BufferTextureHost* AsBufferTextureHost() { return nullptr; }
 
-  virtual GrallocTextureHostOGL* AsGrallocTextureHostOGL() { return nullptr; }
-
 protected:
   void ReadUnlock();
-
-  FenceHandle mReleaseFenceHandle;
-
-  FenceHandle mAcquireFenceHandle;
 
   void RecycleTexture(TextureFlags aFlags);
 
@@ -691,6 +670,8 @@ public:
    * GetFormat will be RGB32 (even though mFormat is SurfaceFormat::YUV).
    */
   virtual gfx::SurfaceFormat GetFormat() const override;
+
+  virtual YUVColorSpace GetYUVColorSpace() const override;
 
   virtual gfx::IntSize GetSize() const override { return mSize; }
 
@@ -801,6 +782,29 @@ public:
   {
     if (mTexture && mLocked) {
       mTexture->Unlock();
+    }
+  }
+
+  bool Failed() { return mTexture && !mLocked; }
+
+private:
+  RefPtr<TextureHost> mTexture;
+  bool mLocked;
+};
+
+class MOZ_STACK_CLASS AutoLockTextureHostWithoutCompositor
+{
+public:
+  explicit AutoLockTextureHostWithoutCompositor(TextureHost* aTexture)
+    : mTexture(aTexture)
+  {
+    mLocked = mTexture ? mTexture->LockWithoutCompositor() : false;
+  }
+
+  ~AutoLockTextureHostWithoutCompositor()
+  {
+    if (mTexture && mLocked) {
+      mTexture->UnlockWithoutCompositor();
     }
   }
 

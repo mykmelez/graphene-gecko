@@ -9,6 +9,8 @@
 
 #include "jit/MacroAssembler.h"
 
+#include "mozilla/MathAlgorithms.h"
+
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/MacroAssembler-x86-inl.h"
 #elif defined(JS_CODEGEN_X64)
@@ -86,10 +88,17 @@ MacroAssembler::call(const wasm::CallSiteDesc& desc, const Register reg)
 }
 
 void
-MacroAssembler::call(const wasm::CallSiteDesc& desc, uint32_t callee)
+MacroAssembler::call(const wasm::CallSiteDesc& desc, uint32_t funcDefIndex)
 {
     CodeOffset l = callWithPatch();
-    append(desc, l, framePushed(), callee);
+    append(desc, l, framePushed(), funcDefIndex);
+}
+
+void
+MacroAssembler::call(const wasm::CallSiteDesc& desc, wasm::Trap trap)
+{
+    CodeOffset l = callWithPatch();
+    append(desc, l, framePushed(), trap);
 }
 
 // ===============================================================
@@ -551,6 +560,62 @@ MacroAssembler::branchTestMagicValue(Condition cond, const ValueOperand& val, JS
     branchTestValue(cond, val, MagicValue(why), label);
 }
 
+void
+MacroAssembler::branchDoubleNotInInt64Range(Address src, Register temp, Label* fail)
+{
+    // Tests if double is in [INT64_MIN; INT64_MAX] range
+    uint32_t EXPONENT_MASK = 0x7ff00000;
+    uint32_t EXPONENT_SHIFT = FloatingPoint<double>::kExponentShift - 32;
+    uint32_t TOO_BIG_EXPONENT = (FloatingPoint<double>::kExponentBias + 63) << EXPONENT_SHIFT;
+
+    load32(Address(src.base, src.offset + sizeof(int32_t)), temp);
+    and32(Imm32(EXPONENT_MASK), temp);
+    branch32(Assembler::GreaterThanOrEqual, temp, Imm32(TOO_BIG_EXPONENT), fail);
+}
+
+void
+MacroAssembler::branchDoubleNotInUInt64Range(Address src, Register temp, Label* fail)
+{
+    // Note: returns failure on -0.0
+    // Tests if double is in [0; UINT64_MAX] range
+    // Take the sign also in the equation. That way we can compare in one test?
+    uint32_t EXPONENT_MASK = 0xfff00000;
+    uint32_t EXPONENT_SHIFT = FloatingPoint<double>::kExponentShift - 32;
+    uint32_t TOO_BIG_EXPONENT = (FloatingPoint<double>::kExponentBias + 64) << EXPONENT_SHIFT;
+
+    load32(Address(src.base, src.offset + sizeof(int32_t)), temp);
+    and32(Imm32(EXPONENT_MASK), temp);
+    branch32(Assembler::AboveOrEqual, temp, Imm32(TOO_BIG_EXPONENT), fail);
+}
+
+void
+MacroAssembler::branchFloat32NotInInt64Range(Address src, Register temp, Label* fail)
+{
+    // Tests if float is in [INT64_MIN; INT64_MAX] range
+    uint32_t EXPONENT_MASK = 0x7f800000;
+    uint32_t EXPONENT_SHIFT = FloatingPoint<float>::kExponentShift;
+    uint32_t TOO_BIG_EXPONENT = (FloatingPoint<float>::kExponentBias + 63) << EXPONENT_SHIFT;
+
+    load32(src, temp);
+    and32(Imm32(EXPONENT_MASK), temp);
+    branch32(Assembler::GreaterThanOrEqual, temp, Imm32(TOO_BIG_EXPONENT), fail);
+}
+
+void
+MacroAssembler::branchFloat32NotInUInt64Range(Address src, Register temp, Label* fail)
+{
+    // Note: returns failure on -0.0
+    // Tests if float is in [0; UINT64_MAX] range
+    // Take the sign also in the equation. That way we can compare in one test?
+    uint32_t EXPONENT_MASK = 0xff800000;
+    uint32_t EXPONENT_SHIFT = FloatingPoint<float>::kExponentShift;
+    uint32_t TOO_BIG_EXPONENT = (FloatingPoint<float>::kExponentBias + 64) << EXPONENT_SHIFT;
+
+    load32(src, temp);
+    and32(Imm32(EXPONENT_MASK), temp);
+    branch32(Assembler::AboveOrEqual, temp, Imm32(TOO_BIG_EXPONENT), fail);
+}
+
 // ========================================================================
 // Canonicalization primitives.
 void
@@ -649,6 +714,12 @@ MacroAssembler::addStackPtrTo(T t)
     addPtr(getStackPointer(), t);
 }
 
+void
+MacroAssembler::reserveStack(uint32_t amount)
+{
+    subFromStackPtr(Imm32(amount));
+    adjustFrame(amount);
+}
 #endif // !JS_CODEGEN_ARM64
 
 template <typename T>
@@ -669,7 +740,7 @@ MacroAssembler::assertStackAlignment(uint32_t alignment, int32_t offset /* = 0 *
 {
 #ifdef DEBUG
     Label ok, bad;
-    MOZ_ASSERT(IsPowerOfTwo(alignment));
+    MOZ_ASSERT(mozilla::IsPowerOfTwo(alignment));
 
     // Wrap around the offset to be a non-negative number.
     offset %= alignment;

@@ -120,19 +120,15 @@ add_task(function* () {
 
   // Test well-populated user history - newtab has highly-frecent history sites
   // redefine compareLinks to always choose history tiles first
-  NewTabUtils.links.compareLinks = function (aLink1, aLink2) {
+  NewTabUtils.links.compareLinks = function(aLink1, aLink2) {
     if (aLink1.type == aLink2.type) {
       return aLink2.frecency - aLink1.frecency ||
              aLink2.lastVisitDate - aLink1.lastVisitDate;
     }
-    else {
-      if (aLink2.type == "history") {
-        return 1;
-      }
-      else {
-        return -1;
-      }
+    if (aLink2.type == "history") {
+      return 1;
     }
+    return -1;
   };
 
   // add a row of history tiles, directory tiles will be clipped off, hence no scrollbar

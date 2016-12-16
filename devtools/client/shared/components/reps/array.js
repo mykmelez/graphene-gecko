@@ -11,8 +11,8 @@ define(function (require, exports, module) {
   // Dependencies
   const React = require("devtools/client/shared/vendor/react");
   const { createFactories } = require("./rep-utils");
-  const { ObjectBox } = createFactories(require("./object-box"));
   const { Caption } = createFactories(require("./caption"));
+  const { MODE } = require("./constants");
 
   // Shortcuts
   const DOM = React.DOM;
@@ -24,6 +24,11 @@ define(function (require, exports, module) {
   let ArrayRep = React.createClass({
     displayName: "ArrayRep",
 
+    propTypes: {
+      // @TODO Change this to Object.values once it's supported in Node's version of V8
+      mode: React.PropTypes.oneOf(Object.keys(MODE).map(key => MODE[key])),
+    },
+
     getTitle: function (object, context) {
       return "[" + object.length + "]";
     },
@@ -32,43 +37,33 @@ define(function (require, exports, module) {
       let items = [];
       let delim;
 
-      for (let i = 0; i < array.length && i <= max; i++) {
+      for (let i = 0; i < array.length && i < max; i++) {
         try {
           let value = array[i];
 
           delim = (i == array.length - 1 ? "" : ", ");
 
-          if (value === array) {
-            items.push(Reference({
-              key: i,
-              object: value,
-              delim: delim
-            }));
-          } else {
-            items.push(ItemRep({
-              key: i,
-              object: value,
-              delim: delim
-            }));
-          }
+          items.push(ItemRep({
+            object: value,
+            // Hardcode tiny mode to avoid recursive handling.
+            mode: MODE.TINY,
+            delim: delim
+          }));
         } catch (exc) {
           items.push(ItemRep({
             object: exc,
-            delim: delim,
-            key: i
+            mode: MODE.TINY,
+            delim: delim
           }));
         }
       }
 
       if (array.length > max) {
-        items.pop();
-
         let objectLink = this.props.objectLink || DOM.span;
         items.push(Caption({
-          key: "more",
           object: objectLink({
             object: this.props.object
-          }, "more…")
+          }, (array.length - max) + " more…")
         }));
       }
 
@@ -122,34 +117,41 @@ define(function (require, exports, module) {
     },
 
     render: function () {
-      let mode = this.props.mode || "short";
-      let object = this.props.object;
-      let items;
+      let {
+        object,
+        mode = MODE.SHORT,
+      } = this.props;
 
-      if (mode == "tiny") {
+      let items;
+      let brackets;
+      let needSpace = function (space) {
+        return space ? { left: "[ ", right: " ]"} : { left: "[", right: "]"};
+      };
+
+      if (mode === MODE.TINY) {
         let isEmpty = object.length === 0;
-        items = DOM.span({className: "length"}, isEmpty ? "" : object.length);
+        items = [DOM.span({className: "length"}, isEmpty ? "" : object.length)];
+        brackets = needSpace(false);
       } else {
-        let max = (mode == "short") ? 3 : 300;
+        let max = (mode === MODE.SHORT) ? 3 : 10;
         items = this.arrayIterator(object, max);
+        brackets = needSpace(items.length > 0);
       }
 
       let objectLink = this.props.objectLink || DOM.span;
 
       return (
-        ObjectBox({
-          className: "array"},
+        DOM.span({
+          className: "objectBox objectBox-array"},
           objectLink({
             className: "arrayLeftBracket",
-            role: "presentation",
             object: object
-          }, "["),
-          items,
+          }, brackets.left),
+          ...items,
           objectLink({
             className: "arrayRightBracket",
-            role: "presentation",
             object: object
-          }, "]"),
+          }, brackets.right),
           DOM.span({
             className: "arrayProperties",
             role: "group"}
@@ -170,26 +172,12 @@ define(function (require, exports, module) {
 
       let object = this.props.object;
       let delim = this.props.delim;
+      let mode = this.props.mode;
       return (
         DOM.span({},
-          Rep({object: object}),
+          Rep({object: object, mode: mode}),
           delim
         )
-      );
-    }
-  }));
-
-  /**
-   * Renders cycle references in an array.
-   */
-  let Reference = React.createFactory(React.createClass({
-    displayName: "Reference",
-
-    render: function () {
-      let tooltip = "Circular reference";
-      return (
-        DOM.span({title: tooltip},
-          "[…]")
       );
     }
   }));

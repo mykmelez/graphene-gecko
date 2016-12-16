@@ -5,39 +5,40 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ServoStyleSheet.h"
+
+#include "mozilla/css/Rule.h"
 #include "mozilla/StyleBackendType.h"
+#include "mozilla/ServoBindings.h"
+#include "mozilla/ServoCSSRuleList.h"
+#include "mozilla/dom/CSSRuleList.h"
+
+#include "mozAutoDocUpdate.h"
+
+using namespace mozilla::dom;
 
 namespace mozilla {
 
-ServoStyleSheet::ServoStyleSheet(CORSMode aCORSMode,
+ServoStyleSheet::ServoStyleSheet(css::SheetParsingMode aParsingMode,
+                                 CORSMode aCORSMode,
                                  net::ReferrerPolicy aReferrerPolicy,
                                  const dom::SRIMetadata& aIntegrity)
-  : StyleSheet(StyleBackendType::Servo)
-  , StyleSheetInfo(aCORSMode, aReferrerPolicy, aIntegrity)
+  : StyleSheet(StyleBackendType::Servo, aParsingMode)
+  , mSheetInfo(aCORSMode, aReferrerPolicy, aIntegrity)
 {
 }
 
 ServoStyleSheet::~ServoStyleSheet()
 {
   DropSheet();
-}
-
-bool
-ServoStyleSheet::IsApplicable() const
-{
-  return !mDisabled && mComplete;
+  if (mRuleList) {
+    mRuleList->DropReference();
+  }
 }
 
 bool
 ServoStyleSheet::HasRules() const
 {
-  return Servo_StyleSheetHasRules(RawSheet());
-}
-
-nsIDocument*
-ServoStyleSheet::GetOwningDocument() const
-{
-  return mDocument;
+  return mSheet && Servo_StyleSheet_HasRules(mSheet);
 }
 
 void
@@ -49,7 +50,7 @@ ServoStyleSheet::SetOwningDocument(nsIDocument* aDocument)
   mDocument = aDocument;
 }
 
-StyleSheetHandle
+ServoStyleSheet*
 ServoStyleSheet::GetParentSheet() const
 {
   // XXXheycam: When we implement support for child sheets, we'll have
@@ -59,7 +60,7 @@ ServoStyleSheet::GetParentSheet() const
 }
 
 void
-ServoStyleSheet::AppendStyleSheet(StyleSheetHandle aSheet)
+ServoStyleSheet::AppendStyleSheet(ServoStyleSheet* aSheet)
 {
   // XXXheycam: When we implement support for child sheets, we'll have
   // to fix SetOwningDocument to propagate the owning document down
@@ -67,13 +68,12 @@ ServoStyleSheet::AppendStyleSheet(StyleSheetHandle aSheet)
   MOZ_CRASH("stylo: not implemented");
 }
 
-void
+nsresult
 ServoStyleSheet::ParseSheet(const nsAString& aInput,
                             nsIURI* aSheetURI,
                             nsIURI* aBaseURI,
                             nsIPrincipal* aSheetPrincipal,
-                            uint32_t aLineNumber,
-                            css::SheetParsingMode aParsingMode)
+                            uint32_t aLineNumber)
 {
   DropSheet();
 
@@ -82,10 +82,21 @@ ServoStyleSheet::ParseSheet(const nsAString& aInput,
   RefPtr<ThreadSafePrincipalHolder> principal =
     new ThreadSafePrincipalHolder(aSheetPrincipal);
 
+  nsCString baseString;
+  nsresult rv = aBaseURI->GetSpec(baseString);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   NS_ConvertUTF16toUTF8 input(aInput);
-  mSheet = already_AddRefed<RawServoStyleSheet>(Servo_StylesheetFromUTF8Bytes(
-      reinterpret_cast<const uint8_t*>(input.get()), input.Length(), aParsingMode,
-      base, referrer, principal));
+  mSheet = Servo_StyleSheet_FromUTF8Bytes(&input, mParsingMode, &baseString,
+                                          base, referrer, principal).Consume();
+
+  return NS_OK;
+}
+
+void
+ServoStyleSheet::LoadFailed()
+{
+  mSheet = Servo_StyleSheet_Empty(mParsingMode).Consume();
 }
 
 void
@@ -107,5 +118,72 @@ ServoStyleSheet::List(FILE* aOut, int32_t aIndex) const
   MOZ_CRASH("stylo: not implemented");
 }
 #endif
+
+nsMediaList*
+ServoStyleSheet::Media()
+{
+  return nullptr;
+}
+
+nsIDOMCSSRule*
+ServoStyleSheet::GetDOMOwnerRule() const
+{
+  return nullptr;
+}
+
+CSSRuleList*
+ServoStyleSheet::GetCssRulesInternal(ErrorResult& aRv)
+{
+  if (!mRuleList) {
+    RefPtr<ServoCssRules> rawRules = Servo_StyleSheet_GetRules(mSheet).Consume();
+    mRuleList = new ServoCSSRuleList(this, rawRules.forget());
+  }
+  return mRuleList;
+}
+
+uint32_t
+ServoStyleSheet::InsertRuleInternal(const nsAString& aRule,
+                                    uint32_t aIndex, ErrorResult& aRv)
+{
+  // Ensure mRuleList is constructed.
+  GetCssRulesInternal(aRv);
+
+  mozAutoDocUpdate updateBatch(mDocument, UPDATE_STYLE, true);
+  aRv = mRuleList->InsertRule(aRule, aIndex);
+  if (aRv.Failed()) {
+    return 0;
+  }
+  if (mDocument) {
+    // XXX When we support @import rules, we should not notify here,
+    // but rather when the sheet the rule is importing is loaded.
+    // XXX We may not want to get the rule when stylesheet change event
+    // is not enabled.
+    mDocument->StyleRuleAdded(this, mRuleList->GetRule(aIndex));
+  }
+  return aIndex;
+}
+
+void
+ServoStyleSheet::DeleteRuleInternal(uint32_t aIndex, ErrorResult& aRv)
+{
+  // Ensure mRuleList is constructed.
+  GetCssRulesInternal(aRv);
+  if (aIndex > mRuleList->Length()) {
+    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+    return;
+  }
+
+  mozAutoDocUpdate updateBatch(mDocument, UPDATE_STYLE, true);
+  // Hold a strong ref to the rule so it doesn't die when we remove it
+  // from the list. XXX We may not want to hold it if stylesheet change
+  // event is not enabled.
+  RefPtr<css::Rule> rule = mRuleList->GetRule(aIndex);
+  aRv = mRuleList->DeleteRule(aIndex);
+  MOZ_ASSERT(!aRv.ErrorCodeIs(NS_ERROR_DOM_INDEX_SIZE_ERR),
+             "IndexSizeError should have been handled earlier");
+  if (!aRv.Failed() && mDocument) {
+    mDocument->StyleRuleRemoved(this, rule);
+  }
+}
 
 } // namespace mozilla

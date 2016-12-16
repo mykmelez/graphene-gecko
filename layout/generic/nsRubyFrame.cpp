@@ -87,6 +87,20 @@ nsRubyFrame::AddInlinePrefISize(nsRenderingContext *aRenderingContext,
       e.GetBaseContainer()->AddInlinePrefISize(aRenderingContext, aData);
     }
   }
+  aData->mLineIsEmpty = false;
+}
+
+static nsRubyBaseContainerFrame*
+FindRubyBaseContainerAncestor(nsIFrame* aFrame)
+{
+  for (nsIFrame* ancestor = aFrame->GetParent();
+       ancestor && ancestor->IsFrameOfType(nsIFrame::eLineParticipant);
+       ancestor = ancestor->GetParent()) {
+    if (ancestor->GetType() == nsGkAtoms::rubyBaseContainerFrame) {
+      return static_cast<nsRubyBaseContainerFrame*>(ancestor);
+    }
+  }
+  return nullptr;
 }
 
 /* virtual */ void
@@ -110,7 +124,7 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
   MoveOverflowToChildList();
 
   // Clear leadings
-  mBStartLeading = mBEndLeading = 0;
+  mLeadings.Reset();
 
   // Begin the span for the ruby frame
   WritingMode frameWM = aReflowInput.GetWritingMode();
@@ -118,7 +132,7 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
   LogicalMargin borderPadding = aReflowInput.ComputedLogicalBorderPadding();
   nscoord startEdge = 0;
   const bool boxDecorationBreakClone =
-    StyleBorder()->mBoxDecorationBreak == NS_STYLE_BOX_DECORATION_BREAK_CLONE;
+    StyleBorder()->mBoxDecorationBreak == StyleBoxDecorationBreak::Clone;
   if (boxDecorationBreakClone || !GetPrevContinuation()) {
     startEdge = borderPadding.IStart(frameWM);
   }
@@ -159,6 +173,11 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
   }
   if (boxDecorationBreakClone || NS_FRAME_IS_COMPLETE(aStatus)) {
     aDesiredSize.ISize(lineWM) += borderPadding.IEnd(frameWM);
+  }
+
+  // Update descendant leadings of ancestor ruby base container.
+  if (nsRubyBaseContainerFrame* rbc = FindRubyBaseContainerAncestor(this)) {
+    rbc->UpdateDescendantLeadings(mLeadings);
   }
 
   nsLayoutUtils::SetBSizeFromFontMetrics(this, aDesiredSize,
@@ -267,6 +286,9 @@ nsRubyFrame::ReflowSegment(nsPresContext* aPresContext,
   baseRect.BStart(lineWM) = 0;
   // The rect for offsets of text containers.
   LogicalRect offsetRect = baseRect;
+  RubyBlockLeadings descLeadings = aBaseContainer->GetDescendantLeadings();
+  offsetRect.BStart(lineWM) -= descLeadings.mStart;
+  offsetRect.BSize(lineWM) += descLeadings.mStart + descLeadings.mEnd;
   for (uint32_t i = 0; i < rtcCount; i++) {
     nsRubyTextContainerFrame* textContainer = textContainers[i];
     WritingMode rtcWM = textContainer->GetWritingMode();
@@ -342,11 +364,10 @@ nsRubyFrame::ReflowSegment(nsPresContext* aPresContext,
   nscoord startLeading = baseRect.BStart(lineWM) - offsetRect.BStart(lineWM);
   nscoord endLeading = offsetRect.BEnd(lineWM) - baseRect.BEnd(lineWM);
   // XXX When bug 765861 gets fixed, this warning should be upgraded.
-  NS_WARN_IF_FALSE(startLeading >= 0 && endLeading >= 0,
-                   "Leadings should be non-negative (because adding "
-                   "ruby annotation can only increase the size)");
-  mBStartLeading = std::max(mBStartLeading, startLeading);
-  mBEndLeading = std::max(mBEndLeading, endLeading);
+  NS_WARNING_ASSERTION(startLeading >= 0 && endLeading >= 0,
+                       "Leadings should be non-negative (because adding "
+                       "ruby annotation can only increase the size)");
+  mLeadings.Update(startLeading, endLeading);
 }
 
 nsRubyBaseContainerFrame*

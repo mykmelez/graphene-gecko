@@ -35,6 +35,7 @@ struct PixelShaderConstants
   float layerColor[4];
   float layerOpacity[4];
   int blendConfig[4];
+  float yuvColorMatrix[3][4];
 };
 
 struct DeviceAttachmentsD3D11;
@@ -84,7 +85,7 @@ public:
   virtual void SetScreenRenderOffset(const ScreenPoint& aOffset) override
   {
     if (aOffset.x || aOffset.y) {
-      NS_RUNTIMEABORT("SetScreenRenderOffset not supported by CompositorD3D11.");
+      MOZ_CRASH("SetScreenRenderOffset not supported by CompositorD3D11.");
     }
     // If the offset is 0, 0 that's okay.
   }
@@ -97,13 +98,6 @@ public:
                         gfx::Float aOpacity,
                         const gfx::Matrix4x4& aTransform,
                         const gfx::Rect& aVisibleRect) override;
-
-  /* Helper for when the primary effect is VR_DISTORTION */
-  void DrawVRDistortion(const gfx::Rect &aRect,
-                        const gfx::IntRect &aClipRect,
-                        const EffectChain &aEffectChain,
-                        gfx::Float aOpacity,
-                        const gfx::Matrix4x4 &aTransform);
 
   /**
    * Start a new frame. If aClipRectIn is null, sets *aClipRectOut to the
@@ -121,11 +115,7 @@ public:
    */
   virtual void EndFrame() override;
 
-  /**
-   * Post rendering stuff if the rendering is outside of this Compositor
-   * e.g., by Composer2D
-   */
-  virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) override {}
+  virtual void CancelFrame() override;
 
   /**
    * Setup the viewport and projection matrix for rendering
@@ -198,6 +188,7 @@ private:
   VertexShaderConstants mVSConstants;
   PixelShaderConstants mPSConstants;
   bool mDisableSequenceForNextFrame;
+  bool mAllowPartialPresents;
 
   gfx::IntRect mInvalidRect;
   // This is the clip rect applied to the default DrawTarget (i.e. the window)

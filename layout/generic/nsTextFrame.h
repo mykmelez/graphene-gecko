@@ -31,6 +31,10 @@ class nsTextFragment;
 class nsDisplayTextGeometry;
 class nsDisplayText;
 
+namespace mozilla {
+class SVGContextPaint;
+};
+
 class nsTextFrame : public nsFrame {
   typedef mozilla::LayoutDeviceRect LayoutDeviceRect;
   typedef mozilla::RawSelectionType RawSelectionType;
@@ -52,6 +56,10 @@ public:
 
   explicit nsTextFrame(nsStyleContext* aContext)
     : nsFrame(aContext)
+    , mNextContinuation(nullptr)
+    , mContentOffset(0)
+    , mContentLengthHint(0)
+    , mAscent(0)
   {
     NS_ASSERTION(mContentOffset == 0, "Bogus content offset");
   }
@@ -393,7 +401,7 @@ public:
     gfxContext* context;
     gfxPoint framePt;
     LayoutDeviceRect dirtyRect;
-    gfxTextContextPaint* contextPaint = nullptr;
+    mozilla::SVGContextPaint* contextPaint = nullptr;
     DrawPathCallbacks* callbacks = nullptr;
     enum {
       PaintText,           // Normal text painting.
@@ -427,7 +435,7 @@ public:
     gfxContext* context;
     PropertyProvider* provider = nullptr;
     gfxFloat* advanceWidth = nullptr;
-    gfxTextContextPaint* contextPaint = nullptr;
+    mozilla::SVGContextPaint* contextPaint = nullptr;
     DrawPathCallbacks* callbacks = nullptr;
     nscolor textColor = NS_RGBA(0, 0, 0, 0);
     nscolor textStrokeColor = NS_RGBA(0, 0, 0, 0);
@@ -583,6 +591,8 @@ public:
 
   bool IsFloatingFirstLetterChild() const;
 
+  bool IsInitialLetterChild() const;
+
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override;
 
   void AssignJustificationGaps(const mozilla::JustificationAssignment& aAssign);
@@ -593,7 +603,7 @@ public:
 protected:
   virtual ~nsTextFrame();
 
-  gfxTextRun* mTextRun;
+  RefPtr<gfxTextRun> mTextRun;
   nsIFrame*   mNextContinuation;
   // The key invariant here is that mContentOffset never decreases along
   // a next-continuation chain. And of course mContentOffset is always <= the

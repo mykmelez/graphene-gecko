@@ -15,9 +15,9 @@ const EXPECTED_REQUESTS = [
     method: "GET",
     url: CAUSE_URL,
     causeType: "document",
-    causeUri: "",
-    // The document load is from JS function in e10s, native in non-e10s
-    stack: !gMultiProcessBrowser
+    causeUri: null,
+    // The document load has internal privileged JS code on the stack
+    stack: true
   },
   {
     method: "GET",
@@ -77,21 +77,24 @@ const EXPECTED_REQUESTS = [
   },
 ];
 
-var test = Task.async(function* () {
+add_task(function* () {
+  // Async stacks aren't on by default in all builds
+  yield SpecialPowers.pushPrefEnv({ set: [["javascript.options.asyncstack", true]] });
+
   // the initNetMonitor function clears the network request list after the
   // page is loaded. That's why we first load a bogus page from SIMPLE_URL,
   // and only then load the real thing from CAUSE_URL - we want to catch
   // all the requests the page is making, not only the XHRs.
   // We can't use about:blank here, because initNetMonitor checks that the
   // page has actually made at least one request.
-  let [, debuggee, monitor] = yield initNetMonitor(SIMPLE_URL);
+  let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
   let { $, NetMonitorView } = monitor.panelWin;
   let { RequestsMenu } = NetMonitorView;
   RequestsMenu.lazyUpdate = false;
 
-  debuggee.location = CAUSE_URL;
-
-  yield waitForNetworkEvents(monitor, EXPECTED_REQUESTS.length);
+  let wait = waitForNetworkEvents(monitor, EXPECTED_REQUESTS.length);
+  tab.linkedBrowser.loadURI(CAUSE_URL);
+  yield wait;
 
   is(RequestsMenu.itemCount, EXPECTED_REQUESTS.length,
     "All the page events should be recorded.");
@@ -100,11 +103,11 @@ var test = Task.async(function* () {
     let { method, url, causeType, causeUri, stack } = spec;
 
     let requestItem = RequestsMenu.getItemAtIndex(i);
-    verifyRequestItemTarget(requestItem,
+    verifyRequestItemTarget(RequestsMenu, requestItem,
       method, url, { cause: { type: causeType, loadingDocumentUri: causeUri } }
     );
 
-    let { stacktrace } = requestItem.attachment.cause;
+    let { stacktrace } = requestItem.cause;
     let stackLen = stacktrace ? stacktrace.length : 0;
 
     if (stack) {
@@ -134,12 +137,9 @@ var test = Task.async(function* () {
   EventUtils.sendMouseEvent({ type: "click" }, $("#requests-menu-cause-button"));
   let expectedOrder = EXPECTED_REQUESTS.map(r => r.causeType).sort();
   expectedOrder.forEach((expectedCause, i) => {
-    let { target } = RequestsMenu.getItemAtIndex(i);
-    let causeLabel = target.querySelector(".requests-menu-cause-label");
-    let cause = causeLabel.getAttribute("value");
+    const cause = RequestsMenu.getItemAtIndex(i).cause.type;
     is(cause, expectedCause, `The request #${i} has the expected cause after sorting`);
   });
 
   yield teardown(monitor);
-  finish();
 });

@@ -68,7 +68,7 @@ interface HTMLMediaElement : HTMLElement {
   [SetterThrows]
            attribute boolean loop;
   [Throws]
-  void play();
+  Promise<void> play();
   [Throws]
   void pause();
 
@@ -92,9 +92,7 @@ interface HTMLMediaElement : HTMLElement {
   readonly attribute AudioTrackList audioTracks;
   [Pref="media.track.enabled"]
   readonly attribute VideoTrackList videoTracks;
-  [Pref="media.webvtt.enabled"]
   readonly attribute TextTrackList? textTracks;
-  [Pref="media.webvtt.enabled"]
   TextTrack addTextTrack(TextTrackKind kind,
                          optional DOMString label = "",
                          optional DOMString language = "");
@@ -155,7 +153,6 @@ partial interface HTMLMediaElement {
   attribute EventHandler onmozinterruptend;
 };
 
-#ifdef MOZ_EME
 // Encrypted Media Extensions
 partial interface HTMLMediaElement {
   [Pref="media.eme.apiVisible"]
@@ -167,8 +164,10 @@ partial interface HTMLMediaElement {
 
   [Pref="media.eme.apiVisible"]
   attribute EventHandler onencrypted;
+
+  [Pref="media.eme.apiVisible"]
+  attribute EventHandler onwaitingforkey;
 };
-#endif
 
 // This is just for testing
 partial interface HTMLMediaElement {
@@ -213,4 +212,13 @@ partial interface HTMLMediaElement {
 partial interface HTMLMediaElement {
   [Throws, Pref="media.seekToNextFrame.enabled"]
   Promise<void> seekToNextFrame();
+};
+
+/*
+ * This is an API for simulating visibility changes to help debug and write
+ * tests about suspend-video-decoding.
+ */
+partial interface HTMLMediaElement {
+  [Pref="media.test.setVisible"]
+  void setVisible(boolean aVisible);
 };

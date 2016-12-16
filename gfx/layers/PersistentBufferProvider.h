@@ -9,8 +9,9 @@
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed, etc
 #include "mozilla/layers/LayersTypes.h"
-#include "mozilla/layers/CompositableForwarder.h"
+#include "mozilla/layers/ShadowLayers.h"
 #include "mozilla/gfx/Types.h"
+#include "mozilla/Vector.h"
 
 namespace mozilla {
 
@@ -62,6 +63,18 @@ public:
   virtual TextureClient* GetTextureClient() { return nullptr; }
 
   virtual void OnShutdown() {}
+
+  virtual bool SetForwarder(ShadowLayerForwarder* aFwd) { return true; }
+
+  virtual void ClearCachedResources() {}
+
+  /**
+   * Return true if this provider preserves the drawing state (clips, transforms,
+   * etc.) across frames. In practice this means users of the provider can skip
+   * popping all of the clips at the end of the frames and pushing them back at
+   * the beginning of the following frames, which can be costly (cf. bug 1294351).
+   */
+  virtual bool PreservesDrawingState() const = 0;
 };
 
 
@@ -85,6 +98,7 @@ public:
 
   virtual void ReturnSnapshot(already_AddRefed<gfx::SourceSurface> aSnapshot) override;
 
+  virtual bool PreservesDrawingState() const override { return true; }
 private:
   ~PersistentBufferProviderBasic();
 
@@ -105,7 +119,7 @@ public:
 
   static already_AddRefed<PersistentBufferProviderShared>
   Create(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
-         CompositableForwarder* aFwd);
+         ShadowLayerForwarder* aFwd);
 
   virtual LayersBackend GetType() override { return LayersBackend::LAYERS_CLIENT; }
 
@@ -117,32 +131,38 @@ public:
 
   virtual void ReturnSnapshot(already_AddRefed<gfx::SourceSurface> aSnapshot) override;
 
-  TextureClient* GetTextureClient() override {
-    return mFront;
-  }
+  virtual TextureClient* GetTextureClient() override;
 
   virtual void NotifyInactive() override;
 
   virtual void OnShutdown() override { Destroy(); }
 
+  virtual bool SetForwarder(ShadowLayerForwarder* aFwd) override;
+
+  virtual void ClearCachedResources() override;
+
+  virtual bool PreservesDrawingState() const override { return false; }
 protected:
   PersistentBufferProviderShared(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
-                                 CompositableForwarder* aFwd,
+                                 ShadowLayerForwarder* aFwd,
                                  RefPtr<TextureClient>& aTexture);
 
   ~PersistentBufferProviderShared();
+
+  TextureClient* GetTexture(const Maybe<uint32_t>& aIndex);
+  bool CheckIndex(uint32_t aIndex) { return aIndex < mTextures.length(); }
 
   void Destroy();
 
   gfx::IntSize mSize;
   gfx::SurfaceFormat mFormat;
-  RefPtr<CompositableForwarder> mFwd;
-  // The texture presented to the compositor.
-  RefPtr<TextureClient> mFront;
-  // The texture that the canvas uses.
-  RefPtr<TextureClient> mBack;
-  // An extra texture we keep around temporarily to avoid allocating.
-  RefPtr<TextureClient> mBuffer;
+  RefPtr<ShadowLayerForwarder> mFwd;
+  Vector<RefPtr<TextureClient>, 4> mTextures;
+  // Offset of the texture in mTextures that the canvas uses.
+  Maybe<uint32_t> mBack;
+  // Offset of the texture in mTextures that is presented to the compositor.
+  Maybe<uint32_t> mFront;
+
   RefPtr<gfx::DrawTarget> mDrawTarget;
   RefPtr<gfx::SourceSurface > mSnapshot;
 };

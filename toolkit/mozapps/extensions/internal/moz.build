@@ -9,7 +9,9 @@ EXTRA_JS_MODULES.addons += [
     'AddonRepository.jsm',
     'AddonRepository_SQLiteMigrator.jsm',
     'AddonUpdateChecker.jsm',
+    'APIExtensionBootstrap.js',
     'Content.js',
+    'E10SAddonsRollout.jsm',
     'GMPProvider.jsm',
     'LightweightThemeImageOptimizer.jsm',
     'ProductAddonChecker.jsm',
@@ -17,6 +19,10 @@ EXTRA_JS_MODULES.addons += [
     'WebExtensionBootstrap.js',
     'XPIProvider.jsm',
     'XPIProviderUtils.js',
+]
+
+TESTING_JS_MODULES += [
+    'AddonTestUtils.jsm',
 ]
 
 # Don't ship unused providers on Android

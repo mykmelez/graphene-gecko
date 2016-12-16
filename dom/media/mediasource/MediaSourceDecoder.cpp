@@ -30,7 +30,7 @@ MediaSourceDecoder::MediaSourceDecoder(dom::HTMLMediaElement* aElement)
   , mMediaSource(nullptr)
   , mEnded(false)
 {
-  SetExplicitDuration(UnspecifiedNaN<double>());
+  mExplicitDuration.Set(Some(UnspecifiedNaN<double>()));
 }
 
 MediaDecoder*
@@ -114,6 +114,10 @@ MediaSourceDecoder::GetBuffered()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+  if (!mMediaSource) {
+    NS_WARNING("MediaSource element isn't attached");
+    return media::TimeIntervals::Invalid();
+  }
   dom::SourceBufferList* sourceBuffers = mMediaSource->ActiveSourceBuffers();
   if (!sourceBuffers) {
     // Media source object is shutting down.
@@ -192,7 +196,12 @@ MediaSourceDecoder::Ended(bool aEnded)
 {
   MOZ_ASSERT(NS_IsMainThread());
   static_cast<MediaSourceResource*>(GetResource())->SetEnded(aEnded);
-  mEnded = true;
+  if (aEnded) {
+    // We want the MediaSourceReader to refresh its buffered range as it may
+    // have been modified (end lined up).
+    NotifyDataArrived();
+  }
+  mEnded = aEnded;
 }
 
 void
@@ -225,6 +234,7 @@ void
 MediaSourceDecoder::SetMediaSourceDuration(double aDuration)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IsShutdown());
   if (aDuration >= 0) {
     int64_t checkedDuration;
     if (NS_FAILED(SecondsToUsecs(aDuration, checkedDuration))) {
@@ -267,10 +277,13 @@ MediaSourceDecoder::NextFrameBufferedStatus()
   // Next frame hasn't been decoded yet.
   // Use the buffered range to consider if we have the next frame available.
   TimeUnit currentPosition = TimeUnit::FromMicroseconds(CurrentPosition());
-  TimeInterval interval(currentPosition,
-                        currentPosition + media::TimeUnit::FromMicroseconds(DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED),
-                        MediaSourceDemuxer::EOS_FUZZ);
-  return GetBuffered().Contains(ClampIntervalToEnd(interval))
+  TimeIntervals buffered = GetBuffered();
+  buffered.SetFuzz(MediaSourceDemuxer::EOS_FUZZ / 2);
+  TimeInterval interval(
+    currentPosition,
+    currentPosition
+    + media::TimeUnit::FromMicroseconds(DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED));
+  return buffered.ContainsStrict(ClampIntervalToEnd(interval))
     ? MediaDecoderOwner::NEXT_FRAME_AVAILABLE
     : MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;
 }
@@ -298,22 +311,41 @@ MediaSourceDecoder::CanPlayThrough()
   }
   // If we have data up to the mediasource's duration or 30s ahead, we can
   // assume that we can play without interruption.
+  TimeIntervals buffered = GetBuffered();
+  buffered.SetFuzz(MediaSourceDemuxer::EOS_FUZZ / 2);
   TimeUnit timeAhead =
     std::min(duration, currentPosition + TimeUnit::FromSeconds(30));
-  TimeInterval interval(currentPosition,
-                        timeAhead,
-                        MediaSourceDemuxer::EOS_FUZZ);
-  return GetBuffered().Contains(ClampIntervalToEnd(interval));
+  TimeInterval interval(currentPosition, timeAhead);
+  return buffered.ContainsStrict(ClampIntervalToEnd(interval));
+}
+
+void
+MediaSourceDecoder::NotifyWaitingForKey()
+{
+  mWaitingForKeyEvent.Notify();
+}
+
+MediaEventSource<void>*
+MediaSourceDecoder::WaitingForKeyEvent()
+{
+  return &mWaitingForKeyEvent;
 }
 
 TimeInterval
 MediaSourceDecoder::ClampIntervalToEnd(const TimeInterval& aInterval)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (!mEnded) {
     return aInterval;
   }
-  TimeInterval interval(TimeUnit(), TimeUnit::FromSeconds(GetDuration()));
-  return aInterval.Intersection(interval);
+  TimeUnit duration = TimeUnit::FromSeconds(GetDuration());
+  if (duration < aInterval.mStart) {
+    return aInterval;
+  }
+  return TimeInterval(aInterval.mStart,
+                      std::min(aInterval.mEnd, duration),
+                      aInterval.mFuzz);
 }
 
 #undef MSE_DEBUG

@@ -17,6 +17,7 @@
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
 #include "nsDOMTokenList.h"
+#include "nsIContentInlines.h"
 #include "nsIDocument.h"
 #include "nsIDOMEvent.h"
 #include "nsIDOMStyleSheet.h"
@@ -94,7 +95,7 @@ NS_IMPL_ELEMENT_CLONE(HTMLLinkElement)
 bool
 HTMLLinkElement::Disabled()
 {
-  CSSStyleSheet* ss = GetSheet();
+  StyleSheet* ss = GetSheet();
   return ss && ss->Disabled();
 }
 
@@ -108,8 +109,7 @@ HTMLLinkElement::GetMozDisabled(bool* aDisabled)
 void
 HTMLLinkElement::SetDisabled(bool aDisabled)
 {
-  CSSStyleSheet* ss = GetSheet();
-  if (ss) {
+  if (StyleSheet* ss = GetSheet()) {
     ss->SetDisabled(aDisabled);
   }
 }
@@ -421,9 +421,9 @@ HTMLLinkElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 }
 
 nsresult
-HTMLLinkElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
+HTMLLinkElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
-  return PreHandleEventForAnchors(aVisitor);
+  return GetEventTargetParentForAnchors(aVisitor);
 }
 
 nsresult
@@ -450,7 +450,7 @@ HTMLLinkElement::GetLinkTarget(nsAString& aTarget)
 static const DOMTokenListSupportedToken sSupportedRelValues[] = {
   // Keep this in sync with ToLinkMask in nsStyleLinkElement.cpp.
   // "import" must come first because it's conditional.
-  "import"
+  "import",
   "prefetch",
   "dns-prefetch",
   "stylesheet",

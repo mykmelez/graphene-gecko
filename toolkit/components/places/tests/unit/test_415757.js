@@ -71,7 +71,7 @@ add_task(function* test_execute()
   PlacesUtils.history.removePagesFromHost("www.test.com", false);
 
   // check that all pages in www.test.com have been removed
-  for (var i = 0; i < TOTAL_SITES; i++) {
+  for (let i = 0; i < TOTAL_SITES; i++) {
     let site = "http://www.test.com/" + i + "/";
     let testURI = uri(site);
     do_check_false(uri_in_db(testURI));
@@ -88,13 +88,13 @@ add_task(function* test_execute()
   try {
     PlacesUtils.annotations.getPageAnnotation(testAnnoDeletedURI, testAnnoName);
     do_throw("fetching page-annotation that doesn't exist, should've thrown");
-  } catch(ex) {}
+  } catch (ex) {}
 
   // check that annotation on the NOT removed item still exists
   try {
     var annoVal = PlacesUtils.annotations.getPageAnnotation(testAnnoRetainedURI,
                                                             testAnnoRetainedName);
-  } catch(ex) {
+  } catch (ex) {
     do_throw("The annotation has been removed erroneously");
   }
   do_check_eq(annoVal, testAnnoRetainedValue);

@@ -12,7 +12,7 @@
 #include "nsXPCOM.h"
 #include "nsISupports.h"
 #include "mozilla/Logging.h"
-#include "nsXREAppData.h"
+#include "mozilla/XREAppData.h"
 #include "js/TypeDecls.h"
 
 #include "mozilla/ArrayUtils.h"
@@ -204,7 +204,7 @@
  *                 XPCOMGlueStartup() should be called before this method.
  */
 XRE_API(int,
-        XRE_main, (int argc, char* argv[], const nsXREAppData* aAppData,
+        XRE_main, (int argc, char* argv[], const mozilla::XREAppData& aAppData,
                    uint32_t aFlags))
 
 /**
@@ -362,18 +362,6 @@ XRE_API(void,
         XRE_TermEmbedding, ())
 
 /**
- * Create a new nsXREAppData structure from an application.ini file.
- *
- * @param aINIFile The application.ini file to parse.
- * @param aAppData A newly-allocated nsXREAppData structure. The caller is
- *                 responsible for freeing this structure using
- *                 XRE_FreeAppData.
- */
-XRE_API(nsresult,
-        XRE_CreateAppData, (nsIFile* aINIFile,
-                            nsXREAppData** aAppData))
-
-/**
  * Parse an INI file (application.ini or override.ini) into an existing
  * nsXREAppData structure.
  *
@@ -382,13 +370,7 @@ XRE_API(nsresult,
  */
 XRE_API(nsresult,
         XRE_ParseAppData, (nsIFile* aINIFile,
-                           nsXREAppData* aAppData))
-
-/**
- * Free a nsXREAppData structure that was allocated with XRE_CreateAppData.
- */
-XRE_API(void,
-        XRE_FreeAppData, (nsXREAppData* aAppData))
+                           mozilla::XREAppData& aAppData))
 
 enum GeckoProcessType
 {
@@ -423,6 +405,11 @@ static_assert(MOZ_ARRAY_LENGTH(kGeckoProcessTypeString) ==
 XRE_API(const char*,
         XRE_ChildProcessTypeToString, (GeckoProcessType aProcessType))
 
+#if defined(MOZ_WIDGET_ANDROID)
+XRE_API(void,
+        XRE_SetAndroidChildFds, (int crashFd, int ipcFd))
+#endif // defined(MOZ_WIDGET_ANDROID)
+
 XRE_API(void,
         XRE_SetProcessType, (const char* aProcessTypeString))
 
@@ -456,6 +443,9 @@ XRE_API(bool,
 
 XRE_API(bool,
         XRE_IsContentProcess, ())
+
+XRE_API(bool,
+        XRE_IsGPUProcess, ())
 
 typedef void (*MainFunction)(void* aData);
 
@@ -508,18 +498,6 @@ XRE_API(void,
 XRE_API(void,
         XRE_StopLateWriteChecks, (void))
 
-#ifdef MOZ_B2G_LOADER
-XRE_API(int,
-        XRE_ProcLoaderServiceRun, (pid_t, int, int argc, const char* argv[],
-                                   mozilla::Vector<int>& aReservedFds));
-XRE_API(void,
-        XRE_ProcLoaderClientInit, (pid_t, int,
-                                   mozilla::Vector<int>& aReservedFds));
-XRE_API(void,
-        XRE_ProcLoaderPreload, (const char* aProgramDir,
-                                const nsXREAppData* aAppData));
-#endif // MOZ_B2G_LOADER
-
 XRE_API(void,
         XRE_EnableSameExecutableForContentProc, ())
 
@@ -531,5 +509,17 @@ XRE_API(int,
 XRE_API(void,
         XRE_GlibInit, ())
 #endif
+
+
+#ifdef LIBFUZZER
+#include "LibFuzzerRegistry.h"
+
+XRE_API(void,
+        XRE_LibFuzzerSetMain, (int, char**, LibFuzzerMain))
+
+XRE_API(void,
+        XRE_LibFuzzerGetFuncs, (const char*, LibFuzzerInitFunc*,
+                                LibFuzzerTestingFunc*))
+#endif // LIBFUZZER
 
 #endif // _nsXULAppAPI_h__

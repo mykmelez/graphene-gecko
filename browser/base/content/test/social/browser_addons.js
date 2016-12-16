@@ -1,23 +1,23 @@
 var AddonManager = Cu.import("resource://gre/modules/AddonManager.jsm", {}).AddonManager;
-var SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
+var SocialService = Cu.import("resource:///modules/SocialService.jsm", {}).SocialService;
 
 var manifest = {
   name: "provider 1",
   origin: "https://example.com",
-  sidebarURL: "https://example.com/browser/browser/base/content/test/social/social_sidebar_empty.html",
+  shareURL: "https://example.com/browser/browser/base/content/test/social/social_share.html",
   iconURL: "https://example.com/browser/browser/base/content/test/general/moz.png"
 };
 var manifest2 = { // used for testing install
   name: "provider 2",
   origin: "https://test1.example.com",
-  sidebarURL: "https://test1.example.com/browser/browser/base/content/test/social/social_sidebar_empty.html",
+  shareURL: "https://test1.example.com/browser/browser/base/content/test/social/social_share.html",
   iconURL: "https://test1.example.com/browser/browser/base/content/test/general/moz.png",
   version: "1.0"
 };
 var manifestUpgrade = { // used for testing install
   name: "provider 3",
   origin: "https://test2.example.com",
-  sidebarURL: "https://test2.example.com/browser/browser/base/content/test/social/social_sidebar.html",
+  shareURL: "https://test2.example.com/browser/browser/base/content/test/social/social_share.html",
   iconURL: "https://test2.example.com/browser/browser/base/content/test/general/moz.png",
   version: "1.0"
 };
@@ -25,7 +25,7 @@ var manifestUpgrade = { // used for testing install
 function test() {
   waitForExplicitFinish();
   PopupNotifications.panel.setAttribute("animate", "false");
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     PopupNotifications.panel.removeAttribute("animate");
   });
 
@@ -35,7 +35,7 @@ function test() {
   is(SocialService.getOriginActivationType(manifest2.origin), "foreign", "manifest2 is foreign");
 
   Services.prefs.setBoolPref("social.remote-install.enabled", true);
-  runSocialTests(tests, undefined, undefined, function () {
+  runSocialTests(tests, undefined, undefined, function() {
     Services.prefs.clearUserPref("social.remote-install.enabled");
     ok(!Services.prefs.prefHasUserValue(prefname), "manifest is not in user-prefs");
     // just in case the tests failed, clear these here as well
@@ -91,7 +91,7 @@ var tests = {
     is(SocialService.getOriginActivationType(installFrom), "foreign", "testing foriegn install");
     let data = {
       origin: installFrom,
-      url: installFrom+"/activate",
+      url: installFrom + "/activate",
       manifest: manifest,
       window: window
     }
@@ -199,7 +199,6 @@ var tests = {
       panel.button.click();
     });
 
-    let activationURL = manifest2.origin + "/browser/browser/base/content/test/social/social_activate.html"
     Services.prefs.setCharPref("social.directories", manifest2.origin);
     is(SocialService.getOriginActivationType(manifest2.origin), "directory", "testing directory install");
     let data = {

@@ -50,6 +50,7 @@ var gTotalChunks = 0;
 var gThisChunk = 0;
 var gContainingWindow = null;
 var gURLFilterRegex = {};
+var gContentGfxInfo = null;
 const FOCUS_FILTER_ALL_TESTS = "all";
 const FOCUS_FILTER_NEEDS_FOCUS_TESTS = "needs-focus";
 const FOCUS_FILTER_NON_NEEDS_FOCUS_TESTS = "non-needs-focus";
@@ -308,12 +309,13 @@ this.OnRefTestLoad = function OnRefTestLoad(win)
     if (gBrowserIsIframe) {
       gBrowser = gContainingWindow.document.createElementNS(XHTML_NS, "iframe");
       gBrowser.setAttribute("mozbrowser", "");
-      gBrowser.setAttribute("mozapp", prefs.getCharPref("b2g.system_manifest_url"));
     } else {
       gBrowser = gContainingWindow.document.createElementNS(XUL_NS, "xul:browser");
+      gBrowser.setAttribute("class", "lightweight");
     }
     gBrowser.setAttribute("id", "browser");
-    gBrowser.setAttribute("type", "content-primary");
+    gBrowser.setAttribute("type", "content");
+    gBrowser.setAttribute("primary", "true");
     gBrowser.setAttribute("remote", gBrowserIsRemote ? "true" : "false");
     // Make sure the browser element is exactly 800x1000, no matter
     // what size our window is
@@ -640,20 +642,35 @@ function BuildConditionSandbox(aURL) {
     }
 
     var gfxInfo = (NS_GFXINFO_CONTRACTID in CC) && CC[NS_GFXINFO_CONTRACTID].getService(CI.nsIGfxInfo);
+    let readGfxInfo = function (obj, key) {
+      if (gContentGfxInfo && (key in gContentGfxInfo)) {
+        return gContentGfxInfo[key];
+      }
+      return obj[key];
+    }
+
     try {
-      sandbox.d2d = gfxInfo.D2DEnabled;
+      sandbox.d2d = readGfxInfo(gfxInfo, "D2DEnabled");
+      sandbox.dwrite = readGfxInfo(gfxInfo, "DWriteEnabled");
     } catch (e) {
       sandbox.d2d = false;
+      sandbox.dwrite = false;
     }
+
     var info = gfxInfo.getInfo();
-    sandbox.azureCairo = info.AzureCanvasBackend == "cairo";
-    sandbox.azureQuartz = info.AzureCanvasBackend == "quartz";
-    sandbox.azureSkia = info.AzureCanvasBackend == "skia";
-    sandbox.skiaContent = info.AzureContentBackend == "skia";
-    sandbox.azureSkiaGL = info.AzureCanvasAccelerated; // FIXME: assumes GL right now
+    var canvasBackend = readGfxInfo(info, "AzureCanvasBackend");
+    var contentBackend = readGfxInfo(info, "AzureContentBackend");
+    var canvasAccelerated = readGfxInfo(info, "AzureCanvasAccelerated");
+
+    sandbox.gpuProcess = gfxInfo.usingGPUProcess;
+    sandbox.azureCairo = canvasBackend == "cairo";
+    sandbox.azureQuartz = canvasBackend == "quartz";
+    sandbox.azureSkia = canvasBackend == "skia";
+    sandbox.skiaContent = contentBackend == "skia";
+    sandbox.azureSkiaGL = canvasAccelerated; // FIXME: assumes GL right now
     // true if we are using the same Azure backend for rendering canvas and content
-    sandbox.contentSameGfxBackendAsCanvas = info.AzureContentBackend == info.AzureCanvasBackend
-                                            || (info.AzureContentBackend == "none" && info.AzureCanvasBackend == "cairo");
+    sandbox.contentSameGfxBackendAsCanvas = contentBackend == canvasBackend
+                                            || (contentBackend == "none" && canvasBackend == "cairo");
 
     sandbox.layersGPUAccelerated =
       gWindowUtils.layerManagerType != "Basic";
@@ -696,6 +713,12 @@ function BuildConditionSandbox(aURL) {
     sandbox.webrtc = true;
 #else
     sandbox.webrtc = false;
+#endif
+
+#ifdef MOZ_STYLO
+    sandbox.stylo = true;
+#else
+    sandbox.stylo = false;
 #endif
 
     var hh = CC[NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX + "http"].
@@ -744,11 +767,6 @@ function BuildConditionSandbox(aURL) {
         sandbox.asyncPan = gContainingWindow.document.docShell.asyncPanZoomEnabled;
     } catch (e) {
         sandbox.asyncPan = false;
-    }
-    try {
-        sandbox.asyncZoom = sandbox.asyncPan && prefs.getBoolPref("apz.allow_zooming");
-    } catch (e) {
-        sandbox.asyncZoom = false;
     }
 
     if (!gDumpedConditionSandbox) {
@@ -1701,19 +1719,31 @@ function RecordResult(testRunTime, errorMsg, scriptResults)
                 var failureString = failures.join(", ");
                 logger.testEnd(gURLs[0].identifier, output.s[0], output.s[1], failureString, null, extra);
             } else {
+                var message = "image comparison";
                 if (!test_passed && expected == EXPECTED_PASS ||
                     !test_passed && expected == EXPECTED_FUZZY ||
                     test_passed && expected == EXPECTED_FAIL) {
                     if (!equal) {
                         extra.max_difference = maxDifference.value;
                         extra.differences = differences;
-                        extra.image1 = gCanvas1.toDataURL();
-                        extra.image2 = gCanvas2.toDataURL();
+                        var image1 = gCanvas1.toDataURL();
+                        var image2 = gCanvas2.toDataURL();
+                        extra.reftest_screenshots = [
+                            {url:gURLs[0].identifier[0],
+                             screenshot: image1.slice(image1.indexOf(",") + 1)},
+                            gURLs[0].identifier[1],
+                            {url:gURLs[0].identifier[2],
+                             screenshot: image2.slice(image2.indexOf(",") + 1)}
+                        ];
+                        extra.image1 = image1;
+                        extra.image2 = image2;
+                        message += (", max difference: " + extra.max_difference +
+                                    ", number of differing pixels: " + differences);
                     } else {
                         extra.image1 = gCanvas1.toDataURL();
                     }
                 }
-                logger.testEnd(gURLs[0].identifier, output.s[0], output.s[1], null, null, extra);
+                logger.testEnd(gURLs[0].identifier, output.s[0], output.s[1], message, null, extra);
 
                 if (gURLs[0].prefSettings1.length == 0) {
                     UpdateCanvasCache(gURLs[0].url1, gCanvas1);
@@ -1827,28 +1857,7 @@ function DoAssertionCheck(numAsserts)
         var minAsserts = gURLs[0].minAsserts;
         var maxAsserts = gURLs[0].maxAsserts;
 
-        var expectedAssertions = "expected " + minAsserts;
-        if (minAsserts != maxAsserts) {
-            expectedAssertions += " to " + maxAsserts;
-        }
-        expectedAssertions += " assertions";
-
-        if (numAsserts < minAsserts) {
-            ++gTestResults.AssertionUnexpectedFixed;
-            gDumpFn("REFTEST TEST-UNEXPECTED-PASS | " + gURLs[0].prettyPath +
-                    " | assertion count " + numAsserts + " is less than " +
-                       expectedAssertions + "\n");
-        } else if (numAsserts > maxAsserts) {
-            ++gTestResults.AssertionUnexpected;
-            gDumpFn("REFTEST TEST-UNEXPECTED-FAIL | " + gURLs[0].prettyPath +
-                    " | assertion count " + numAsserts + " is more than " +
-                       expectedAssertions + "\n");
-        } else if (numAsserts != 0) {
-            ++gTestResults.AssertionKnown;
-            gDumpFn("REFTEST TEST-KNOWN-FAIL | " + gURLs[0].prettyPath +
-                    "assertion count " + numAsserts + " matches " +
-                    expectedAssertions + "\n");
-        }
+        logger.assertionCount(gCurrentURL, numAsserts, minAsserts, maxAsserts);
     }
 
     if (gURLs[0].chaosMode) {
@@ -1896,7 +1905,7 @@ function RegisterMessageListenersAndLoadContentScript()
     );
     gBrowserMessageManager.addMessageListener(
         "reftest:ContentReady",
-        function (m) { return RecvContentReady() }
+        function (m) { return RecvContentReady(m.data); }
     );
     gBrowserMessageManager.addMessageListener(
         "reftest:Exception",
@@ -1955,8 +1964,9 @@ function RecvAssertionCount(count)
     DoAssertionCheck(count);
 }
 
-function RecvContentReady()
+function RecvContentReady(info)
 {
+    gContentGfxInfo = info.gfx;
     InitAndStartRefTests();
     return { remote: gBrowserIsRemote };
 }

@@ -37,12 +37,20 @@ DEFAULT_CXX_11 = {
     '__cplusplus': '201103L',
 }
 
+DEFAULT_CXX_14 = {
+    '__cplusplus': '201402L',
+}
+
 SUPPORTS_GNU99 = {
     '-std=gnu99': DEFAULT_C99,
 }
 
 SUPPORTS_GNUXX11 = {
     '-std=gnu++11': DEFAULT_CXX_11,
+}
+
+SUPPORTS_CXX14 = {
+    '-std=c++14': DEFAULT_CXX_14,
 }
 
 
@@ -118,6 +126,7 @@ GCC_PLATFORM_DARWIN = {
 
 GCC_PLATFORM_WIN = {
     '_WIN32': 1,
+    'WINNT': 1,
 }
 
 GCC_PLATFORM_X86_LINUX = FakeCompiler(GCC_PLATFORM_X86, GCC_PLATFORM_LINUX)
@@ -219,12 +228,12 @@ VS_PLATFORM_X86_64 = {
 # Note: In reality, the -std=gnu* options are only supported when preceded by
 # -Xclang.
 CLANG_CL_3_9 = (CLANG_BASE('3.9.0') + VS('18.00.00000') + DEFAULT_C11 +
-                SUPPORTS_GNU99 + SUPPORTS_GNUXX11) + {
+                SUPPORTS_GNU99 + SUPPORTS_GNUXX11 + SUPPORTS_CXX14) + {
     '*.cpp': {
         '__STDC_VERSION__': False,
         '__cplusplus': '201103L',
     },
-    '-fms-compatibility-version=18.00.30723': VS('18.00.30723')[None],
+    '-fms-compatibility-version=19.00.23918': VS('19.00.23918')[None],
 }
 
 CLANG_CL_PLATFORM_X86 = FakeCompiler(VS_PLATFORM_X86, GCC_PLATFORM_X86[None])
@@ -311,30 +320,35 @@ class LinuxToolchainTest(BaseToolchainTest):
         version='4.9.3',
         type='gcc',
         compiler='/usr/bin/gcc',
+        language='C',
     )
     GXX_4_9_RESULT = CompilerResult(
         flags=['-std=gnu++11'],
         version='4.9.3',
         type='gcc',
         compiler='/usr/bin/g++',
+        language='C++',
     )
     GCC_5_RESULT = CompilerResult(
         flags=['-std=gnu99'],
         version='5.2.1',
         type='gcc',
         compiler='/usr/bin/gcc-5',
+        language='C',
     )
     GXX_5_RESULT = CompilerResult(
         flags=['-std=gnu++11'],
         version='5.2.1',
         type='gcc',
         compiler='/usr/bin/g++-5',
+        language='C++',
     )
     CLANG_3_3_RESULT = CompilerResult(
         flags=[],
         version='3.3.0',
         type='clang',
         compiler='/usr/bin/clang-3.3',
+        language='C',
     )
     CLANGXX_3_3_RESULT = 'Only clang/llvm 3.6 or newer is supported.'
     CLANG_3_6_RESULT = CompilerResult(
@@ -342,12 +356,14 @@ class LinuxToolchainTest(BaseToolchainTest):
         version='3.6.2',
         type='clang',
         compiler='/usr/bin/clang',
+        language='C',
     )
     CLANGXX_3_6_RESULT = CompilerResult(
         flags=['-std=gnu++11'],
         version='3.6.2',
         type='clang',
         compiler='/usr/bin/clang++',
+        language='C++',
     )
 
     def test_gcc(self):
@@ -753,19 +769,30 @@ class WindowsToolchainTest(BaseToolchainTest):
         version='19.00.23918',
         type='msvc',
         compiler='/usr/bin/cl',
+        language='C',
+    )
+    VSXX_2015u2_RESULT = CompilerResult(
+        flags=[],
+        version='19.00.23918',
+        type='msvc',
+        compiler='/usr/bin/cl',
+        language='C++',
     )
     CLANG_CL_3_9_RESULT = CompilerResult(
         flags=['-Xclang', '-std=gnu99',
-               '-fms-compatibility-version=18.00.30723', '-fallback'],
-        version='18.00.30723',
+               '-fms-compatibility-version=19.00.23918', '-fallback'],
+        version='19.00.23918',
         type='clang-cl',
         compiler='/usr/bin/clang-cl',
+        language='C',
     )
     CLANGXX_CL_3_9_RESULT = CompilerResult(
-        flags=['-fms-compatibility-version=18.00.30723', '-fallback'],
-        version='18.00.30723',
+        flags=['-Xclang', '-std=c++14',
+               '-fms-compatibility-version=19.00.23918', '-fallback'],
+        version='19.00.23918',
         type='clang-cl',
         compiler='/usr/bin/clang-cl',
+        language='C++',
     )
     CLANG_3_3_RESULT = LinuxToolchainTest.CLANG_3_3_RESULT
     CLANGXX_3_3_RESULT = LinuxToolchainTest.CLANGXX_3_3_RESULT
@@ -781,7 +808,7 @@ class WindowsToolchainTest(BaseToolchainTest):
     def test_msvc(self):
         self.do_toolchain_test(self.PATHS, {
             'c_compiler': self.VS_2015u2_RESULT,
-            'cxx_compiler': self.VS_2015u2_RESULT,
+            'cxx_compiler': self.VSXX_2015u2_RESULT,
         })
 
     def test_unsupported_msvc(self):

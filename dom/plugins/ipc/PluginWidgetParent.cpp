@@ -8,7 +8,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsWidgetsCID.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/DebugOnly.h"
 #include "nsDebug.h"
 
@@ -36,12 +36,12 @@ namespace plugins {
 
 static NS_DEFINE_CID(kWidgetCID, NS_CHILD_CID);
 
-// This macro returns true to prevent an abort in the child process when
+// This macro returns IPC_OK() to prevent an abort in the child process when
 // ipc message delivery fails.
 #define ENSURE_CHANNEL {                                      \
   if (!mWidget) {                                             \
     NS_WARNING("called on an invalid remote widget.");        \
-    return true;                                              \
+    return IPC_OK();                                          \
   }                                                           \
 }
 
@@ -83,10 +83,14 @@ PluginWidgetParent::SetParent(nsIWidget* aParent)
 // bypass this code on Window, and reuse a bit of it on Linux. Content still
 // makes use of some of the utility functions as well.
 
-bool
-PluginWidgetParent::RecvCreate(nsresult* aResult)
+mozilla::ipc::IPCResult
+PluginWidgetParent::RecvCreate(nsresult* aResult, uint64_t* aScrollCaptureId,
+                               uintptr_t* aPluginInstanceId)
 {
   PWLOG("PluginWidgetParent::RecvCreate()\n");
+
+  *aScrollCaptureId = 0;
+  *aPluginInstanceId = 0;
 
   mWidget = do_CreateInstance(kWidgetCID, aResult);
   NS_ASSERTION(NS_SUCCEEDED(*aResult), "widget create failure");
@@ -97,7 +101,7 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
   PLUG_NewPluginNativeWindow((nsPluginNativeWindow**)&mWrapper);
   if (!mWrapper) {
     KillWidget();
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
   // Give a copy of this to the widget, which handles some update
   // work for us.
@@ -110,7 +114,7 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
   if (!parentWidget) {
     *aResult = NS_ERROR_NOT_AVAILABLE;
     KillWidget();
-    return true;
+    return IPC_OK();
   }
 
   nsWidgetInitData initData;
@@ -123,17 +127,15 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
   if (NS_FAILED(*aResult)) {
     KillWidget();
     // This should never fail, abort.
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
-  DebugOnly<nsresult> drv;
-  drv = mWidget->EnableDragDrop(true);
-  NS_ASSERTION(NS_SUCCEEDED(drv), "widget call failure");
+  mWidget->EnableDragDrop(true);
 
 #if defined(MOZ_WIDGET_GTK)
   // For setup, initially GTK code expects 'window' to hold the parent.
   mWrapper->window = mWidget->GetNativeData(NS_NATIVE_PLUGIN_PORT);
-  drv = mWrapper->CreateXEmbedWindow(false);
+  DebugOnly<nsresult> drv = mWrapper->CreateXEmbedWindow(false);
   NS_ASSERTION(NS_SUCCEEDED(drv), "widget call failure");
   mWrapper->SetAllocation();
   PWLOG("Plugin XID=%p\n", (void*)mWrapper->window);
@@ -144,10 +146,9 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
                GetTabParent()->Manager()->AsContentParent());
   NS_ASSERTION(winres, "SetPropW call failure");
 
-  uint64_t scrollCaptureId = mWidget->CreateScrollCaptureContainer();
-  uintptr_t pluginId =
+  *aScrollCaptureId = mWidget->CreateScrollCaptureContainer();
+  *aPluginInstanceId =
     reinterpret_cast<uintptr_t>(mWidget->GetNativeData(NS_NATIVE_PLUGIN_ID));
-  Unused << SendSetScrollCaptureId(scrollCaptureId, pluginId);
 #endif
 
   // This is a special call we make to nsBaseWidget to register this
@@ -156,7 +157,7 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
   // over with corresponding layer updates.
   mWidget->RegisterPluginWindowForRemoteUpdates();
 
-  return true;
+  return IPC_OK();
 }
 
 void
@@ -165,8 +166,7 @@ PluginWidgetParent::KillWidget()
   PWLOG("PluginWidgetParent::KillWidget() widget=%p\n", (void*)mWidget.get());
   if (mWidget) {
     mWidget->UnregisterPluginWindowForRemoteUpdates();
-    DebugOnly<nsresult> rv = mWidget->Destroy();
-    NS_ASSERTION(NS_SUCCEEDED(rv), "widget destroy failure");
+    mWidget->Destroy();
 #if defined(MOZ_WIDGET_GTK)
     mWidget->SetNativeData(NS_NATIVE_PLUGIN_OBJECT_PTR, (uintptr_t)0);
     mWrapper = nullptr;
@@ -194,16 +194,16 @@ PluginWidgetParent::ParentDestroy()
   PWLOG("PluginWidgetParent::ParentDestroy()\n");
 }
 
-bool
+mozilla::ipc::IPCResult
 PluginWidgetParent::RecvSetFocus(const bool& aRaise)
 {
   ENSURE_CHANNEL;
   PWLOG("PluginWidgetParent::RecvSetFocus(%d)\n", aRaise);
   mWidget->SetFocus(aRaise);
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 PluginWidgetParent::RecvGetNativePluginPort(uintptr_t* value)
 {
   ENSURE_CHANNEL;
@@ -215,10 +215,10 @@ PluginWidgetParent::RecvGetNativePluginPort(uintptr_t* value)
   NS_ASSERTION(*value, "no native port??");
 #endif
   PWLOG("PluginWidgetParent::RecvGetNativeData() %p\n", (void*)*value);
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 PluginWidgetParent::RecvSetNativeChildWindow(const uintptr_t& aChildWindow)
 {
 #if defined(XP_WIN)
@@ -226,10 +226,10 @@ PluginWidgetParent::RecvSetNativeChildWindow(const uintptr_t& aChildWindow)
   PWLOG("PluginWidgetParent::RecvSetNativeChildWindow(%p)\n",
         (void*)aChildWindow);
   mWidget->SetNativeData(NS_NATIVE_CHILD_WINDOW, aChildWindow);
-  return true;
+  return IPC_OK();
 #else
   NS_NOTREACHED("PluginWidgetParent::RecvSetNativeChildWindow not implemented!");
-  return false;
+  return IPC_FAIL_NO_REASON(this);
 #endif
 }
 

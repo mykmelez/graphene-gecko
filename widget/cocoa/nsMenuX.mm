@@ -421,7 +421,6 @@ void nsMenuX::MenuConstruct()
       if (ownerDoc && jsapi.Init(ownerDoc->GetInnerWindow())) {
         JSContext* cx = jsapi.cx();
         JS::RootedObject ignoredObj(cx);
-        nsCOMPtr<nsIXPConnectJSObjectHolder> wrapper;
         xpconnect->WrapNative(cx, JS::CurrentGlobalOrNull(cx), menuPopup,
                               NS_GET_IID(nsISupports), ignoredObj.address());
         mXBLAttached = true;
@@ -451,8 +450,13 @@ void nsMenuX::MenuConstruct()
 
 void nsMenuX::SetRebuild(bool aNeedsRebuild)
 {
-  if (!gConstructingMenu)
+  if (!gConstructingMenu) {
     mNeedsRebuild = aNeedsRebuild;
+    if (mParent->MenuObjectType() == eMenuBarObjectType) {
+      nsMenuBarX* mb = static_cast<nsMenuBarX*>(mParent);
+      mb->SetNeedsRebuild();
+    }
+  }
 }
 
 nsresult nsMenuX::SetEnabled(bool aIsEnabled)

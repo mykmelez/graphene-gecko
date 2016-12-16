@@ -9,22 +9,20 @@
 const {Cc, Ci, Cu} = require("chrome");
 
 const {Utils: WebConsoleUtils, CONSOLE_WORKER_IDS} =
-  require("devtools/shared/webconsole/utils");
+  require("devtools/client/webconsole/utils");
 const { getSourceNames } = require("devtools/client/shared/source-utils");
 const BrowserLoaderModule = {};
 Cu.import("resource://devtools/client/shared/browser-loader.js", BrowserLoaderModule);
 
 const promise = require("promise");
 const Services = require("Services");
-const ErrorDocs = require("devtools/server/actors/errordocs");
 const Telemetry = require("devtools/client/shared/telemetry");
+const {PrefObserver} = require("devtools/client/shared/prefs");
 
 loader.lazyServiceGetter(this, "clipboardHelper",
                          "@mozilla.org/widget/clipboardhelper;1",
                          "nsIClipboardHelper");
 loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/event-emitter");
-loader.lazyRequireGetter(this, "AutocompletePopup", "devtools/client/shared/autocomplete-popup", true);
-loader.lazyRequireGetter(this, "ToolSidebar", "devtools/client/framework/sidebar", true);
 loader.lazyRequireGetter(this, "ConsoleOutput", "devtools/client/webconsole/console-output", true);
 loader.lazyRequireGetter(this, "Messages", "devtools/client/webconsole/console-output", true);
 loader.lazyRequireGetter(this, "EnvironmentClient", "devtools/shared/client/main", true);
@@ -35,11 +33,12 @@ loader.lazyRequireGetter(this, "gSequenceId", "devtools/client/webconsole/jsterm
 loader.lazyImporter(this, "VariablesView", "resource://devtools/client/shared/widgets/VariablesView.jsm");
 loader.lazyImporter(this, "VariablesViewController", "resource://devtools/client/shared/widgets/VariablesViewController.jsm");
 loader.lazyRequireGetter(this, "gDevTools", "devtools/client/framework/devtools", true);
-loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
 loader.lazyRequireGetter(this, "KeyShortcuts", "devtools/client/shared/key-shortcuts", true);
 loader.lazyRequireGetter(this, "ZoomKeys", "devtools/client/shared/zoom-keys");
+loader.lazyRequireGetter(this, "WebConsoleConnectionProxy", "devtools/client/webconsole/webconsole-connection-proxy", true);
 
-const STRINGS_URI = "chrome://devtools/locale/webconsole.properties";
+const {PluralForm} = require("devtools/shared/plural-form");
+const STRINGS_URI = "devtools/client/locales/webconsole.properties";
 var l10n = new WebConsoleUtils.L10n(STRINGS_URI);
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -183,10 +182,6 @@ const THROTTLE_UPDATES = 1000;
 // The preference prefix for all of the Web Console filters.
 const FILTER_PREFS_PREFIX = "devtools.webconsole.filter.";
 
-// The minimum font size.
-const MIN_FONT_SIZE = 10;
-
-const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
 const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
 const PREF_MESSAGE_TIMESTAMP = "devtools.webconsole.timestampMessages";
 const PREF_NEW_FRONTEND_ENABLED = "devtools.webconsole.new-frontend-enabled";
@@ -206,6 +201,8 @@ const PREF_NEW_FRONTEND_ENABLED = "devtools.webconsole.new-frontend-enabled";
 function WebConsoleFrame(webConsoleOwner) {
   this.owner = webConsoleOwner;
   this.hudId = this.owner.hudId;
+  this.isBrowserConsole = this.owner._browserConsole;
+
   this.window = this.owner.iframeWindow;
 
   this._repeatNodes = {};
@@ -387,6 +384,7 @@ WebConsoleFrame.prototype = {
   _destroyer: null,
 
   _saveRequestAndResponseBodies: true,
+  _throttleData: null,
 
   // Chevron width at the starting of Web Console's input box.
   _chevronWidth: 0,
@@ -425,6 +423,36 @@ WebConsoleFrame.prototype = {
   },
 
   /**
+   * Setter for throttling data.
+   *
+   * @param boolean value
+   *        The new value you want to set; @see NetworkThrottleManager.
+   */
+  setThrottleData: function(value) {
+    if (!this.webConsoleClient) {
+      // Don't continue if the webconsole disconnected.
+      return promise.resolve(null);
+    }
+
+    let deferred = promise.defer();
+    let toSet = {
+      "NetworkMonitor.throttleData": value,
+    };
+
+    // Make sure the web console client connection is established first.
+    this.webConsoleClient.setPreferences(toSet, response => {
+      if (!response.error) {
+        this._throttleData = value;
+        deferred.resolve(response);
+      } else {
+        deferred.reject(response.error);
+      }
+    });
+
+    return deferred.promise;
+  },
+
+  /**
    * Getter for the persistent logging preference.
    * @type boolean
    */
@@ -433,7 +461,7 @@ WebConsoleFrame.prototype = {
     // when the original top level window we attached to is closed,
     // but we don't want to reset console history and just switch to
     // the next available window.
-    return this.owner._browserConsole ||
+    return this.isBrowserConsole ||
            Services.prefs.getBoolPref(PREF_PERSISTLOG);
   },
 
@@ -460,6 +488,10 @@ WebConsoleFrame.prototype = {
       Services.obs.notifyObservers(id, "web-console-created", null);
     };
     allReady.then(notifyObservers, notifyObservers);
+
+    if (this.NEW_CONSOLE_OUTPUT_ENABLED) {
+      allReady.then(this.newConsoleOutput.init);
+    }
 
     return allReady;
   },
@@ -501,58 +533,67 @@ WebConsoleFrame.prototype = {
   _initUI: function () {
     this.document = this.window.document;
     this.rootElement = this.document.documentElement;
-    this.NEW_CONSOLE_OUTPUT_ENABLED = !this.owner._browserConsole
+    this.NEW_CONSOLE_OUTPUT_ENABLED = !this.isBrowserConsole
       && !this.owner.target.chrome
       && Services.prefs.getBoolPref(PREF_NEW_FRONTEND_ENABLED);
 
-    this._initDefaultFilterPrefs();
+    this.outputNode = this.document.getElementById("output-container");
+    this.outputWrapper = this.document.getElementById("output-wrapper");
+    this.completeNode = this.document.querySelector(".jsterm-complete-node");
+    this.inputNode = this.document.querySelector(".jsterm-input-node");
 
-    // Register the controller to handle "select all" properly.
-    this._commandController = new CommandController(this);
-    this.window.controllers.insertControllerAt(0, this._commandController);
-
-    this._contextMenuHandler = new ConsoleContextMenu(this);
-
-    let doc = this.document;
-
-    this.filterBox = doc.querySelector(".hud-filter-box");
-    this.outputNode = doc.getElementById("output-container");
-    this.outputWrapper = doc.getElementById("output-wrapper");
-
-    this.completeNode = doc.querySelector(".jsterm-complete-node");
-    this.inputNode = doc.querySelector(".jsterm-input-node");
-
-    this._setFilterTextBoxEvents();
-    this._initFilterButtons();
+    // In the old frontend, the area that scrolls is outputWrapper, but in the new
+    // frontend this will be reassigned.
+    this.outputScroller = this.outputWrapper;
 
     // Update the character width and height needed for the popup offset
     // calculations.
     this._updateCharSize();
 
-    let clearButton =
-      doc.getElementsByClassName("webconsole-clear-console-button")[0];
-    clearButton.addEventListener("command", () => {
-      this.owner._onClearButton();
-      this.jsterm.clearOutput(true);
-    });
-
     this.jsterm = new JSTerm(this);
     this.jsterm.init();
+
+    let toolbox = gDevTools.getToolbox(this.owner.target);
 
     if (this.NEW_CONSOLE_OUTPUT_ENABLED) {
       // @TODO Remove this once JSTerm is handled with React/Redux.
       this.window.jsterm = this.jsterm;
-      console.log("Entering experimental mode for console frontend");
+
+      // Remove context menu for now (see Bug 1307239).
+      this.outputWrapper.removeAttribute("context");
 
       // XXX: We should actually stop output from happening on old output
       // panel, but for now let's just hide it.
       this.experimentalOutputNode = this.outputNode.cloneNode();
+      this.experimentalOutputNode.removeAttribute("tabindex");
       this.outputNode.hidden = true;
       this.outputNode.parentNode.appendChild(this.experimentalOutputNode);
       // @TODO Once the toolbox has been converted to React, see if passing
       // in JSTerm is still necessary.
-      this.newConsoleOutput = new this.window.NewConsoleOutput(this.experimentalOutputNode, this.jsterm);
-      console.log("Created newConsoleOutput", this.newConsoleOutput);
+
+      this.newConsoleOutput = new this.window.NewConsoleOutput(
+        this.experimentalOutputNode, this.jsterm, toolbox, this.owner, this.document);
+
+      let filterToolbar = this.document.querySelector(".hud-console-filter-toolbar");
+      filterToolbar.hidden = true;
+    } else {
+      // Register the controller to handle "select all" properly.
+      this._commandController = new CommandController(this);
+      this.window.controllers.insertControllerAt(0, this._commandController);
+
+      this._contextMenuHandler = new ConsoleContextMenu(this);
+
+      this._initDefaultFilterPrefs();
+      this.filterBox = this.document.querySelector(".hud-filter-box");
+      this._setFilterTextBoxEvents();
+      this._initFilterButtons();
+      let clearButton =
+        this.document.getElementsByClassName("webconsole-clear-console-button")[0];
+      clearButton.addEventListener("command", () => {
+        this.owner._onClearButton();
+        this.jsterm.clearOutput(true);
+      });
+
     }
 
     this.resize();
@@ -560,7 +601,6 @@ WebConsoleFrame.prototype = {
     this.jsterm.on("sidebar-opened", this.resize);
     this.jsterm.on("sidebar-closed", this.resize);
 
-    let toolbox = gDevTools.getToolbox(this.owner.target);
     if (toolbox) {
       toolbox.on("webconsole-selected", this._onPanelSelected);
     }
@@ -586,15 +626,20 @@ WebConsoleFrame.prototype = {
         return;
       }
 
+      // Do not focus if a search input was clicked on the new frontend
+      if (this.NEW_CONSOLE_OUTPUT_ENABLED &&
+          event.target.nodeName.toLowerCase() === "input" &&
+          event.target.getAttribute("type").toLowerCase() === "search") {
+        return;
+      }
+
       this.jsterm.focus();
     });
 
     // Toggle the timestamp on preference change
-    gDevTools.on("pref-changed", this._onToolboxPrefChanged);
-    this._onToolboxPrefChanged("pref-changed", {
-      pref: PREF_MESSAGE_TIMESTAMP,
-      newValue: Services.prefs.getBoolPref(PREF_MESSAGE_TIMESTAMP),
-    });
+    this._prefObserver = new PrefObserver("");
+    this._prefObserver.on(PREF_MESSAGE_TIMESTAMP, this._onToolboxPrefChanged);
+    this._onToolboxPrefChanged();
 
     this._initShortcuts();
 
@@ -662,7 +707,7 @@ WebConsoleFrame.prototype = {
     shortcuts.on(clearShortcut,
                  () => this.jsterm.clearOutput(true));
 
-    if (this.owner._browserConsole) {
+    if (this.isBrowserConsole) {
       shortcuts.on(l10n.getStr("webconsole.close.key"),
                    this.window.close.bind(this.window));
 
@@ -774,7 +819,7 @@ WebConsoleFrame.prototype = {
       button.setAttribute("aria-pressed", someChecked);
     }, this);
 
-    if (!this.owner._browserConsole) {
+    if (!this.isBrowserConsole) {
       // The Browser Console displays nsIConsoleMessages which are messages that
       // end up in the JS category, but they are not errors or warnings, they
       // are just log messages. The Web Console does not show such messages.
@@ -1919,8 +1964,14 @@ WebConsoleFrame.prototype = {
   handleTabNavigated: function (event, packet) {
     if (event == "will-navigate") {
       if (this.persistLog) {
-        let marker = new Messages.NavigationMarker(packet, Date.now());
-        this.output.addMessage(marker);
+        if (this.NEW_CONSOLE_OUTPUT_ENABLED) {
+          // Add a _type to hit convertCachedPacket.
+          packet._type = true;
+          this.newConsoleOutput.dispatchMessageAdd(packet);
+        } else {
+          let marker = new Messages.NavigationMarker(packet, Date.now());
+          this.output.addMessage(marker);
+        }
       } else {
         this.jsterm.clearOutput();
       }
@@ -2149,7 +2200,8 @@ WebConsoleFrame.prototype = {
 
     // If a clear message is processed while the webconsole is opened, the UI
     // should be cleared.
-    if (message && message.level == "clear") {
+    // Do not clear the output if the current frame is owned by a Browser Console.
+    if (message && message.level == "clear" && !this.isBrowserConsole) {
       // Do not clear the consoleStorage here as it has been cleared already
       // by the clear method, only clear the UI.
       this.jsterm.clearOutput(false);
@@ -2515,21 +2567,15 @@ WebConsoleFrame.prototype = {
    * Creates the anchor that displays the textual location of an incoming
    * message.
    *
-   * @param {Object} aLocation
-   *        An object containing url, line and column number of the message
-   *        source (destructured).
+   * @param {Object} location
+   *        An object containing url, line and column number of the message source.
    * @return {Element}
    *         The new anchor element, ready to be added to the message node.
    */
-  createLocationNode: function ({url, line, column}) {
+  createLocationNode: function (location) {
     let locationNode = this.document.createElementNS(XHTML_NS, "div");
     locationNode.className = "message-location devtools-monospace";
 
-    if (!url) {
-      url = "";
-    }
-
-    let fullURL = url.split(" -> ").pop();
     // Make the location clickable.
     let onClick = ({ url, line }) => {
       let category = locationNode.closest(".message").category;
@@ -2568,12 +2614,11 @@ WebConsoleFrame.prototype = {
 
     const toolbox = gDevTools.getToolbox(this.owner.target);
 
+    let { url, line, column } = location;
+    let source = url ? url.split(" -> ").pop() : "";
+
     this.ReactDOM.render(this.FrameView({
-      frame: {
-        source: fullURL,
-        line,
-        column
-      },
+      frame: { source, line, column },
       showEmptyPathAsHost: true,
       onClick,
       sourceMapService: toolbox ? toolbox._sourceMapService : null,
@@ -2645,23 +2690,16 @@ WebConsoleFrame.prototype = {
   },
 
   /**
-   * Handler for the pref-changed event coming from the toolbox.
-   * Currently this function only handles the timestamps preferences.
-   *
-   * @private
-   * @param object event
-   *        This parameter is a string that holds the event name
-   *        pref-changed in this case.
-   * @param object data
-   *        This is the pref-changed data object.
-  */
-  _onToolboxPrefChanged: function (event, data) {
-    if (data.pref == PREF_MESSAGE_TIMESTAMP) {
-      if (data.newValue) {
-        this.outputNode.classList.remove("hideTimestamps");
-      } else {
-        this.outputNode.classList.add("hideTimestamps");
-      }
+   * Called when the message timestamp pref changes.
+   */
+  _onToolboxPrefChanged: function () {
+    let newValue = Services.prefs.getBoolPref(PREF_MESSAGE_TIMESTAMP);
+    if (this.NEW_CONSOLE_OUTPUT_ENABLED) {
+      this.newConsoleOutput.dispatchTimestampsToggle(newValue);
+    } else if (newValue) {
+      this.outputNode.classList.remove("hideTimestamps");
+    } else {
+      this.outputNode.classList.add("hideTimestamps");
     }
   },
 
@@ -2770,7 +2808,8 @@ WebConsoleFrame.prototype = {
       toolbox.off("webconsole-selected", this._onPanelSelected);
     }
 
-    gDevTools.off("pref-changed", this._onToolboxPrefChanged);
+    this._prefObserver.off(PREF_MESSAGE_TIMESTAMP, this._onToolboxPrefChanged);
+    this._prefObserver.destroy();
     this.window.removeEventListener("resize", this.resize, true);
 
     this._repeatNodes = {};
@@ -2916,9 +2955,7 @@ var Utils = {
   },
 };
 
-// ////////////////////////////////////////////////////////////////////////////
 // CommandController
-// ////////////////////////////////////////////////////////////////////////////
 
 /**
  * A controller (an instance of nsIController) that makes editing actions
@@ -3001,475 +3038,7 @@ CommandController.prototype = {
   }
 };
 
-// ////////////////////////////////////////////////////////////////////////////
-// Web Console connection proxy
-// ////////////////////////////////////////////////////////////////////////////
-
-/**
- * The WebConsoleConnectionProxy handles the connection between the Web Console
- * and the application we connect to through the remote debug protocol.
- *
- * @constructor
- * @param object webConsoleFrame
- *        The WebConsoleFrame object that owns this connection proxy.
- * @param RemoteTarget target
- *        The target that the console will connect to.
- */
-function WebConsoleConnectionProxy(webConsoleFrame, target) {
-  this.webConsoleFrame = webConsoleFrame;
-  this.target = target;
-
-  this._onPageError = this._onPageError.bind(this);
-  this._onLogMessage = this._onLogMessage.bind(this);
-  this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
-  this._onNetworkEvent = this._onNetworkEvent.bind(this);
-  this._onNetworkEventUpdate = this._onNetworkEventUpdate.bind(this);
-  this._onFileActivity = this._onFileActivity.bind(this);
-  this._onReflowActivity = this._onReflowActivity.bind(this);
-  this._onServerLogCall = this._onServerLogCall.bind(this);
-  this._onTabNavigated = this._onTabNavigated.bind(this);
-  this._onAttachConsole = this._onAttachConsole.bind(this);
-  this._onCachedMessages = this._onCachedMessages.bind(this);
-  this._connectionTimeout = this._connectionTimeout.bind(this);
-  this._onLastPrivateContextExited =
-    this._onLastPrivateContextExited.bind(this);
-}
-
-WebConsoleConnectionProxy.prototype = {
-  /**
-   * The owning Web Console Frame instance.
-   *
-   * @see WebConsoleFrame
-   * @type object
-   */
-  webConsoleFrame: null,
-
-  /**
-   * The target that the console connects to.
-   * @type RemoteTarget
-   */
-  target: null,
-
-  /**
-   * The DebuggerClient object.
-   *
-   * @see DebuggerClient
-   * @type object
-   */
-  client: null,
-
-  /**
-   * The WebConsoleClient object.
-   *
-   * @see WebConsoleClient
-   * @type object
-   */
-  webConsoleClient: null,
-
-  /**
-   * Tells if the connection is established.
-   * @type boolean
-   */
-  connected: false,
-
-  /**
-   * Timer used for the connection.
-   * @private
-   * @type object
-   */
-  _connectTimer: null,
-
-  _connectDefer: null,
-  _disconnecter: null,
-
-  /**
-   * The WebConsoleActor ID.
-   *
-   * @private
-   * @type string
-   */
-  _consoleActor: null,
-
-  /**
-   * Tells if the window.console object of the remote web page is the native
-   * object or not.
-   * @private
-   * @type boolean
-   */
-  _hasNativeConsoleAPI: false,
-
-  /**
-   * Initialize a debugger client and connect it to the debugger server.
-   *
-   * @return object
-   *         A promise object that is resolved/rejected based on the success of
-   *         the connection initialization.
-   */
-  connect: function () {
-    if (this._connectDefer) {
-      return this._connectDefer.promise;
-    }
-
-    this._connectDefer = promise.defer();
-
-    let timeout = Services.prefs.getIntPref(PREF_CONNECTION_TIMEOUT);
-    this._connectTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-    this._connectTimer.initWithCallback(this._connectionTimeout,
-                                        timeout, Ci.nsITimer.TYPE_ONE_SHOT);
-
-    let connPromise = this._connectDefer.promise;
-    connPromise.then(() => {
-      this._connectTimer.cancel();
-      this._connectTimer = null;
-    }, () => {
-      this._connectTimer = null;
-    });
-
-    let client = this.client = this.target.client;
-
-    if (this.target.isWorkerTarget) {
-      // XXXworkers: Not Console API yet inside of workers (Bug 1209353).
-    } else {
-      client.addListener("logMessage", this._onLogMessage);
-      client.addListener("pageError", this._onPageError);
-      client.addListener("consoleAPICall", this._onConsoleAPICall);
-      client.addListener("fileActivity", this._onFileActivity);
-      client.addListener("reflowActivity", this._onReflowActivity);
-      client.addListener("serverLogCall", this._onServerLogCall);
-      client.addListener("lastPrivateContextExited",
-                         this._onLastPrivateContextExited);
-    }
-    this.target.on("will-navigate", this._onTabNavigated);
-    this.target.on("navigate", this._onTabNavigated);
-
-    this._consoleActor = this.target.form.consoleActor;
-    if (this.target.isTabActor) {
-      let tab = this.target.form;
-      this.webConsoleFrame.onLocationChange(tab.url, tab.title);
-    }
-    this._attachConsole();
-
-    return connPromise;
-  },
-
-  /**
-   * Connection timeout handler.
-   * @private
-   */
-  _connectionTimeout: function () {
-    let error = {
-      error: "timeout",
-      message: l10n.getStr("connectionTimeout"),
-    };
-
-    this._connectDefer.reject(error);
-  },
-
-  /**
-   * Attach to the Web Console actor.
-   * @private
-   */
-  _attachConsole: function () {
-    let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
-                     "FileActivity"];
-    this.client.attachConsole(this._consoleActor, listeners,
-                              this._onAttachConsole);
-  },
-
-  /**
-   * The "attachConsole" response handler.
-   *
-   * @private
-   * @param object response
-   *        The JSON response object received from the server.
-   * @param object webConsoleClient
-   *        The WebConsoleClient instance for the attached console, for the
-   *        specific tab we work with.
-   */
-  _onAttachConsole: function (response, webConsoleClient) {
-    if (response.error) {
-      console.error("attachConsole failed: " + response.error + " " +
-                    response.message);
-      this._connectDefer.reject(response);
-      return;
-    }
-
-    this.webConsoleClient = webConsoleClient;
-    this._hasNativeConsoleAPI = response.nativeConsoleAPI;
-
-    // There is no way to view response bodies from the Browser Console, so do
-    // not waste the memory.
-    let saveBodies = !this.webConsoleFrame.owner._browserConsole;
-    this.webConsoleFrame.setSaveRequestAndResponseBodies(saveBodies);
-
-    this.webConsoleClient.on("networkEvent", this._onNetworkEvent);
-    this.webConsoleClient.on("networkEventUpdate", this._onNetworkEventUpdate);
-
-    let msgs = ["PageError", "ConsoleAPI"];
-    this.webConsoleClient.getCachedMessages(msgs, this._onCachedMessages);
-
-    this.webConsoleFrame._onUpdateListeners();
-  },
-
-  /**
-   * The "cachedMessages" response handler.
-   *
-   * @private
-   * @param object response
-   *        The JSON response object received from the server.
-   */
-  _onCachedMessages: function (response) {
-    if (response.error) {
-      console.error("Web Console getCachedMessages error: " + response.error +
-                    " " + response.message);
-      this._connectDefer.reject(response);
-      return;
-    }
-
-    if (!this._connectTimer) {
-      // This happens if the promise is rejected (eg. a timeout), but the
-      // connection attempt is successful, nonetheless.
-      console.error("Web Console getCachedMessages error: invalid state.");
-    }
-
-    let messages =
-      response.messages.concat(...this.webConsoleClient.getNetworkEvents());
-    messages.sort((a, b) => a.timeStamp - b.timeStamp);
-
-    if (this.webConsoleFrame.NEW_CONSOLE_OUTPUT_ENABLED) {
-      for (let packet of messages) {
-        this.webConsoleFrame.newConsoleOutput.dispatchMessageAdd(packet);
-      }
-    } else {
-      this.webConsoleFrame.displayCachedMessages(messages);
-      if (!this._hasNativeConsoleAPI) {
-        this.webConsoleFrame.logWarningAboutReplacedAPI();
-      }
-    }
-
-    this.connected = true;
-    this._connectDefer.resolve(this);
-  },
-
-  /**
-   * The "pageError" message type handler. We redirect any page errors to the UI
-   * for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onPageError: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      if (this.webConsoleFrame.NEW_CONSOLE_OUTPUT_ENABLED) {
-        this.webConsoleFrame.newConsoleOutput.dispatchMessageAdd(packet);
-        return;
-      }
-      this.webConsoleFrame.handlePageError(packet.pageError);
-    }
-  },
-
-  /**
-   * The "logMessage" message type handler. We redirect any message to the UI
-   * for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onLogMessage: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      this.webConsoleFrame.handleLogMessage(packet);
-    }
-  },
-
-  /**
-   * The "consoleAPICall" message type handler. We redirect any message to
-   * the UI for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onConsoleAPICall: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      if (this.webConsoleFrame.NEW_CONSOLE_OUTPUT_ENABLED) {
-        this.webConsoleFrame.newConsoleOutput.dispatchMessageAdd(packet);
-      } else {
-        this.webConsoleFrame.handleConsoleAPICall(packet.message);
-      }
-    }
-  },
-
-  /**
-   * The "networkEvent" message type handler. We redirect any message to
-   * the UI for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object networkInfo
-   *        The network request information.
-   */
-  _onNetworkEvent: function (type, networkInfo) {
-    if (this.webConsoleFrame) {
-      this.webConsoleFrame.handleNetworkEvent(networkInfo);
-    }
-  },
-
-  /**
-   * The "networkEventUpdate" message type handler. We redirect any message to
-   * the UI for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   * @param object networkInfo
-   *        The network request information.
-   */
-  _onNetworkEventUpdate: function (type, { packet, networkInfo }) {
-    if (this.webConsoleFrame) {
-      this.webConsoleFrame.handleNetworkEventUpdate(networkInfo, packet);
-    }
-  },
-
-  /**
-   * The "fileActivity" message type handler. We redirect any message to
-   * the UI for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onFileActivity: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      this.webConsoleFrame.handleFileActivity(packet.uri);
-    }
-  },
-
-  _onReflowActivity: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      this.webConsoleFrame.handleReflowActivity(packet);
-    }
-  },
-
-  /**
-   * The "serverLogCall" message type handler. We redirect any message to
-   * the UI for displaying.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onServerLogCall: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      this.webConsoleFrame.handleConsoleAPICall(packet.message);
-    }
-  },
-
-  /**
-   * The "lastPrivateContextExited" message type handler. When this message is
-   * received the Web Console UI is cleared.
-   *
-   * @private
-   * @param string type
-   *        Message type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onLastPrivateContextExited: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
-      this.webConsoleFrame.jsterm.clearPrivateMessages();
-    }
-  },
-
-  /**
-   * The "will-navigate" and "navigate" event handlers. We redirect any message
-   * to the UI for displaying.
-   *
-   * @private
-   * @param string event
-   *        Event type.
-   * @param object packet
-   *        The message received from the server.
-   */
-  _onTabNavigated: function (event, packet) {
-    if (!this.webConsoleFrame) {
-      return;
-    }
-
-    this.webConsoleFrame.handleTabNavigated(event, packet);
-  },
-
-  /**
-   * Release an object actor.
-   *
-   * @param string actor
-   *        The actor ID to send the request to.
-   */
-  releaseActor: function (actor) {
-    if (this.client) {
-      this.client.release(actor);
-    }
-  },
-
-  /**
-   * Disconnect the Web Console from the remote server.
-   *
-   * @return object
-   *         A promise object that is resolved when disconnect completes.
-   */
-  disconnect: function () {
-    if (this._disconnecter) {
-      return this._disconnecter.promise;
-    }
-
-    this._disconnecter = promise.defer();
-
-    if (!this.client) {
-      this._disconnecter.resolve(null);
-      return this._disconnecter.promise;
-    }
-
-    this.client.removeListener("logMessage", this._onLogMessage);
-    this.client.removeListener("pageError", this._onPageError);
-    this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
-    this.client.removeListener("fileActivity", this._onFileActivity);
-    this.client.removeListener("reflowActivity", this._onReflowActivity);
-    this.client.removeListener("serverLogCall", this._onServerLogCall);
-    this.client.removeListener("lastPrivateContextExited",
-                               this._onLastPrivateContextExited);
-    this.webConsoleClient.off("networkEvent", this._onNetworkEvent);
-    this.webConsoleClient.off("networkEventUpdate", this._onNetworkEventUpdate);
-    this.target.off("will-navigate", this._onTabNavigated);
-    this.target.off("navigate", this._onTabNavigated);
-
-    this.client = null;
-    this.webConsoleClient = null;
-    this.target = null;
-    this.connected = false;
-    this.webConsoleFrame = null;
-    this._disconnecter.resolve(null);
-
-    return this._disconnecter.promise;
-  },
-};
-
-// ////////////////////////////////////////////////////////////////////////////
 // Context Menu
-// ////////////////////////////////////////////////////////////////////////////
 
 /*
  * ConsoleContextMenu this used to handle the visibility of context menu items.

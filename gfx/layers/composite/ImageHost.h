@@ -12,6 +12,7 @@
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/gfx/MatrixFwd.h"      // for Matrix4x4
 #include "mozilla/gfx/Point.h"          // for Point
+#include "mozilla/gfx/Polygon.h"        // for Polygon
 #include "mozilla/gfx/Rect.h"           // for Rect
 #include "mozilla/gfx/Types.h"          // for SamplingFilter
 #include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
@@ -30,7 +31,6 @@ namespace layers {
 class Compositor;
 struct EffectChain;
 class ImageContainerParent;
-class ImageHostOverlay;
 
 /**
  * ImageHost. Works with ImageClientSingle and ImageClientBuffered
@@ -49,7 +49,8 @@ public:
                          const gfx::Matrix4x4& aTransform,
                          const gfx::SamplingFilter aSamplingFilter,
                          const gfx::IntRect& aClipRect,
-                         const nsIntRegion* aVisibleRegion = nullptr) override;
+                         const nsIntRegion* aVisibleRegion = nullptr,
+                         const Maybe<gfx::Polygon>& aGeometry = Nothing()) override;
 
   virtual void UseTextureHost(const nsTArray<TimedTexture>& aTextures) override;
 
@@ -104,7 +105,6 @@ public:
 
   int32_t GetLastFrameID() const { return mLastFrameID; }
   int32_t GetLastProducerID() const { return mLastProducerID; }
-  virtual int32_t GetLastInputFrameID() const override { return mLastInputFrameID; }
 
   enum Bias {
     // Don't apply bias to frame times
@@ -124,7 +124,6 @@ protected:
     gfx::IntRect mPictureRect;
     int32_t mFrameID;
     int32_t mProducerID;
-    int32_t mInputFrameID;
   };
 
   // Use a simple RefPtr because the same texture is already held by a
@@ -152,50 +151,12 @@ protected:
   ImageContainerParent* mImageContainer;
   int32_t mLastFrameID;
   int32_t mLastProducerID;
-  int32_t mLastInputFrameID;
   /**
    * Bias to apply to the next frame.
    */
   Bias mBias;
 
   bool mLocked;
-
-  RefPtr<ImageHostOverlay> mImageHostOverlay;
-};
-
-/**
- * ImageHostOverlay handles OverlaySource compositing
- */
-class ImageHostOverlay {
-protected:
-  virtual ~ImageHostOverlay();
-
-public:
-  NS_INLINE_DECL_REFCOUNTING(ImageHostOverlay)
-  ImageHostOverlay();
-
-  static bool IsValid(OverlaySource aOverlay);
-
-  void SetCompositor(Compositor* aCompositor);
-
-  virtual void Composite(Compositor* aCompositor,
-                         uint32_t aFlashCounter,
-                         LayerComposite* aLayer,
-                         EffectChain& aEffectChain,
-                         float aOpacity,
-                         const gfx::Matrix4x4& aTransform,
-                         const gfx::SamplingFilter aSamplingFilter,
-                         const gfx::IntRect& aClipRect,
-                         const nsIntRegion* aVisibleRegion);
-  virtual LayerRenderState GetRenderState();
-  virtual void UseOverlaySource(OverlaySource aOverlay,
-                                const gfx::IntRect& aPictureRect);
-  virtual gfx::IntSize GetImageSize() const;
-  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
-protected:
-  RefPtr<Compositor> mCompositor;
-  gfx::IntRect mPictureRect;
-  OverlaySource mOverlay;
 };
 
 } // namespace layers

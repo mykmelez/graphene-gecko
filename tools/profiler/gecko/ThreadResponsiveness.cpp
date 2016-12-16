@@ -25,13 +25,11 @@ public:
     , mTimer(nullptr)
     , mStop(false)
   {
-    MOZ_COUNT_CTOR(CheckResponsivenessTask);
   }
 
 protected:
   ~CheckResponsivenessTask()
   {
-    MOZ_COUNT_DTOR(CheckResponsivenessTask);
   }
 
 public:
@@ -55,7 +53,7 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHODIMP Notify(nsITimer* aTimer) final
+  NS_IMETHOD Notify(nsITimer* aTimer) final
   {
     NS_DispatchToMainThread(this);
     return NS_OK;

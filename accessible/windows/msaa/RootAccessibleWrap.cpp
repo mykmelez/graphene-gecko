@@ -12,7 +12,7 @@
 using namespace mozilla::a11y;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Constructor/desctructor
+// Constructor/destructor
 
 RootAccessibleWrap::
   RootAccessibleWrap(nsIDocument* aDocument, nsIPresShell* aPresShell) :

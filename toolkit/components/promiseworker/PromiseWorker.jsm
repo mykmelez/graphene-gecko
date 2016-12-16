@@ -279,9 +279,8 @@ this.BasePromiseWorker.prototype = {
               transfers.push(...arg.meta.transfers);
             }
             return arg.data;
-          } else {
-            return arg;
           }
+          return arg;
         });
       }
 
@@ -306,14 +305,12 @@ this.BasePromiseWorker.prototype = {
       this.log("Message posted");
 
       let reply;
-      let isError = false;
       try {
         this.log("Expecting reply");
         reply = yield deferred.promise;
       } catch (error) {
         this.log("Got error", error);
         reply = error;
-        isError = true;
 
         if (error instanceof WorkerError) {
           // We know how to deserialize most well-known errors

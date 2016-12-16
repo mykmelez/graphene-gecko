@@ -37,7 +37,7 @@
 #include "prmem.h"
 #include "prnetdb.h"
 #include "mozilla/Likely.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Sprintf.h"
 #include "nsIChannel.h"
 #include "nsNetUtil.h"
 #include "nsThreadUtils.h"
@@ -53,6 +53,7 @@ static const char kNegotiateAuthDelegationURIs[] = "network.negotiate-auth.deleg
 static const char kNegotiateAuthAllowProxies[] = "network.negotiate-auth.allow-proxies";
 static const char kNegotiateAuthAllowNonFqdn[] = "network.negotiate-auth.allow-non-fqdn";
 static const char kNegotiateAuthSSPI[] = "network.auth.use-sspi";
+static const char kSSOinPBmode[] = "network.auth.private-browsing-sso";
 
 #define kNegotiateLen  (sizeof(kNegotiate)-1)
 #define DEFAULT_THREAD_TIMEOUT_MS 30000
@@ -61,11 +62,40 @@ static const char kNegotiateAuthSSPI[] = "network.auth.use-sspi";
 
 // Return false when the channel comes from a Private browsing window.
 static bool
-TestNotInPBMode(nsIHttpAuthenticableChannel *authChannel)
+TestNotInPBMode(nsIHttpAuthenticableChannel *authChannel, bool proxyAuth)
 {
+    // Proxy should go all the time, it's not considered a privacy leak
+    // to send default credentials to a proxy.
+    if (proxyAuth) {
+        return true;
+    }
+
     nsCOMPtr<nsIChannel> bareChannel = do_QueryInterface(authChannel);
     MOZ_ASSERT(bareChannel);
-    return !NS_UsePrivateBrowsing(bareChannel);
+
+    if (!NS_UsePrivateBrowsing(bareChannel)) {
+        return true;
+    }
+
+    nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
+    if (prefs) {
+        bool ssoInPb;
+        if (NS_SUCCEEDED(prefs->GetBoolPref(kSSOinPBmode, &ssoInPb)) && ssoInPb) {
+            return true;
+        }
+
+        // When the "Never remember history" option is set, all channels are
+        // set PB mode flag, but here we want to make an exception, users
+        // want their credentials go out.
+        bool dontRememberHistory;
+        if (NS_SUCCEEDED(prefs->GetBoolPref("browser.privatebrowsing.autostart",
+                                            &dontRememberHistory)) &&
+            dontRememberHistory) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 NS_IMETHODIMP
@@ -129,7 +159,7 @@ nsHttpNegotiateAuth::ChallengeReceived(nsIHttpAuthenticableChannel *authChannel,
         proxyInfo->GetHost(service);
     }
     else {
-        bool allowed = TestNotInPBMode(authChannel) &&
+        bool allowed = TestNotInPBMode(authChannel, isProxyAuth) &&
                        (TestNonFqdn(uri) ||
                        TestPref(uri, kNegotiateAuthTrustedURIs));
         if (!allowed) {
@@ -291,7 +321,7 @@ NS_IMPL_ISUPPORTS(GetNextTokenCompleteEvent, nsIRunnable, nsICancelable)
 //
 class GetNextTokenRunnable final : public mozilla::Runnable
 {
-    virtual ~GetNextTokenRunnable() {}
+    ~GetNextTokenRunnable() override = default;
     public:
         GetNextTokenRunnable(nsIHttpAuthenticableChannel *authChannel,
                              const char *challenge,

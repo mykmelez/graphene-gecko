@@ -41,10 +41,9 @@ add_task(function* test_install_addon_then_watch_it() {
       if (alert) {
         info(`AddonListener: I found an alert for ${addon.addonId}`);
         return alert.details.highestJank;
-      } else {
-        info(`AddonListener: I didn't find any alert for ${addon.addonId}`);
-        return null;
       }
+      info(`AddonListener: I didn't find any alert for ${addon.addonId}`);
+      return null;
     });
 
     // Waiting a little – listeners are buffered.
@@ -56,7 +55,7 @@ add_task(function* test_install_addon_then_watch_it() {
     Assert.ok(realListener.triggered, `1. The real listener was triggered ${topic}`);
     Assert.ok(universalListener.triggered, `1. The universal listener was triggered ${topic}`);
     Assert.ok(!fakeListener.triggered, `1. The fake listener was not triggered ${topic}`);
-    Assert.ok(realListener.result >= 200000, `1. jank is at least 300ms (${realListener.result/1000}ms) ${topic}`);
+    Assert.ok(realListener.result >= addon.jankThreshold, `1. jank is at least ${addon.jankThreshold / 1000}ms (${realListener.result / 1000}ms) ${topic}`);
 
     info(`Attempting to remove a performance listener incorrectly, check that this does not hurt our real listener ${topic}`);
     Assert.throws(() => PerformanceWatcher.removePerformanceListener({addonId: addon.addonId}, () => {}));
@@ -69,7 +68,7 @@ add_task(function* test_install_addon_then_watch_it() {
     Assert.ok(realListener.triggered, `2. The real listener was triggered ${topic}`);
     Assert.ok(universalListener.triggered, `2. The universal listener was triggered ${topic}`);
     Assert.ok(!fakeListener.triggered, `2. The fake listener was not triggered ${topic}`);
-    Assert.ok(realListener.result >= 200000, `2. jank is at least 300ms (${realListener.result/1000}ms) ${topic}`);
+    Assert.ok(realListener.result >= 200000, `2. jank is at least 300ms (${realListener.result / 1000}ms) ${topic}`);
 
     info(`Attempting to remove correctly, check if the listener is still triggered ${topic}`);
     realListener.unregister();

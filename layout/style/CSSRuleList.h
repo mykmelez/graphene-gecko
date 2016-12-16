@@ -6,7 +6,7 @@
 #ifndef mozilla_dom_CSSRuleList_h
 #define mozilla_dom_CSSRuleList_h
 
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "nsIDOMCSSRule.h"
 #include "nsIDOMCSSRuleList.h"
 #include "nsWrapperCache.h"
@@ -28,7 +28,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(CSSRuleList)
 
-  virtual CSSStyleSheet* GetParentObject() = 0;
+  virtual StyleSheet* GetParentObject() = 0;
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override final;
 
   NS_IMETHOD

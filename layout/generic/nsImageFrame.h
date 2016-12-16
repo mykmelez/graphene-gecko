@@ -32,6 +32,7 @@ class nsTransform2D;
 class nsImageLoadingContent;
 
 namespace mozilla {
+class PresShell;
 namespace layers {
   class ImageContainer;
   class ImageLayer;
@@ -104,8 +105,7 @@ public:
                                     nsIAtom* aAttribute,
                                     int32_t aModType) override;
 
-  void OnVisibilityChange(Visibility aOldVisibility,
-                          Visibility aNewVisibility,
+  void OnVisibilityChange(Visibility aNewVisibility,
                           Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
 
 #ifdef ACCESSIBILITY
@@ -240,7 +240,7 @@ protected:
 protected:
   friend class nsImageListener;
   friend class nsImageLoadingContent;
-  friend class PresShell;
+  friend class mozilla::PresShell;
 
   nsresult OnSizeAvailable(imgIRequest* aRequest, imgIContainer* aImage);
   nsresult OnFrameUpdate(imgIRequest* aRequest, const nsIntRect* aRect);

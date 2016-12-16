@@ -46,11 +46,11 @@ AutoCompleteInput.prototype = {
   get searchCount() {
     return this.searches.length;
   },
-  getSearchAt: function (aIndex) {
+  getSearchAt: function(aIndex) {
     return this.searches[aIndex];
   },
 
-  onSearchBegin: function () {},
+  onSearchBegin: function() {},
   onSearchComplete: function() {},
 
   get popupOpen() {
@@ -58,7 +58,7 @@ AutoCompleteInput.prototype = {
   },
   popup: {
     set selectedIndex(aIndex) {},
-    invalidate: function () {},
+    invalidate: function() {},
     QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup])
   },
 
@@ -384,7 +384,7 @@ add_task(function* test_adaptive()
   // Disable autoFill for this test.
   Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
   do_register_cleanup(() => Services.prefs.clearUserPref("browser.urlbar.autoFill"));
-  for (let [, test] in Iterator(tests)) {
+  for (let test of tests) {
     // Cleanup.
     PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.unfiledBookmarksFolderId);
     PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.tagsFolderId);

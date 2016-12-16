@@ -20,16 +20,13 @@
 #include "nsString.h"
 #include "mozilla/Logging.h"
 
-#include "mozilla/Services.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/FileUtils.h"
-#include "mozilla/SHA1.h"
 #include "mozilla/Base64.h"
+#include "mozilla/FileUtils.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
+#include "mozilla/SHA1.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/Telemetry.h"
-
-#ifdef MOZ_NUWA_PROCESS
-#include "ipc/Nuwa.h"
-#endif
 
 #ifdef MOZ_WIDGET_GONK
 #include <cutils/properties.h>
@@ -143,11 +140,11 @@ void nsNotifyAddrListener::calculateNetworkId(void)
         if (gw) {
             /* create a string to search for in the arp table */
             char searchfor[16];
-            snprintf(searchfor, sizeof(searchfor), "%d.%d.%d.%d",
-                     gw & 0xff,
-                     (gw >> 8) & 0xff,
-                     (gw >> 16) & 0xff,
-                     gw >> 24);
+            SprintfLiteral(searchfor, "%d.%d.%d.%d",
+                           gw & 0xff,
+                           (gw >> 8) & 0xff,
+                           (gw >> 16) & 0xff,
+                           gw >> 24);
 
             FILE *farp = fopen(kProcArp, "r");
             if (farp) {
@@ -451,19 +448,6 @@ nsNotifyAddrListener::Observe(nsISupports *subject,
     return NS_OK;
 }
 
-#ifdef MOZ_NUWA_PROCESS
-class NuwaMarkLinkMonitorThreadRunner : public Runnable
-{
-    NS_IMETHODIMP Run() override
-    {
-        if (IsNuwaProcess()) {
-            NuwaMarkCurrentThread(nullptr, nullptr);
-        }
-        return NS_OK;
-    }
-};
-#endif
-
 nsresult
 nsNotifyAddrListener::Init(void)
 {
@@ -485,11 +469,6 @@ nsNotifyAddrListener::Init(void)
 
     rv = NS_NewNamedThread("Link Monitor", getter_AddRefs(mThread), this);
     NS_ENSURE_SUCCESS(rv, rv);
-
-#ifdef MOZ_NUWA_PROCESS
-    nsCOMPtr<nsIRunnable> runner = new NuwaMarkLinkMonitorThreadRunner();
-    mThread->Dispatch(runner, NS_DISPATCH_NORMAL);
-#endif
 
     return NS_OK;
 }

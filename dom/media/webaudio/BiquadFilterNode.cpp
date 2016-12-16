@@ -259,11 +259,33 @@ BiquadFilterNode::BiquadFilterNode(AudioContext* aContext)
   uint64_t windowID = aContext->GetParentObject()->WindowID();
   BiquadFilterNodeEngine* engine = new BiquadFilterNodeEngine(this, aContext->Destination(), windowID);
   mStream = AudioNodeStream::Create(aContext, engine,
-                                    AudioNodeStream::NO_STREAM_FLAGS);
+                                    AudioNodeStream::NO_STREAM_FLAGS,
+                                    aContext->Graph());
 }
 
-BiquadFilterNode::~BiquadFilterNode()
+/* static */ already_AddRefed<BiquadFilterNode>
+BiquadFilterNode::Create(AudioContext& aAudioContext,
+                         const BiquadFilterOptions& aOptions,
+                         ErrorResult& aRv)
 {
+  if (aAudioContext.CheckClosed(aRv)) {
+    return nullptr;
+  }
+
+  RefPtr<BiquadFilterNode> audioNode = new BiquadFilterNode(&aAudioContext);
+
+  audioNode->Initialize(aOptions, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  audioNode->SetType(aOptions.mType);
+  audioNode->Q()->SetValue(aOptions.mQ);
+  audioNode->Detune()->SetValue(aOptions.mDetune);
+  audioNode->Frequency()->SetValue(aOptions.mFrequency);
+  audioNode->Gain()->SetValue(aOptions.mGain);
+
+  return audioNode.forget();
 }
 
 size_t

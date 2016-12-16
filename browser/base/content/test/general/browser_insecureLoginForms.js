@@ -17,9 +17,9 @@ function waitForInsecureLoginFormsStateChange(browser, count) {
  * Checks the insecure login forms logic for the identity block.
  */
 add_task(function* test_simple() {
-  yield new Promise(resolve => SpecialPowers.pushPrefEnv({
+  yield SpecialPowers.pushPrefEnv({
     "set": [["security.insecure_password.ui.enabled", true]],
-  }, resolve));
+  });
 
   for (let [origin, expectWarning] of [
     ["http://example.com", true],
@@ -52,7 +52,7 @@ add_task(function* test_simple() {
             .getComputedStyle(document.getElementById("identity-popup-security-content"), "")
             .getPropertyValue("background-image");
       is(connectionIconImage,
-         "url(\"chrome://browser/skin/identity-mixed-active-loaded.svg\")",
+         "url(\"chrome://browser/skin/connection-mixed-active-loaded.svg#icon\")",
          "Using expected icon image in the identity block");
       is(securityViewBG,
          "url(\"chrome://browser/skin/controlcenter/mcb-disabled.svg\")",
@@ -82,9 +82,9 @@ add_task(function* test_simple() {
  * blocking messages when mixed active content is loaded.
  */
 add_task(function* test_mixedcontent() {
-  yield new Promise(resolve => SpecialPowers.pushPrefEnv({
+  yield SpecialPowers.pushPrefEnv({
     "set": [["security.mixed_content.block_active_content", false]],
-  }, resolve));
+  });
 
   // Load the page with the subframe in a new tab.
   let testUrlPath = "://example.com" + TEST_URL_PATH;

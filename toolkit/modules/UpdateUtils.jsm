@@ -44,7 +44,7 @@ this.UpdateUtils = {
         let partners = Services.prefs.getChildList("app.partner.").sort();
         if (partners.length) {
           channel += "-cck";
-          partners.forEach(function (prefName) {
+          partners.forEach(function(prefName) {
             channel += "-" + Services.prefs.getCharPref(prefName);
           });
         }
@@ -140,7 +140,7 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "Locale", function() {
     try {
       let inputStream = channel.open2();
       locale = NetUtil.readInputStreamToString(inputStream, inputStream.available());
-    } catch(e) {}
+    } catch (e) {}
     if (locale)
       return locale.trim();
   }
@@ -184,6 +184,14 @@ XPCOMUtils.defineLazyGetter(this, "gSystemCapabilities", function aus_gSC() {
     }
 
     lib.close();
+    return instructionSet;
+  }
+
+  if (AppConstants == "linux") {
+    let instructionSet = "unknown";
+    if (navigator.cpuHasSSE2) {
+      instructionSet = "SSE2";
+    }
     return instructionSet;
   }
 
@@ -316,23 +324,6 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "OSVersion", function() {
           {wReserved: BYTE}
           ]);
 
-      // This structure is described at:
-      // http://msdn.microsoft.com/en-us/library/ms724958%28v=vs.85%29.aspx
-      const SYSTEM_INFO = new ctypes.StructType('SYSTEM_INFO',
-          [
-          {wProcessorArchitecture: WORD},
-          {wReserved: WORD},
-          {dwPageSize: DWORD},
-          {lpMinimumApplicationAddress: ctypes.voidptr_t},
-          {lpMaximumApplicationAddress: ctypes.voidptr_t},
-          {dwActiveProcessorMask: DWORD.ptr},
-          {dwNumberOfProcessors: DWORD},
-          {dwProcessorType: DWORD},
-          {dwAllocationGranularity: DWORD},
-          {wProcessorLevel: WORD},
-          {wProcessorRevision: WORD}
-          ]);
-
       let kernel32 = false;
       try {
         kernel32 = ctypes.open("Kernel32");
@@ -352,7 +343,7 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "OSVersion", function() {
             let winVer = OSVERSIONINFOEXW();
             winVer.dwOSVersionInfoSize = OSVERSIONINFOEXW.size;
 
-            if(0 !== GetVersionEx(winVer.address())) {
+            if (0 !== GetVersionEx(winVer.address())) {
               osVersion += "." + winVer.wServicePackMajor +
                            "." + winVer.wServicePackMinor;
             } else {

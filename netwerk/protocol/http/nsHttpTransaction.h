@@ -17,6 +17,7 @@
 #include "Http2Push.h"
 #include "mozilla/net/DNS.h"
 #include "ARefBase.h"
+#include "AlternateServices.h"
 
 #ifdef MOZ_WIDGET_GONK
 #include "nsINetworkInterface.h"
@@ -166,6 +167,8 @@ public:
 
     int64_t GetTransferSize() { return mTransferSize; }
 
+    bool Do0RTT() override;
+    nsresult Finish0RTT(bool aRestart) override;
 private:
     friend class DeleteHttpTransaction;
     virtual ~nsHttpTransaction();
@@ -174,7 +177,7 @@ private:
     nsresult RestartInProgress();
     char    *LocateHttpStart(char *buf, uint32_t len,
                              bool aAllowPartialMatch);
-    nsresult ParseLine(char *line);
+    nsresult ParseLine(nsACString &line);
     nsresult ParseLineSegment(char *seg, uint32_t len);
     nsresult ParseHead(char *, uint32_t count, uint32_t *countRead);
     nsresult HandleContentStart();
@@ -186,10 +189,10 @@ private:
     Classifier Classify();
     void       CancelPipeline(uint32_t reason);
 
-    static NS_METHOD ReadRequestSegment(nsIInputStream *, void *, const char *,
-                                        uint32_t, uint32_t, uint32_t *);
-    static NS_METHOD WritePipeSegment(nsIOutputStream *, void *, char *,
-                                      uint32_t, uint32_t, uint32_t *);
+    static nsresult ReadRequestSegment(nsIInputStream *, void *, const char *,
+                                       uint32_t, uint32_t, uint32_t *);
+    static nsresult WritePipeSegment(nsIOutputStream *, void *, char *,
+                                     uint32_t, uint32_t, uint32_t *);
 
     bool TimingEnabled() const { return mCaps & NS_HTTP_TIMING_ENABLED; }
 
@@ -197,6 +200,14 @@ private:
 
     void DisableSpdy() override;
     void ReuseConnectionOnRestartOK(bool reuseOk) override { mReuseOnRestart = reuseOk; }
+
+    // Called right after we parsed the response head.  Checks for connection based
+    // authentication schemes in reponse headers for WWW and Proxy authentication.
+    // If such is found in any of them, NS_HTTP_STICKY_CONNECTION is set in mCaps.
+    // We need the sticky flag be set early to keep the connection from very start
+    // of the authentication process.
+    void CheckForStickyAuthScheme();
+    void CheckForStickyAuthSchemeAt(nsHttpAtom const& header);
 
 private:
     class UpdateSecurityCallbacks : public Runnable
@@ -206,7 +217,7 @@ private:
                                 nsIInterfaceRequestor* aCallbacks)
         : mTrans(aTrans), mCallbacks(aCallbacks) {}
 
-        NS_IMETHOD Run()
+        NS_IMETHOD Run() override
         {
             if (mTrans->mConnection)
                 mTrans->mConnection->SetSecurityCallbacks(mCallbacks);
@@ -274,6 +285,8 @@ private:
 
     nsHttpVersion                   mHttpVersion;
     uint16_t                        mHttpResponseCode;
+
+    uint32_t                        mCurrentHttpResponseHeaderSize;
 
     // mCapsToClear holds flags that should be cleared in mCaps, e.g. unset
     // NS_HTTP_REFRESH_DNS when DNS refresh request has completed to avoid
@@ -412,27 +425,6 @@ private:
     bool mPassedRatePacing;
     bool mSynchronousRatePaceRequest;
     nsCOMPtr<nsICancelable> mTokenBucketCancel;
-
-// These members are used for network per-app metering (bug 746073)
-// Currently, they are only available on gonk.
-    uint64_t                           mCountRecv;
-    uint64_t                           mCountSent;
-    uint32_t                           mAppId;
-    bool                               mIsInIsolatedMozBrowser;
-#ifdef MOZ_WIDGET_GONK
-    nsMainThreadPtrHandle<nsINetworkInfo> mActiveNetworkInfo;
-#endif
-    nsresult                           SaveNetworkStats(bool);
-    void                               CountRecvBytes(uint64_t recvBytes)
-    {
-        mCountRecv += recvBytes;
-        SaveNetworkStats(false);
-    }
-    void                               CountSentBytes(uint64_t sentBytes)
-    {
-        mCountSent += sentBytes;
-        SaveNetworkStats(false);
-    }
 public:
     void     SetClassOfService(uint32_t cos) { mClassOfService = cos; }
     uint32_t ClassOfService() { return mClassOfService; }
@@ -455,11 +447,17 @@ private:
     RefPtr<ASpdySession> mTunnelProvider;
 
 public:
+    void SetTransactionObserver(TransactionObserver *arg) { mTransactionObserver = arg; }
+private:
+    RefPtr<TransactionObserver> mTransactionObserver;
+public:
     void GetNetworkAddresses(NetAddr &self, NetAddr &peer);
 
 private:
     NetAddr                         mSelfAddr;
     NetAddr                         mPeerAddr;
+
+    bool                            m0RTTInProgress;
 };
 
 } // namespace net

@@ -5,7 +5,7 @@ config = {
     "platform": "macosx64",
     "stage_product": "firefox",
     "update_platform": "Darwin_x86_64-gcc3",
-    "mozconfig": "%(branch)s/browser/config/mozconfigs/macosx-universal/l10n-mozconfig",
+    "mozconfig": "%(branch)s/browser/config/mozconfigs/macosx64/l10n-mozconfig",
     "bootstrap_env": {
         "SHELL": '/bin/bash',
         "MOZ_OBJDIR": "obj-l10n",
@@ -69,9 +69,4 @@ config = {
     "localized_mar": "firefox-%(version)s.%(locale)s.mac.complete.mar",
     "partial_mar": "firefox-%(version)s.%(locale)s.mac.partial.%(from_buildid)s-%(to_buildid)s.mar",
     'installer_file': "firefox-%(version)s.en-US.mac.dmg",
-    'exes': {
-        'hgtool.py': os.path.join(
-            os.getcwd(), 'build', 'tools', 'buildfarm', 'utils', 'hgtool.py'
-        ),
-    },
 }

@@ -14,24 +14,17 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/TypeTraits.h"
 
-#include "jslock.h"
-
 #include "js/GCAPI.h"
 #include "js/SliceBudget.h"
 #include "js/Vector.h"
 #include "threading/ConditionVariable.h"
+#include "threading/Thread.h"
 #include "vm/NativeObject.h"
 
 namespace js {
 
 class AutoLockHelperThreadState;
 unsigned GetCPUCount();
-
-enum ThreadType
-{
-    MainThread,
-    BackgroundThread
-};
 
 namespace gcstats {
 struct Statistics;
@@ -43,16 +36,36 @@ namespace gc {
 
 struct FinalizePhase;
 
-enum State {
-    NO_INCREMENTAL,
-    MARK_ROOTS,
-    MARK,
-    SWEEP,
-    FINALIZE,
-    COMPACT,
-    DECOMMIT,
+#define GCSTATES(D) \
+    D(NotActive) \
+    D(MarkRoots) \
+    D(Mark) \
+    D(Sweep) \
+    D(Finalize) \
+    D(Compact) \
+    D(Decommit)
+enum class State {
+#define MAKE_STATE(name) name,
+    GCSTATES(MAKE_STATE)
+#undef MAKE_STATE
+};
 
-    NUM_STATES
+// Reasons we reset an ongoing incremental GC or perform a non-incremental GC.
+#define GC_ABORT_REASONS(D) \
+    D(None) \
+    D(NonIncrementalRequested) \
+    D(AbortRequested) \
+    D(Unused1) \
+    D(IncrementalDisabled) \
+    D(ModeChange) \
+    D(MallocBytesTrigger) \
+    D(GCBytesTrigger) \
+    D(ZoneChange) \
+    D(CompartmentRevived)
+enum class AbortReason {
+#define MAKE_REASON(name) name,
+    GC_ABORT_REASONS(MAKE_REASON)
+#undef MAKE_REASON
 };
 
 /*
@@ -103,8 +116,11 @@ IsNurseryAllocable(AllocKind kind)
         false,     /* AllocKind::FAT_INLINE_STRING */
         false,     /* AllocKind::STRING */
         false,     /* AllocKind::EXTERNAL_STRING */
+        false,     /* AllocKind::FAT_INLINE_ATOM */
+        false,     /* AllocKind::ATOM */
         false,     /* AllocKind::SYMBOL */
         false,     /* AllocKind::JITCODE */
+        false,     /* AllocKind::SCOPE */
     };
     JS_STATIC_ASSERT(JS_ARRAY_LENGTH(map) == size_t(AllocKind::LIMIT));
     return map[size_t(kind)];
@@ -138,8 +154,11 @@ IsBackgroundFinalized(AllocKind kind)
         true,      /* AllocKind::FAT_INLINE_STRING */
         true,      /* AllocKind::STRING */
         false,     /* AllocKind::EXTERNAL_STRING */
+        true,      /* AllocKind::FAT_INLINE_ATOM */
+        true,      /* AllocKind::ATOM */
         true,      /* AllocKind::SYMBOL */
         false,     /* AllocKind::JITCODE */
+        true,      /* AllocKind::SCOPE */
     };
     JS_STATIC_ASSERT(JS_ARRAY_LENGTH(map) == size_t(AllocKind::LIMIT));
     return map[size_t(kind)];
@@ -435,6 +454,11 @@ class ArenaList {
         return !*cursorp_;
     }
 
+    void moveCursorToEnd() {
+        while (!isCursorAtEnd())
+            cursorp_ = &(*cursorp_)->next;
+    }
+
     // This can return nullptr.
     Arena* arenaAfterCursor() const {
         check();
@@ -584,6 +608,12 @@ class SortedArenaList
     }
 };
 
+enum ShouldCheckThresholds
+{
+    DontCheckThresholds = 0,
+    CheckThresholds = 1
+};
+
 class ArenaLists
 {
     JSRuntime* runtime_;
@@ -714,7 +744,7 @@ class ArenaLists
             freeLists[i] = &placeholder;
     }
 
-    inline void prepareForIncrementalGC(JSRuntime* rt);
+    inline void prepareForIncrementalGC();
 
     /* Check if this arena is in use. */
     bool arenaIsInUse(Arena* arena, AllocKind kind) const {
@@ -778,19 +808,16 @@ class ArenaLists
     };
 
   private:
-    inline void finalizeNow(FreeOp* fop, const FinalizePhase& phase);
     inline void queueForForegroundSweep(FreeOp* fop, const FinalizePhase& phase);
     inline void queueForBackgroundSweep(FreeOp* fop, const FinalizePhase& phase);
 
-    inline void finalizeNow(FreeOp* fop, AllocKind thingKind,
-                            KeepArenasEnum keepArenas, Arena** empty = nullptr);
-    inline void forceFinalizeNow(FreeOp* fop, AllocKind thingKind,
-                                 KeepArenasEnum keepArenas, Arena** empty = nullptr);
+    inline void finalizeNow(FreeOp* fop, AllocKind thingKind, Arena** empty = nullptr);
     inline void queueForForegroundSweep(FreeOp* fop, AllocKind thingKind);
     inline void queueForBackgroundSweep(FreeOp* fop, AllocKind thingKind);
     inline void mergeSweptArenas(AllocKind thingKind);
 
     TenuredCell* allocateFromArena(JS::Zone* zone, AllocKind thingKind,
+                                   ShouldCheckThresholds checkThresholds,
                                    AutoMaybeStartBackgroundAllocation& maybeStartBGAlloc);
     inline TenuredCell* allocateFromArenaInner(JS::Zone* zone, Arena* arena, AllocKind kind);
 
@@ -807,9 +834,6 @@ const size_t MAX_EMPTY_CHUNK_AGE = 4;
 } /* namespace gc */
 
 class InterpreterFrame;
-
-extern void
-MarkCompartmentActive(js::InterpreterFrame* fp);
 
 extern void
 TraceRuntime(JSTracer* trc);
@@ -860,14 +884,15 @@ class GCHelperState
     // Activity for the helper to do, protected by the GC lock.
     State state_;
 
-    // Thread which work is being performed on, or null.
-    PRThread* thread;
+    // Thread which work is being performed on, if any.
+    mozilla::Maybe<Thread::Id> thread;
 
-    void startBackgroundThread(State newState);
+    void startBackgroundThread(State newState, const AutoLockGC& lock,
+                               const AutoLockHelperThreadState& helperLock);
     void waitForBackgroundThread(js::AutoLockGC& lock);
 
-    State state();
-    void setState(State state);
+    State state(const AutoLockGC&);
+    void setState(State state, const AutoLockGC&);
 
     friend class js::gc::ArenaLists;
 
@@ -884,15 +909,15 @@ class GCHelperState
     explicit GCHelperState(JSRuntime* rt)
       : rt(rt),
         done(),
-        state_(IDLE),
-        thread(nullptr)
+        state_(IDLE)
     { }
 
     void finish();
 
     void work();
 
-    void maybeStartBackgroundSweep(const AutoLockGC& lock);
+    void maybeStartBackgroundSweep(const AutoLockGC& lock,
+                                   const AutoLockHelperThreadState& helperLock);
     void startBackgroundShrink(const AutoLockGC& lock);
 
     /* Must be called without the GC lock taken. */
@@ -953,7 +978,7 @@ class GCParallelTask
 
     // If multiple tasks are to be started or joined at once, it is more
     // efficient to take the helper thread lock once and use these methods.
-    bool startWithLockHeld();
+    bool startWithLockHeld(AutoLockHelperThreadState& locked);
     void joinWithLockHeld(AutoLockHelperThreadState& locked);
 
     // Instead of dispatching to a helper, run the task on the main thread.
@@ -974,7 +999,7 @@ class GCParallelTask
     // This should be friended to HelperThread, but cannot be because it
     // would introduce several circular dependencies.
   public:
-    virtual void runFromHelperThread(AutoLockHelperThreadState& locked);
+    void runFromHelperThread(AutoLockHelperThreadState& locked);
 };
 
 typedef void (*IterateChunkCallback)(JSRuntime* rt, void* data, gc::Chunk* chunk);
@@ -1115,7 +1140,8 @@ struct MightBeForwarded
                               mozilla::IsBaseOf<BaseShape, T>::value ||
                               mozilla::IsBaseOf<JSString, T>::value ||
                               mozilla::IsBaseOf<JSScript, T>::value ||
-                              mozilla::IsBaseOf<js::LazyScript, T>::value;
+                              mozilla::IsBaseOf<js::LazyScript, T>::value ||
+                              mozilla::IsBaseOf<js::Scope, T>::value;
 };
 
 template <typename T>
@@ -1223,7 +1249,7 @@ CheckValueAfterMovingGC(const JS::Value& value)
             D(ElementsBarrier, 12)             \
             D(CheckHashTablesOnMinorGC, 13)    \
             D(Compact, 14)                     \
-            D(CheckHeapOnMovingGC, 15)         \
+            D(CheckHeapAfterGC, 15)            \
             D(CheckNursery, 16)
 
 enum class ZealMode {
@@ -1420,6 +1446,13 @@ class MOZ_RAII AutoEmptyNursery : public AutoAssertEmptyNursery
 
 const char*
 StateName(State state);
+
+inline bool
+IsOOMReason(JS::gcreason::Reason reason)
+{
+    return reason == JS::gcreason::LAST_DITCH ||
+           reason == JS::gcreason::MEM_PRESSURE;
+}
 
 } /* namespace gc */
 

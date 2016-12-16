@@ -377,16 +377,14 @@ D3DVarying::D3DVarying(const std::string &semanticNameIn,
 
 // ProgramD3DMetadata Implementation
 
-ProgramD3DMetadata::ProgramD3DMetadata(int rendererMajorShaderModel,
-                                       const std::string &shaderModelSuffix,
-                                       bool usesInstancedPointSpriteEmulation,
-                                       bool usesViewScale,
+ProgramD3DMetadata::ProgramD3DMetadata(RendererD3D *renderer,
                                        const ShaderD3D *vertexShader,
                                        const ShaderD3D *fragmentShader)
-    : mRendererMajorShaderModel(rendererMajorShaderModel),
-      mShaderModelSuffix(shaderModelSuffix),
-      mUsesInstancedPointSpriteEmulation(usesInstancedPointSpriteEmulation),
-      mUsesViewScale(usesViewScale),
+    : mRendererMajorShaderModel(renderer->getMajorShaderModel()),
+      mShaderModelSuffix(renderer->getShaderModelSuffix()),
+      mUsesInstancedPointSpriteEmulation(
+          renderer->getWorkarounds().useInstancedPointSpriteEmulation),
+      mUsesViewScale(renderer->presentPathFastEnabled()),
       mVertexShader(vertexShader),
       mFragmentShader(fragmentShader)
 {
@@ -399,7 +397,7 @@ int ProgramD3DMetadata::getRendererMajorShaderModel() const
 
 bool ProgramD3DMetadata::usesBroadcast(const gl::ContextState &data) const
 {
-    return (mFragmentShader->usesFragColor() && data.getClientVersion() < 3);
+    return (mFragmentShader->usesFragColor() && data.getClientMajorVersion() < 3);
 }
 
 bool ProgramD3DMetadata::usesFragDepth() const
@@ -424,7 +422,8 @@ bool ProgramD3DMetadata::usesPointSize() const
 
 bool ProgramD3DMetadata::usesInsertedPointCoordValue() const
 {
-    return !usesPointSize() && usesPointCoord() && mRendererMajorShaderModel >= 4;
+    return (!usesPointSize() || !mUsesInstancedPointSpriteEmulation) && usesPointCoord() &&
+           mRendererMajorShaderModel >= 4;
 }
 
 bool ProgramD3DMetadata::usesViewScale() const
@@ -434,13 +433,12 @@ bool ProgramD3DMetadata::usesViewScale() const
 
 bool ProgramD3DMetadata::addsPointCoordToVertexShader() const
 {
-    // Instanced PointSprite emulation requires that gl_PointCoord is present in the vertex shader
+    // PointSprite emulation requiress that gl_PointCoord is present in the vertex shader
     // VS_OUTPUT structure to ensure compatibility with the generated PS_INPUT of the pixel shader.
-    // GeometryShader PointSprite emulation does not require this additional entry because the
-    // GS_OUTPUT of the Geometry shader contains the pointCoord value and already matches the
-    // PS_INPUT of the generated pixel shader. The Geometry Shader point sprite implementation needs
-    // gl_PointSize to be in VS_OUTPUT and GS_INPUT. Instanced point sprites doesn't need
-    // gl_PointSize in VS_OUTPUT.
+    // Even with a geometry shader, the app can render triangles or lines and reference
+    // gl_PointCoord in the fragment shader, requiring us to provide a dummy value. For
+    // simplicity, we always add this to the vertex shader when the fragment shader
+    // references gl_PointCoord, even if we could skip it in the geometry shader.
     return (mUsesInstancedPointSpriteEmulation && usesPointCoord()) ||
            usesInsertedPointCoordValue();
 }
@@ -741,14 +739,14 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
     if (memcmp(&identifier, &binaryDeviceIdentifier, sizeof(DeviceIdentifier)) != 0)
     {
         infoLog << "Invalid program binary, device configuration has changed.";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     int compileFlags = stream->readInt<int>();
     if (compileFlags != ANGLE_COMPILE_OPTIMIZATION_LEVEL)
     {
         infoLog << "Mismatched compilation flags.";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     for (int &index : mAttribLocationToD3DSemantic)
@@ -782,7 +780,7 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
     if (stream->error())
     {
         infoLog << "Invalid program binary.";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     const auto &linkedUniforms = mState.getUniforms();
@@ -806,7 +804,7 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
     if (stream->error())
     {
         infoLog << "Invalid program binary.";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     ASSERT(mD3DUniformBlocks.empty());
@@ -855,6 +853,8 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
 
     const unsigned char *binary = reinterpret_cast<const unsigned char *>(stream->data());
 
+    bool separateAttribs = (mState.getTransformFeedbackBufferMode() == GL_SEPARATE_ATTRIBS);
+
     const unsigned int vertexShaderCount = stream->readInt<unsigned int>();
     for (unsigned int vertexShaderIndex = 0; vertexShaderIndex < vertexShaderCount;
          vertexShaderIndex++)
@@ -872,18 +872,14 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
 
         ShaderExecutableD3D *shaderExecutable = nullptr;
 
-        gl::Error error = mRenderer->loadExecutable(
-            vertexShaderFunction, vertexShaderSize, SHADER_VERTEX, mStreamOutVaryings,
-            (mState.getTransformFeedbackBufferMode() == GL_SEPARATE_ATTRIBS), &shaderExecutable);
-        if (error.isError())
-        {
-            return LinkResult(false, error);
-        }
+        ANGLE_TRY(mRenderer->loadExecutable(vertexShaderFunction, vertexShaderSize, SHADER_VERTEX,
+                                            mStreamOutVaryings, separateAttribs,
+                                            &shaderExecutable));
 
         if (!shaderExecutable)
         {
             infoLog << "Could not create vertex shader.";
-            return LinkResult(false, gl::Error(GL_NO_ERROR));
+            return false;
         }
 
         // generated converted input layout
@@ -911,18 +907,14 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
         const unsigned char *pixelShaderFunction = binary + stream->offset();
         ShaderExecutableD3D *shaderExecutable    = nullptr;
 
-        gl::Error error = mRenderer->loadExecutable(
-            pixelShaderFunction, pixelShaderSize, SHADER_PIXEL, mStreamOutVaryings,
-            (mState.getTransformFeedbackBufferMode() == GL_SEPARATE_ATTRIBS), &shaderExecutable);
-        if (error.isError())
-        {
-            return LinkResult(false, error);
-        }
+        ANGLE_TRY(mRenderer->loadExecutable(pixelShaderFunction, pixelShaderSize, SHADER_PIXEL,
+                                            mStreamOutVaryings, separateAttribs,
+                                            &shaderExecutable));
 
         if (!shaderExecutable)
         {
             infoLog << "Could not create pixel shader.";
-            return LinkResult(false, gl::Error(GL_NO_ERROR));
+            return false;
         }
 
         // add new binary
@@ -942,27 +934,22 @@ LinkResult ProgramD3D::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
         }
 
         const unsigned char *geometryShaderFunction = binary + stream->offset();
-        bool splitAttribs                           = (mState.getTransformFeedbackBufferMode() == GL_SEPARATE_ATTRIBS);
 
-        gl::Error error = mRenderer->loadExecutable(
-            geometryShaderFunction, geometryShaderSize, SHADER_GEOMETRY, mStreamOutVaryings,
-            splitAttribs, &mGeometryExecutables[geometryExeIndex]);
-        if (error.isError())
-        {
-            return LinkResult(false, error);
-        }
+        ANGLE_TRY(mRenderer->loadExecutable(geometryShaderFunction, geometryShaderSize,
+                                            SHADER_GEOMETRY, mStreamOutVaryings, separateAttribs,
+                                            &mGeometryExecutables[geometryExeIndex]));
 
         if (!mGeometryExecutables[geometryExeIndex])
         {
             infoLog << "Could not create geometry shader.";
-            return LinkResult(false, gl::Error(GL_NO_ERROR));
+            return false;
         }
         stream->skip(geometryShaderSize);
     }
 
     initializeUniformStorage();
 
-    return LinkResult(true, gl::Error(GL_NO_ERROR));
+    return true;
 }
 
 gl::Error ProgramD3D::save(gl::BinaryOutputStream *stream)
@@ -1291,22 +1278,14 @@ LinkResult ProgramD3D::compileProgramExecutables(const gl::ContextState &data, g
 {
     const gl::InputLayout &defaultInputLayout =
         GetDefaultInputLayoutFromShader(mState.getAttachedVertexShader());
-    ShaderExecutableD3D *defaultVertexExecutable = NULL;
-    gl::Error error =
-        getVertexExecutableForInputLayout(defaultInputLayout, &defaultVertexExecutable, &infoLog);
-    if (error.isError())
-    {
-        return LinkResult(false, error);
-    }
+    ShaderExecutableD3D *defaultVertexExecutable = nullptr;
+    ANGLE_TRY(
+        getVertexExecutableForInputLayout(defaultInputLayout, &defaultVertexExecutable, &infoLog));
 
     std::vector<GLenum> defaultPixelOutput      = GetDefaultOutputLayoutFromShader(getPixelShaderKey());
-    ShaderExecutableD3D *defaultPixelExecutable = NULL;
-    error =
-        getPixelExecutableForOutputLayout(defaultPixelOutput, &defaultPixelExecutable, &infoLog);
-    if (error.isError())
-    {
-        return LinkResult(false, error);
-    }
+    ShaderExecutableD3D *defaultPixelExecutable = nullptr;
+    ANGLE_TRY(
+        getPixelExecutableForOutputLayout(defaultPixelOutput, &defaultPixelExecutable, &infoLog));
 
     // Auto-generate the geometry shader here, if we expect to be using point rendering in D3D11.
     ShaderExecutableD3D *pointGS = nullptr;
@@ -1339,9 +1318,8 @@ LinkResult ProgramD3D::compileProgramExecutables(const gl::ContextState &data, g
         fragmentShaderD3D->appendDebugInfo(defaultPixelExecutable->getDebugInfo());
     }
 
-    bool linkSuccess = (defaultVertexExecutable && defaultPixelExecutable &&
-                        (!usesGeometryShader(GL_POINTS) || pointGS));
-    return LinkResult(linkSuccess, gl::Error(GL_NO_ERROR));
+    return (defaultVertexExecutable && defaultPixelExecutable &&
+            (!usesGeometryShader(GL_POINTS) || pointGS));
 }
 
 LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
@@ -1365,7 +1343,7 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
         if (fragmentShaderD3D->usesFrontFacing())
         {
             infoLog << "The current renderer doesn't support gl_FrontFacing";
-            return LinkResult(false, gl::Error(GL_NO_ERROR));
+            return false;
         }
     }
 
@@ -1377,13 +1355,10 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
     if (!varyingPacking.packVaryings(infoLog, packedVaryings,
                                      mState.getTransformFeedbackVaryingNames()))
     {
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
-    ProgramD3DMetadata metadata(mRenderer->getMajorShaderModel(), mRenderer->getShaderModelSuffix(),
-                                usesInstancedPointSpriteEmulation(),
-                                mRenderer->presentPathFastEnabled(), vertexShaderD3D,
-                                fragmentShaderD3D);
+    ProgramD3DMetadata metadata(mRenderer, vertexShaderD3D, fragmentShaderD3D);
 
     varyingPacking.enableBuiltins(SHADER_VERTEX, metadata);
     varyingPacking.enableBuiltins(SHADER_PIXEL, metadata);
@@ -1391,7 +1366,7 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
     if (static_cast<GLuint>(varyingPacking.getRegisterCount()) > data.getCaps().maxVaryingVectors)
     {
         infoLog << "No varying registers left to support gl_FragCoord/gl_PointCoord";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     // TODO(jmadill): Implement more sophisticated component packing in D3D9.
@@ -1401,13 +1376,13 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
         varyingPacking.getMaxSemanticIndex() > data.getCaps().maxVaryingVectors)
     {
         infoLog << "Cannot pack these varyings on D3D9.";
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     if (!mDynamicHLSL->generateShaderLinkHLSL(data, mState, metadata, varyingPacking, &mPixelHLSL,
                                               &mVertexHLSL))
     {
-        return LinkResult(false, gl::Error(GL_NO_ERROR));
+        return false;
     }
 
     mUsesPointSize = vertexShaderD3D->usesPointSize();
@@ -1438,7 +1413,12 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
     gatherTransformFeedbackVaryings(varyingPacking);
 
     LinkResult result = compileProgramExecutables(data, infoLog);
-    if (result.error.isError() || !result.linkSuccess)
+    if (result.isError())
+    {
+        infoLog << result.getError().getMessage();
+        return result;
+    }
+    else if (!result.getResult())
     {
         infoLog << "Failed to create D3D shaders.";
         return result;
@@ -1446,7 +1426,7 @@ LinkResult ProgramD3D::link(const gl::ContextState &data, gl::InfoLog &infoLog)
 
     initUniformBlockInfo();
 
-    return LinkResult(true, gl::Error(GL_NO_ERROR));
+    return true;
 }
 
 GLboolean ProgramD3D::validate(const gl::Caps & /*caps*/, gl::InfoLog * /*infoLog*/)
@@ -2309,4 +2289,13 @@ bool ProgramD3D::getUniformBlockMemberInfo(const std::string &memberUniformName,
     *memberInfoOut = infoIter->second;
     return true;
 }
+
+void ProgramD3D::setPathFragmentInputGen(const std::string &inputName,
+                                         GLenum genMode,
+                                         GLint components,
+                                         const GLfloat *coeffs)
+{
+    UNREACHABLE();
+}
+
 }  // namespace rx

@@ -55,7 +55,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include <algorithm>
 
 #ifdef MOZ_XUL
@@ -512,9 +512,9 @@ nsFocusManager::MoveFocus(mozIDOMWindowProxy* aWindow, nsIDOMElement* aStartElem
   if (MOZ_LOG_TEST(gFocusLog, LogLevel::Debug) && mFocusedWindow) {
     nsIDocument* doc = mFocusedWindow->GetExtantDoc();
     if (doc && doc->GetDocumentURI()) {
-      nsAutoCString spec;
-      doc->GetDocumentURI()->GetSpec(spec);
-      LOGFOCUS((" Focused Window: %p %s", mFocusedWindow.get(), spec.get()));
+      LOGFOCUS((" Focused Window: %p %s",
+                mFocusedWindow.get(),
+                doc->GetDocumentURI()->GetSpecOrDefault().get()));
     }
   }
 
@@ -664,17 +664,16 @@ nsFocusManager::WindowRaised(mozIDOMWindowProxy* aWindow)
 
   if (MOZ_LOG_TEST(gFocusLog, LogLevel::Debug)) {
     LOGFOCUS(("Window %p Raised [Currently: %p %p]", aWindow, mActiveWindow.get(), mFocusedWindow.get()));
-    nsAutoCString spec;
     nsIDocument* doc = window->GetExtantDoc();
     if (doc && doc->GetDocumentURI()) {
-      doc->GetDocumentURI()->GetSpec(spec);
-      LOGFOCUS(("  Raised Window: %p %s", aWindow, spec.get()));
+      LOGFOCUS(("  Raised Window: %p %s", aWindow,
+                doc->GetDocumentURI()->GetSpecOrDefault().get()));
     }
     if (mActiveWindow) {
       doc = mActiveWindow->GetExtantDoc();
       if (doc && doc->GetDocumentURI()) {
-        doc->GetDocumentURI()->GetSpec(spec);
-        LOGFOCUS(("  Active Window: %p %s", mActiveWindow.get(), spec.get()));
+        LOGFOCUS(("  Active Window: %p %s", mActiveWindow.get(),
+                  doc->GetDocumentURI()->GetSpecOrDefault().get()));
       }
     }
   }
@@ -750,17 +749,16 @@ nsFocusManager::WindowLowered(mozIDOMWindowProxy* aWindow)
 
   if (MOZ_LOG_TEST(gFocusLog, LogLevel::Debug)) {
     LOGFOCUS(("Window %p Lowered [Currently: %p %p]", aWindow, mActiveWindow.get(), mFocusedWindow.get()));
-    nsAutoCString spec;
     nsIDocument* doc = window->GetExtantDoc();
     if (doc && doc->GetDocumentURI()) {
-      doc->GetDocumentURI()->GetSpec(spec);
-      LOGFOCUS(("  Lowered Window: %s", spec.get()));
+      LOGFOCUS(("  Lowered Window: %s",
+                doc->GetDocumentURI()->GetSpecOrDefault().get()));
     }
     if (mActiveWindow) {
       doc = mActiveWindow->GetExtantDoc();
       if (doc && doc->GetDocumentURI()) {
-        doc->GetDocumentURI()->GetSpec(spec);
-        LOGFOCUS(("  Active Window: %s", spec.get()));
+        LOGFOCUS(("  Active Window: %s",
+                  doc->GetDocumentURI()->GetSpecOrDefault().get()));
       }
     }
   }
@@ -879,18 +877,17 @@ nsFocusManager::WindowShown(mozIDOMWindowProxy* aWindow, bool aNeedsFocus)
 
   if (MOZ_LOG_TEST(gFocusLog, LogLevel::Debug)) {
     LOGFOCUS(("Window %p Shown [Currently: %p %p]", window.get(), mActiveWindow.get(), mFocusedWindow.get()));
-    nsAutoCString spec;
     nsIDocument* doc = window->GetExtantDoc();
     if (doc && doc->GetDocumentURI()) {
-      doc->GetDocumentURI()->GetSpec(spec);
-      LOGFOCUS(("Shown Window: %s", spec.get()));
+      LOGFOCUS(("Shown Window: %s",
+                doc->GetDocumentURI()->GetSpecOrDefault().get()));
     }
 
     if (mFocusedWindow) {
       doc = mFocusedWindow->GetExtantDoc();
       if (doc && doc->GetDocumentURI()) {
-        doc->GetDocumentURI()->GetSpec(spec);
-        LOGFOCUS((" Focused Window: %s", spec.get()));
+        LOGFOCUS((" Focused Window: %s",
+                  doc->GetDocumentURI()->GetSpecOrDefault().get()));
       }
     }
   }
@@ -937,23 +934,23 @@ nsFocusManager::WindowHidden(mozIDOMWindowProxy* aWindow)
     nsAutoCString spec;
     nsIDocument* doc = window->GetExtantDoc();
     if (doc && doc->GetDocumentURI()) {
-      doc->GetDocumentURI()->GetSpec(spec);
-      LOGFOCUS(("  Hide Window: %s", spec.get()));
+      LOGFOCUS(("  Hide Window: %s",
+                doc->GetDocumentURI()->GetSpecOrDefault().get()));
     }
 
     if (mFocusedWindow) {
       doc = mFocusedWindow->GetExtantDoc();
       if (doc && doc->GetDocumentURI()) {
-        doc->GetDocumentURI()->GetSpec(spec);
-        LOGFOCUS(("  Focused Window: %s", spec.get()));
+        LOGFOCUS(("  Focused Window: %s",
+                  doc->GetDocumentURI()->GetSpecOrDefault().get()));
       }
     }
 
     if (mActiveWindow) {
       doc = mActiveWindow->GetExtantDoc();
       if (doc && doc->GetDocumentURI()) {
-        doc->GetDocumentURI()->GetSpec(spec);
-        LOGFOCUS(("  Active Window: %s", spec.get()));
+        LOGFOCUS(("  Active Window: %s",
+                  doc->GetDocumentURI()->GetSpecOrDefault().get()));
       }
     }
   }
@@ -1100,10 +1097,20 @@ nsFocusManager::NotifyFocusStateChange(nsIContent* aContent,
   if (aWindowShouldShowFocusRing) {
     eventState |= NS_EVENT_STATE_FOCUSRING;
   }
+
   if (aGettingFocus) {
     aContent->AsElement()->AddStates(eventState);
   } else {
     aContent->AsElement()->RemoveStates(eventState);
+  }
+
+  for (Element* element = aContent->AsElement(); element;
+       element = element->GetParentElementCrossingShadowRoot()) {
+    if (aGettingFocus) {
+      element->AddStates(NS_EVENT_STATE_FOCUS_WITHIN);
+    } else {
+      element->RemoveStates(NS_EVENT_STATE_FOCUS_WITHIN);
+    }
   }
 }
 
@@ -1580,7 +1587,7 @@ nsFocusManager::CheckIfFocusable(nsIContent* aContent, uint32_t aFlags)
   if (subdoc && IsWindowVisible(subdoc->GetWindow())) {
     const nsStyleUserInterface* ui = frame->StyleUserInterface();
     int32_t tabIndex = (ui->mUserFocus == StyleUserFocus::Ignore ||
-                        ui->mUserFocus == StyleUserFocus::None_) ? -1 : 0;
+                        ui->mUserFocus == StyleUserFocus::None) ? -1 : 0;
     return aContent->IsFocusable(&tabIndex, aFlags & FLAG_BYMOUSE) ? aContent : nullptr;
   }
   
@@ -1995,7 +2002,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     InternalFocusEvent event(true, mEventMessage);
     event.mFlags.mBubbles = false;
@@ -2014,6 +2021,49 @@ public:
   nsCOMPtr<EventTarget>   mRelatedTarget;
 };
 
+class FocusInOutEvent : public Runnable
+{
+public:
+  FocusInOutEvent(nsISupports* aTarget, EventMessage aEventMessage,
+                 nsPresContext* aContext,
+                 nsPIDOMWindowOuter* aOriginalFocusedWindow,
+                 nsIContent* aOriginalFocusedContent,
+                 EventTarget* aRelatedTarget)
+    : mTarget(aTarget)
+    , mContext(aContext)
+    , mEventMessage(aEventMessage)
+    , mOriginalFocusedWindow(aOriginalFocusedWindow)
+    , mOriginalFocusedContent(aOriginalFocusedContent)
+    , mRelatedTarget(aRelatedTarget)
+  {
+  }
+
+  NS_IMETHOD Run() override
+  {
+    nsCOMPtr<nsIContent> originalWindowFocus = mOriginalFocusedWindow ?
+        mOriginalFocusedWindow->GetFocusedNode() :
+        nullptr;
+    // Blink does not check that focus is the same after blur, but WebKit does.
+    // Opt to follow Blink's behavior (see bug 687787).
+    if (mEventMessage == eFocusOut ||
+        originalWindowFocus == mOriginalFocusedContent) {
+      InternalFocusEvent event(true, mEventMessage);
+      event.mFlags.mBubbles = true;
+      event.mFlags.mCancelable = false;
+      event.mRelatedTarget = mRelatedTarget;
+      return EventDispatcher::Dispatch(mTarget, mContext, &event);
+    }
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsISupports>        mTarget;
+  RefPtr<nsPresContext>        mContext;
+  EventMessage                 mEventMessage;
+  nsCOMPtr<nsPIDOMWindowOuter> mOriginalFocusedWindow;
+  nsCOMPtr<nsIContent>         mOriginalFocusedContent;
+  nsCOMPtr<EventTarget>        mRelatedTarget;
+};
+
 static nsIDocument*
 GetDocumentHelper(EventTarget* aTarget)
 {
@@ -2024,6 +2074,26 @@ GetDocumentHelper(EventTarget* aTarget)
   }
 
   return node->OwnerDoc();
+}
+
+void nsFocusManager::SendFocusInOrOutEvent(EventMessage aEventMessage,
+                                     nsIPresShell* aPresShell,
+                                     nsISupports* aTarget,
+                                     nsPIDOMWindowOuter* aCurrentFocusedWindow,
+                                     nsIContent* aCurrentFocusedContent,
+                                     EventTarget* aRelatedTarget)
+{
+  NS_ASSERTION(aEventMessage == eFocusIn || aEventMessage == eFocusOut,
+      "Wrong event type for SendFocusInOrOutEvent");
+
+  nsContentUtils::AddScriptRunner(
+      new FocusInOutEvent(
+        aTarget,
+        aEventMessage,
+        aPresShell->GetPresContext(),
+        aCurrentFocusedWindow,
+        aCurrentFocusedContent,
+        aRelatedTarget));
 }
 
 void
@@ -2042,6 +2112,11 @@ nsFocusManager::SendFocusOrBlurEvent(EventMessage aEventMessage,
   nsCOMPtr<EventTarget> eventTarget = do_QueryInterface(aTarget);
   nsCOMPtr<nsIDocument> eventTargetDoc = GetDocumentHelper(eventTarget);
   nsCOMPtr<nsIDocument> relatedTargetDoc = GetDocumentHelper(aRelatedTarget);
+  nsCOMPtr<nsPIDOMWindowOuter> currentWindow = mFocusedWindow;
+  nsCOMPtr<nsPIDOMWindowInner> targetWindow = do_QueryInterface(aTarget);
+  nsCOMPtr<nsIDocument> targetDocument = do_QueryInterface(aTarget);
+  nsCOMPtr<nsIContent> currentFocusedContent = currentWindow ?
+      currentWindow->GetFocusedNode() : nullptr;
 
   // set aRelatedTarget to null if it's not in the same document as eventTarget
   if (eventTargetDoc != relatedTargetDoc) {
@@ -2092,6 +2167,19 @@ nsFocusManager::SendFocusOrBlurEvent(EventMessage aEventMessage,
     nsContentUtils::AddScriptRunner(
       new FocusBlurEvent(aTarget, aEventMessage, aPresShell->GetPresContext(),
                          aWindowRaised, aIsRefocus, aRelatedTarget));
+
+    // Check that the target is not a window or document before firing
+    // focusin/focusout. Other browsers do not fire focusin/focusout on window,
+    // despite being required in the spec, so follow their behavior.
+    //
+    // As for document, we should not even fire focus/blur, but until then, we
+    // need this check. targetDocument should be removed once bug 1228802 is
+    // resolved.
+    if (!targetWindow && !targetDocument) {
+      EventMessage focusInOrOutMessage = aEventMessage == eFocus ? eFocusIn : eFocusOut;
+      SendFocusInOrOutEvent(focusInOrOutMessage, aPresShell, aTarget,
+          currentWindow, currentFocusedContent, aRelatedTarget);
+    }
   }
 }
 
@@ -3490,7 +3578,7 @@ public:
     }
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     if (PointerUnlocker::sActiveUnlocker == this) {
       PointerUnlocker::sActiveUnlocker = nullptr;

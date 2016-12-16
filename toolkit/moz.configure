@@ -65,7 +65,7 @@ set_config('MOZ_DMD', dmd)
 set_define('MOZ_DMD', dmd)
 add_old_configure_assignment('MOZ_DMD', dmd)
 imply_option('--enable-profiling', dmd)
-imply_option('--enable-jemalloc', dmd)
+# --enable-jemalloc is implied below.
 imply_option('--enable-replace-malloc', dmd)
 
 # JACK cubeb backend
@@ -86,16 +86,23 @@ set_define('MOZ_JACK', jack)
 include('../js/moz.configure')
 
 
+# Rust
+# ==============================================================
+include('../build/moz.configure/rust.configure',
+        when='--enable-compile-environment')
+
+
 # L10N
 # ==============================================================
 option('--with-l10n-base', nargs=1, env='L10NBASEDIR',
        help='Path to l10n repositories')
 
 @depends('--with-l10n-base')
+@imports(_from='os.path', _import='isdir')
 def l10n_base(value):
     if value:
         path = value[0]
-        if not os.path.isdir(path):
+        if not isdir(path):
             die("Invalid value --with-l10n-base, %s doesn't exist", path)
         return os.path.realpath(os.path.abspath(path))
 
@@ -274,6 +281,68 @@ def fc_freetype(value, toolkit):
 
 add_old_configure_assignment('USE_FC_FREETYPE', fc_freetype)
 
+# Pango
+# ==============================================================
+pkg_check_modules('MOZ_PANGO',
+                  'pango >= 1.22.0 pangoft2 >= 1.22.0 pangocairo >= 1.22.0',
+                  when=toolkit_gtk)
+
+# Fontconfig
+# ==============================================================
+fontconfig_info = pkg_check_modules('_FONTCONFIG', 'fontconfig >= 2.7.0',
+                                    when=fc_freetype)
+
+@depends(fc_freetype)
+def check_for_freetype2(fc_freetype):
+    if fc_freetype:
+        return True
+
+# Check for freetype2. Flags are combined with fontconfig flags.
+freetype2_info = pkg_check_modules('_FT2', 'freetype2 >= 6.1.0',
+                                   when=check_for_freetype2)
+
+@depends(fontconfig_info, freetype2_info)
+def freetype2_combined_info(fontconfig_info, freetype2_info):
+    if not freetype2_info:
+        return
+    if not fontconfig_info:
+        return freetype2_info
+    return namespace(
+        cflags=freetype2_info.cflags + fontconfig_info.cflags,
+        libs=freetype2_info.libs + fontconfig_info.libs,
+    )
+
+add_old_configure_assignment('_HAVE_FREETYPE2',
+                             depends_if(freetype2_info)(lambda _: True))
+
+# Build Freetype in the tree
+# ==============================================================
+@depends(target)
+def tree_freetype(target):
+    if target.os == 'Android':
+        return True
+
+set_define('MOZ_TREE_FREETYPE', tree_freetype)
+set_config('MOZ_TREE_FREETYPE', tree_freetype)
+add_old_configure_assignment('MOZ_TREE_FREETYPE', tree_freetype)
+
+set_define('HAVE_FT_BITMAP_SIZE_Y_PPEM', tree_freetype)
+set_define('HAVE_FT_GLYPHSLOT_EMBOLDEN', tree_freetype)
+set_define('HAVE_FT_LOAD_SFNT_TABLE', tree_freetype)
+
+@depends(freetype2_combined_info, tree_freetype, check_build_environment)
+def ft2_info(freetype2_combined_info, tree_freetype, build_env):
+    if tree_freetype:
+        return namespace(cflags=('-I%s/modules/freetype2/include' % build_env.topsrcdir,),
+                         libs=())
+    if freetype2_combined_info:
+        return freetype2_combined_info
+
+set_config('FT2_LIBS', delayed_getattr(ft2_info, 'libs'))
+add_old_configure_assignment('FT2_LIBS',
+                             delayed_getattr(ft2_info, 'libs'))
+add_old_configure_assignment('FT2_CFLAGS',
+                             delayed_getattr(ft2_info, 'cflags'))
 
 # Apple platform decoder support
 # ==============================================================
@@ -344,10 +413,32 @@ add_old_configure_assignment('MOZ_FMP4', fmp4)
 
 # EME Support
 # ==============================================================
-option('--enable-eme', nargs='*', choices=('adobe','widevine',),
+# Widevine is enabled by default in desktop browser builds.
+@depends(build_project, '--help')
+def eme_default(build_project, help):
+    if build_project == 'browser':
+        return 'widevine'
+
+option('--enable-eme',
+       nargs='*',
+       choices=('adobe','widevine',),
+       default=eme_default,
        help='Enable support for Encrypted Media Extensions')
 
-@depends('--enable-eme', fmp4)
+@depends('--enable-eme', target)
+def enable_eme(value, target):
+    # Widevine EME by default enabled on desktop Windows, MacOS and Linux,
+    # x86 and x64 builds.
+    if (target.kernel in ('Darwin', 'WINNT', 'Linux') and
+        target.os not in ('Android', 'iOS') and
+        target.cpu in ('x86', 'x86_64')):
+        return value
+    elif value and value.origin != 'default':
+        die('%s is not supported on %s' % (value.format('--enable-eme'), target.alias))
+    # Return the same type of OptionValue (Positive or Negative), with an empty tuple.
+    return value.__class__(())
+
+@depends(enable_eme, fmp4)
 def eme(value, fmp4):
     enabled = bool(value)
     if value.origin == 'default':
@@ -358,16 +449,10 @@ def eme(value, fmp4):
     if enabled:
         return True
 
-@depends('--enable-eme')
+@depends(enable_eme)
 def eme_modules(value):
-    # Theoretically, we could pass `value` directly when it is a
-    # PositiveOptionValue, but somehow, the JSON serialization in configure.py
-    # outputs inconsistent data in some cases when we do (a closing bracket
-    # without an opening one).
-    return list(value) if value else []
+    return value
 
-set_config('MOZ_EME', eme)
-set_define('MOZ_EME', eme)
 set_config('MOZ_EME_MODULES', eme_modules)
 
 option(name='--enable-chrome-format',
@@ -435,6 +520,16 @@ def check_places_and_android_history(places, android_history):
     if places and android_history:
         die('Cannot use MOZ_ANDROID_HISTORY alongside MOZ_PLACES.')
 
+# Permissions system
+# ==============================================================
+option(name='--disable-permissions',
+       help='Disable permissions (popup and cookie blocking)')
+
+moz_permissions = depends_if('--disable-permissions')(lambda _: True)
+
+set_config('MOZ_PERMISSIONS', moz_permissions)
+set_define('MOZ_PERMISSIONS', moz_permissions)
+
 # gpsd support
 # ==============================================================
 option('--enable-gpsd', env='MOZ_GPSD',
@@ -444,9 +539,10 @@ option('--enable-gpsd', env='MOZ_GPSD',
 def gpsd(value):
     return bool(value)
 
-system_gpsd = pkg_check_modules('MOZ_GPSD', 'libgps >= 3.11', gpsd)
+system_gpsd = pkg_check_modules('MOZ_GPSD', 'libgps >= 3.11',
+                                when=gpsd)
 
-set_config('MOZ_GPSD', system_gpsd)
+set_config('MOZ_GPSD', depends_if(system_gpsd)(lambda _: True))
 
 # Miscellaneous programs
 # ==============================================================
@@ -454,3 +550,318 @@ set_config('MOZ_GPSD', system_gpsd)
 check_prog('TAR', ('gnutar', 'gtar', 'tar'))
 check_prog('UNZIP', ('unzip',))
 check_prog('ZIP', ('zip',))
+
+# Key files
+# ==============================================================
+include('../build/moz.configure/keyfiles.configure')
+
+simple_keyfile('Mozilla API')
+
+simple_keyfile('Google API')
+
+id_and_secret_keyfile('Bing API')
+
+simple_keyfile('Adjust SDK')
+
+# Servo integration
+# ==============================================================
+option('--enable-stylo', env='STYLO_ENABLED', nargs=0,
+       help='Enables experimental integration with the servo style system. '
+            'This requires either building servo within Gecko\'s cargo phase '
+            'or passing --with-servo')
+
+@depends('--enable-stylo')
+def stylo(value):
+    if value:
+        return True
+
+set_config('MOZ_STYLO', stylo)
+set_define('MOZ_STYLO', stylo)
+
+@depends(stylo, dmd)
+def jemalloc(stylo, dmd):
+    if stylo:
+        return 'moz'
+    elif dmd:
+        return True
+
+imply_option('--enable-jemalloc', jemalloc,
+             reason='--enable-dmd or --enable-stylo')
+
+option('--with-servo', env='SERVO_TARGET_DIR', nargs=1,
+       help='Absolute path of the target directory where libgeckoservo can '
+            'be found. This is generally servo_src_dir/target/release.')
+
+@depends_if('--with-servo')
+def servo_target_dir(value):
+    return value[0]
+
+set_config('SERVO_TARGET_DIR', servo_target_dir)
+
+# Gecko integrated IPC fuzzer
+# ==============================================================
+option('--enable-ipc-fuzzer', env='MOZ_FAULTY',
+       help='Enable IPC fuzzer')
+
+@depends('--enable-ipc-fuzzer', target)
+def ipc_fuzzer(value, target):
+    if value:
+        if target.os == 'WINNT':
+            die('--enable-ipc-fuzzer is not supported on this platform.')
+        return bool(value)
+
+set_config('MOZ_FAULTY', ipc_fuzzer)
+set_define('MOZ_FAULTY', ipc_fuzzer)
+
+# Printing
+# ==============================================================
+@depends(target)
+def ios_disable_printing(target):
+    if target.os == 'iOS':
+        return False
+
+imply_option('--enable-printing', ios_disable_printing, reason='--target')
+
+option('--disable-printing', help='Disable printing support')
+
+@depends('--disable-printing')
+def printing(value):
+    if value:
+        return True
+
+set_config('NS_PRINTING', printing)
+set_define('NS_PRINTING', printing)
+set_define('NS_PRINT_PREVIEW', printing)
+
+# Speech-dispatcher support
+# ==============================================================
+@depends(toolkit)
+def no_speechd_on_non_gtk(toolkit):
+    if toolkit not in ('gtk2', 'gtk3'):
+        return False
+
+imply_option('--enable-synth-speechd', no_speechd_on_non_gtk,
+             reason='--enable-default-toolkit')
+
+option('--disable-synth-speechd', help='Disable speech-dispatcher support')
+
+set_config('MOZ_SYNTH_SPEECHD',
+           depends_if('--disable-synth-speechd')(lambda _: True))
+
+# Speech API
+# ==============================================================
+option('--disable-webspeech', help='Disable support for HTML Speech API')
+
+@depends('--disable-webspeech', '--help')
+def webspeech(value, _):
+    if value:
+        return True
+
+set_config('MOZ_WEBSPEECH', webspeech)
+set_define('MOZ_WEBSPEECH', webspeech)
+add_old_configure_assignment('MOZ_WEBSPEECH', webspeech)
+
+# Speech API pocketsphinx backend
+# ==============================================================
+@depends(build_project, milestone, webspeech)
+def webspeech_pocketsphinx(build_project, milestone, webspeech):
+    if webspeech and milestone.is_nightly and build_project == 'b2g':
+        return True
+
+set_config('MOZ_WEBSPEECH_POCKETSPHINX', webspeech_pocketsphinx)
+set_define('MOZ_WEBSPEECH_POCKETSPHINX', webspeech_pocketsphinx)
+
+# Speech API models
+# ==============================================================
+@depends(build_project, milestone, webspeech)
+def webspeech_models(build_project, milestone, webspeech):
+    if webspeech and milestone.is_nightly and build_project == 'b2g':
+        return True
+
+set_config('MOZ_WEBSPEECH_MODELS', webspeech_models)
+set_define('MOZ_WEBSPEECH_MODELS', webspeech_models)
+
+# Speech API test backend
+# ==============================================================
+option('--enable-webspeechtestbackend', default=webspeech,
+       help='Enable support for HTML Speech API Test Backend')
+
+@depends_if('--enable-webspeechtestbackend')
+def webspeech_test_backend(value):
+    return True
+
+set_config('MOZ_WEBSPEECH_TEST_BACKEND', webspeech_test_backend)
+set_define('MOZ_WEBSPEECH_TEST_BACKEND', webspeech_test_backend)
+
+# Enable IPDL's "expensive" unit tests
+# ==============================================================
+option('--enable-ipdl-tests', help='Enable expensive IPDL tests')
+
+set_config('MOZ_IPDL_TESTS',
+           depends_if('--enable-ipdl-tests')(lambda _: True))
+
+include('nss.configure')
+
+# Network protocol support
+# ==============================================================
+@depends(check_build_environment, '--help')
+@imports('os')
+@imports(_from='__builtin__', _import='sorted')
+def all_necko_protocols(build_env, _):
+    basedir = os.path.join(build_env.topsrcdir, 'netwerk', 'protocol')
+    return tuple(sorted(p for p in os.listdir(basedir)
+                        if os.path.isdir(os.path.join(basedir, p))))
+
+default_necko_protocols = all_necko_protocols
+
+@deprecated_option('--enable-necko-protocols', nargs='*')
+def necko_protocols(protocols):
+    return protocols
+
+@depends(necko_protocols, default_necko_protocols)
+def necko_protocols(protocols, default_protocols):
+    if protocols is None or (protocols and len(protocols) == 0):
+        return None
+    if len(protocols) == 1 and protocols[0] == '':
+        return False
+    result = set()
+    for p in protocols:
+        if p in ('yes', 'all', 'default'):
+            result |= set(default_protocols)
+            continue
+        if p in ('no', 'none'):
+            result = set()
+            continue
+        if p.startswith('-'):
+            if p[1:] in result:
+                result.remove(p[1:])
+        else:
+            result.add(p)
+    if result != set(default_protocols):
+        return tuple(result)
+
+imply_option('--enable-network-protocols', necko_protocols,
+             reason='--enable-necko-protocols')
+
+option('--enable-network-protocols', nargs='+', default=default_necko_protocols,
+       choices=all_necko_protocols,
+       help='Enable/disable specific protocol handlers')
+
+@depends('--enable-network-protocols')
+def necko_protocol_defines(protocols):
+    return tuple('NECKO_PROTOCOL_%s' % p for p in protocols)
+
+add_old_configure_assignment('_NON_GLOBAL_ACDEFINES', necko_protocol_defines)
+
+@depends(necko_protocol_defines)
+@imports('__sandbox__')
+def set_necko_protocol_defines(protocols):
+    for p in protocols:
+        __sandbox__.set_define_impl(p, True)
+
+@depends('--enable-network-protocols')
+@imports(_from='__builtin__', _import='sorted')
+def necko_protocols(protocols):
+    return tuple(sorted(protocols))
+
+set_config('NECKO_PROTOCOLS', necko_protocols)
+add_old_configure_assignment('NECKO_PROTOCOLS', necko_protocols)
+
+# Graphics
+# ==============================================================
+option('--disable-skia', help='Disable use of Skia')
+
+@depends('--disable-skia', target)
+def skia(value, target):
+    if value.origin == 'default' and target.endianness == 'big':
+        return None
+    if value:
+        return True
+
+set_config('MOZ_ENABLE_SKIA', skia)
+set_define('MOZ_ENABLE_SKIA', skia)
+set_define('USE_SKIA', skia)
+
+@depends(skia, target)
+def skia_android(skia, target):
+    if skia and target.os == 'Android':
+        return True
+
+set_define('SK_BUILD_FOR_ANDROID_NDK', skia_android)
+
+option('--disable-skia-gpu', help='Disable use of Skia-GPU')
+
+@depends('--disable-skia-gpu', skia, target)
+def skia_gpu(value, skia, target):
+    if value.origin == 'default':
+        if not skia:
+            return None
+        # Skia GPU support may not reliably build on certain *BSDs (see bug 1234494)
+        if target.os in ('NetBSD', 'OpenBSD'):
+            return None
+    elif value and not skia:
+        die('Cannot enable Skia-GPU without enabling Skia')
+    if skia and value:
+        return True
+
+set_config('MOZ_ENABLE_SKIA_GPU', skia_gpu)
+set_define('USE_SKIA_GPU', skia_gpu)
+
+option('--enable-skia-pdf', help='Enable Skia PDF')
+
+@depends('--enable-skia-pdf', skia)
+def skia_pdf(value, skia):
+    if value.origin == 'default':
+        if not skia:
+            return None
+    elif value and not skia:
+        die('Cannot enable Skia PDF without enabling Skia')
+    if skia and value:
+        return True
+
+set_config('MOZ_ENABLE_SKIA_PDF', skia_pdf)
+set_define('MOZ_ENABLE_SKIA_PDF', skia_pdf)
+
+@depends(skia, skia_gpu)
+def skia_includes(skia, skia_gpu):
+    includes = []
+    if skia:
+        includes += [
+            '/gfx/skia',
+            '/gfx/skia/skia/include/config',
+            '/gfx/skia/skia/include/core',
+        ]
+
+    if skia_gpu:
+        includes += [
+            '/gfx/skia/skia/include/gpu',
+            '/gfx/skia/skia/include/utils',
+        ]
+
+    return includes
+
+set_config('SKIA_INCLUDES', skia_includes)
+
+# Support various fuzzing options
+# ==============================================================
+with only_when('--enable-compile-environment'):
+    option('--enable-fuzzing', help='Enable fuzzing support')
+
+    @depends('--enable-fuzzing')
+    def enable_fuzzing(value):
+        if value:
+            return True
+
+    @depends(enable_fuzzing,
+             try_compile(body='__AFL_COMPILER;',
+                         check_msg='for AFL compiler',
+                         when='--enable-fuzzing'))
+    def enable_libfuzzer(fuzzing, afl):
+        if fuzzing and not afl:
+            return True
+
+    set_config('FUZZING', enable_fuzzing)
+    set_define('FUZZING', enable_fuzzing)
+
+    set_config('LIBFUZZER', enable_libfuzzer)
+    set_define('LIBFUZZER', enable_libfuzzer)

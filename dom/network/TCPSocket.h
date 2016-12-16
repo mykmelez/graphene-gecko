@@ -99,6 +99,7 @@ public:
   void Suspend();
   void Resume(ErrorResult& aRv);
   void Close();
+  void CloseImmediately();
   bool Send(JSContext* aCx, const nsACString& aData, ErrorResult& aRv);
   bool Send(JSContext* aCx,
             const ArrayBuffer& aData,
@@ -178,14 +179,12 @@ private:
   void ActivateTLS();
   // Dispatch an error event if necessary, then dispatch a "close" event.
   nsresult MaybeReportErrorAndCloseIfOpen(nsresult status);
-#ifdef MOZ_WIDGET_GONK
-  // Store and reset any saved network stats for this socket.
-  void SaveNetworkStats(bool aEnforce);
-#endif
 
   // Helper for FireDataStringEvent/FireDataArrayEvent.
   nsresult FireDataEvent(JSContext* aCx, const nsAString& aType,
                          JS::Handle<JS::Value> aData);
+  // Helper for Close/CloseImmediately
+  void CloseHelper(bool waitForUnsentData);
 
   TCPReadyState mReadyState;
   // Whether to use strings or array buffers for the "data" event.
@@ -245,10 +244,6 @@ private:
   bool mObserversActive;
 
 #ifdef MOZ_WIDGET_GONK
-  // Number of bytes sent.
-  uint32_t mTxBytes;
-  // Number of bytes received.
-  uint32_t mRxBytes;
   // The app that owns this socket.
   uint32_t mAppId;
   // Was this socket created inside of an isolated browser frame?

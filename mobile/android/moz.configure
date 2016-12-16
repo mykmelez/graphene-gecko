@@ -55,14 +55,6 @@ option(env='MOZ_ANDROID_ACTIVITY_STREAM',
 set_config('MOZ_ANDROID_ACTIVITY_STREAM',
            depends_if('MOZ_ANDROID_ACTIVITY_STREAM')(lambda _: True))
 
-option('--disable-android-apz', env='MOZ_ANDROID_APZ',
-       help='Disable the C++ async pan/zoom code and use the Java version instead')
-
-android_apz = depends_if('--disable-android-apz')(lambda _: True)
-
-set_config('MOZ_ANDROID_APZ', android_apz)
-set_define('MOZ_ANDROID_APZ', android_apz)
-
 option(env='MOZ_ANDROID_PACKAGE_INSTALL_BOUNCER',
        help='Build and package the install bouncer APK',
        default=True)
@@ -74,8 +66,8 @@ imply_option('MOZ_SOCIAL', False)
 imply_option('MOZ_SERVICES_HEALTHREPORT', True)
 imply_option('MOZ_ANDROID_HISTORY', True)
 
-set_config('ANDROID_SUPPORT_LIBRARY_VERSION', '23.0.1')
-add_old_configure_assignment('ANDROID_SUPPORT_LIBRARY_VERSION', '23.0.1')
+set_config('ANDROID_SUPPORT_LIBRARY_VERSION', '23.4.0')
+add_old_configure_assignment('ANDROID_SUPPORT_LIBRARY_VERSION', '23.4.0')
 
 set_config('ANDROID_GOOGLE_PLAY_SERVICES_VERSION', '8.4.0')
 add_old_configure_assignment('ANDROID_GOOGLE_PLAY_SERVICES_VERSION', '8.4.0')

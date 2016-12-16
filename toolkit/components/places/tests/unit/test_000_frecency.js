@@ -22,7 +22,7 @@ try {
               getService(Ci.nsINavBookmarksService);
   var prefs = Cc["@mozilla.org/preferences-service;1"].
               getService(Ci.nsIPrefBranch);
-} catch(ex) {
+} catch (ex) {
   do_throw("Could not get services\n");
 }
 
@@ -56,13 +56,13 @@ var prefPrefix = "places.frecency.";
 function* task_initializeBucket(bucket) {
   let [cutoffName, weightName] = bucket;
   // get pref values
-  var weight = 0, cutoff = 0, bonus = 0;
+  var weight = 0, cutoff = 0;
   try {
     weight = prefs.getIntPref(prefPrefix + weightName);
-  } catch(ex) {}
+  } catch (ex) {}
   try {
     cutoff = prefs.getIntPref(prefPrefix + cutoffName);
-  } catch(ex) {}
+  } catch (ex) {}
 
   if (cutoff < 1)
     return;
@@ -70,7 +70,7 @@ function* task_initializeBucket(bucket) {
   // generate a date within the cutoff period
   var dateInPeriod = (now - ((cutoff - 1) * 86400 * 1000)) * 1000;
 
-  for (let [bonusName, visitType] in Iterator(bonusPrefs)) {
+  for (let [bonusName, visitType] of Object.entries(bonusPrefs)) {
     var frecency = -1;
     var calculatedURI = null;
     var matchTitle = "";
@@ -79,7 +79,7 @@ function* task_initializeBucket(bucket) {
     if (bonusName == "unvisitedBookmarkBonus" || bonusName == "unvisitedTypedBonus") {
       if (cutoffName == "firstBucketCutoff") {
         let points = Math.ceil(bonusValue / parseFloat(100.0) * weight);
-        var visitCount = 1; //bonusName == "unvisitedBookmarkBonus" ? 1 : 0;
+        var visitCount = 1; // bonusName == "unvisitedBookmarkBonus" ? 1 : 0;
         frecency = Math.ceil(visitCount * points);
         calculatedURI = uri("http://" + searchTerm + ".com/" +
           bonusName + ":" + bonusValue + "/cutoff:" + cutoff +
@@ -127,7 +127,7 @@ function* task_initializeBucket(bucket) {
         bmsvc.insertBookmark(bmsvc.unfiledBookmarksFolder, calculatedURI, bmsvc.DEFAULT_INDEX, matchTitle);
       }
       else
-        matchTitle = calculatedURI.spec.substr(calculatedURI.spec.lastIndexOf("/")+1);
+        matchTitle = calculatedURI.spec.substr(calculatedURI.spec.lastIndexOf("/") + 1);
       yield PlacesTestUtils.addVisits({
         uri: calculatedURI,
         transition: visitType,
@@ -209,12 +209,12 @@ add_task(function* test_frecency()
   }
 
   // sort results by frecency
-  results.sort((a,b) => b[1] - a[1]);
+  results.sort((a, b) => b[1] - a[1]);
   // Make sure there's enough results returned
   prefs.setIntPref("browser.urlbar.maxRichResults", results.length);
 
   // DEBUG
-  //results.every(function(el) { dump("result: " + el[1] + ": " + el[0].spec + " (" + el[2] + ")\n"); return true; })
+  // results.every(function(el) { dump("result: " + el[1] + ": " + el[0].spec + " (" + el[2] + ")\n"); return true; })
 
   yield PlacesTestUtils.promiseAsyncUpdates();
 

@@ -15,7 +15,6 @@ registerCleanupFunction(function() {
  * checking the checkbox does actually enable that behaviour.
  */
 add_task(function*() {
-  yield SpecialPowers.pushPrefEnv({"set": [["browser.tabs.dontfocusfordialogs", true]]});
   let firstTab = gBrowser.selectedTab;
   // load page that opens prompt when page is hidden
   let openedTab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, pageWithAlert, true);
@@ -42,6 +41,10 @@ add_task(function*() {
   // tick box and accept dialog
   checkbox.checked = true;
   ourPrompt.onButtonClick(0);
+  // Wait for that click to actually be handled completely.
+  yield new Promise(function(resolve) {
+    Services.tm.mainThread.dispatch(resolve, Ci.nsIThread.DISPATCH_NORMAL);
+  });
   // check permission is set
   let ps = Services.perms;
   is(ps.ALLOW_ACTION, ps.testPermission(makeURI(pageWithAlert), "focus-tab-by-prompt"),

@@ -3,17 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 pref("security.tls.version.min", 1);
-pref("security.tls.version.max", 3);
+pref("security.tls.version.max", 4);
 pref("security.tls.version.fallback-limit", 3);
 pref("security.tls.insecure_fallback_hosts", "");
-pref("security.tls.unrestricted_rc4_fallback", false);
+pref("security.tls.enable_0rtt_data", false);
 
 pref("security.ssl.treat_unsafe_negotiation_as_broken", false);
 pref("security.ssl.require_safe_negotiation",  false);
 pref("security.ssl.enable_ocsp_stapling", true);
 pref("security.ssl.enable_false_start", true);
-pref("security.ssl.false_start.require-npn", false);
-pref("security.ssl.enable_npn", true);
 pref("security.ssl.enable_alpn", true);
 
 pref("security.ssl3.ecdhe_rsa_aes_128_gcm_sha256", true);
@@ -47,6 +45,8 @@ pref("security.password_lifetime",       30);
 // (This is only relevant to Windows 8.1)
 pref("security.family_safety.mode", 2);
 
+pref("security.enterprise_roots.enabled", false);
+
 pref("security.OCSP.enabled", 1);
 pref("security.OCSP.require", false);
 pref("security.OCSP.GET.enabled", false);
@@ -54,8 +54,8 @@ pref("security.OCSP.GET.enabled", false);
 pref("security.pki.cert_short_lifetime_in_days", 10);
 // NB: Changes to this pref affect CERT_CHAIN_SHA1_POLICY_STATUS telemetry.
 // See the comment in CertVerifier.cpp.
-// 3 = allow SHA-1 for certificates issued before 2016 or by an imported root.
-pref("security.pki.sha1_enforcement_level", 3);
+// 4 = allow SHA-1 for certificates issued before 2016 or by an imported root.
+pref("security.pki.sha1_enforcement_level", 4);
 
 // security.pki.name_matching_mode controls how the platform matches hostnames
 // to name information in TLS certificates. The possible values are:
@@ -67,7 +67,7 @@ pref("security.pki.sha1_enforcement_level", 3);
 // 2: fall back to the subject common name for certificates valid before 23
 //    August 2015 if necessary
 // 3: only use name information from the subject alternative name extension
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 pref("security.pki.name_matching_mode", 1);
 #else
 pref("security.pki.name_matching_mode", 2);
@@ -79,11 +79,16 @@ pref("security.pki.name_matching_mode", 2);
 // 1: it is considered equivalent when the notBefore is before 23 August 2016
 // 2: similarly, but for 23 August 2015
 // 3: it is never considered equivalent
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 pref("security.pki.netscape_step_up_policy", 1);
 #else
 pref("security.pki.netscape_step_up_policy", 2);
 #endif
+
+// Configures Certificate Transparency support mode:
+// 0: Fully disabled.
+// 1: Only collect telemetry. CT qualification checks are not performed.
+pref("security.pki.certificate_transparency.mode", 1);
 
 pref("security.webauth.u2f", false);
 pref("security.webauth.u2f_enable_softtoken", false);
@@ -97,3 +102,15 @@ pref("security.ssl.errorReporting.automatic", false);
 // blacking themselves out by setting a bad pin.  (60 days by default)
 // https://tools.ietf.org/html/rfc7469#section-4.1
 pref("security.cert_pinning.max_max_age_seconds", 5184000);
+
+// If a request is mixed-content, send an HSTS priming request to attempt to
+// see if it is available over HTTPS.
+pref("security.mixed_content.send_hsts_priming", true);
+#ifdef RELEASE_OR_BETA
+// Don't change the order of evaluation of mixed-content and HSTS upgrades
+pref("security.mixed_content.use_hsts", false);
+#else
+// Change the order of evaluation so HSTS upgrades happen before
+// mixed-content blocking
+pref("security.mixed_content.use_hsts", true);
+#endif

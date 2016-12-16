@@ -56,14 +56,14 @@ public:
   KeyPair(SECKEYPrivateKey* aPrivateKey, SECKEYPublicKey* aPublicKey);
 
 private:
-  ~KeyPair()
+  ~KeyPair() override
   {
     nsNSSShutDownPreventionLock locker;
     if (isAlreadyShutDown()) {
       return;
     }
     destructorSafeDestroyNSSReference();
-    shutdown(calledFromObject);
+    shutdown(ShutdownCalledFrom::Object);
   }
 
   void virtualDestroyNSSReference() override
@@ -96,17 +96,17 @@ public:
   KeyGenRunnable(KeyType keyType, nsIIdentityKeyGenCallback * aCallback);
 
 private:
-  ~KeyGenRunnable()
+  ~KeyGenRunnable() override
   {
     nsNSSShutDownPreventionLock locker;
     if (isAlreadyShutDown()) {
       return;
     }
     destructorSafeDestroyNSSReference();
-    shutdown(calledFromObject);
+    shutdown(ShutdownCalledFrom::Object);
   }
 
-  virtual void virtualDestroyNSSReference() override
+  void virtualDestroyNSSReference() override
   {
     destructorSafeDestroyNSSReference();
   }
@@ -133,14 +133,14 @@ public:
                nsIIdentitySignCallback * aCallback);
 
 private:
-  ~SignRunnable()
+  ~SignRunnable() override
   {
     nsNSSShutDownPreventionLock locker;
     if (isAlreadyShutDown()) {
       return;
     }
     destructorSafeDestroyNSSReference();
-    shutdown(calledFromObject);
+    shutdown(ShutdownCalledFrom::Object);
   }
 
   void virtualDestroyNSSReference() override
@@ -171,7 +171,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIIDENTITYCRYPTOSERVICE
 
-  IdentityCryptoService() { }
+  IdentityCryptoService() = default;
   nsresult Init()
   {
     nsresult rv;
@@ -183,7 +183,7 @@ public:
   }
 
 private:
-  ~IdentityCryptoService() { }
+  ~IdentityCryptoService() = default;
   IdentityCryptoService(const KeyPair &) = delete;
   void operator=(const IdentityCryptoService &) = delete;
 };

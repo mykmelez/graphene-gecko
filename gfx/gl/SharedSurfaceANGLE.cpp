@@ -6,9 +6,9 @@
 #include "SharedSurfaceANGLE.h"
 
 #include <d3d11.h>
-#include "gfxWindowsPlatform.h"
 #include "GLContextEGL.h"
 #include "GLLibraryEGL.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
 
 namespace mozilla {
@@ -178,6 +178,7 @@ public:
       : mIsLocked(false)
       , mTexture(texture)
     {
+        MOZ_ASSERT(NS_IsMainThread(), "Must be on the main thread to use d3d11 immediate context");
         MOZ_ASSERT(mTexture);
         MOZ_ASSERT(succeeded);
         *succeeded = false;
@@ -196,8 +197,9 @@ public:
             }
         }
 
-        RefPtr<ID3D11Device> device;
-        if (!gfxWindowsPlatform::GetPlatform()->GetD3D11DeviceForCurrentThread(&device)) {
+        RefPtr<ID3D11Device> device =
+          gfx::DeviceManagerDx::Get()->GetContentDevice();
+        if (!device) {
             return;
         }
 
@@ -252,8 +254,9 @@ SharedSurface_ANGLEShareHandle::ReadbackBySharedHandle(gfx::DataSourceSurface* o
 {
     MOZ_ASSERT(out_surface);
 
-    RefPtr<ID3D11Device> device;
-    if (!gfxWindowsPlatform::GetPlatform()->GetD3D11DeviceForCurrentThread(&device)) {
+    RefPtr<ID3D11Device> device =
+      gfx::DeviceManagerDx::Get()->GetContentDevice();
+    if (!device) {
         return false;
     }
 
@@ -317,7 +320,7 @@ SharedSurface_ANGLEShareHandle::ReadbackBySharedHandle(gfx::DataSourceSurface* o
 
 /*static*/ UniquePtr<SurfaceFactory_ANGLEShareHandle>
 SurfaceFactory_ANGLEShareHandle::Create(GLContext* gl, const SurfaceCaps& caps,
-                                        const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                        const RefPtr<layers::LayersIPCChannel>& allocator,
                                         const layers::TextureFlags& flags)
 {
     GLLibraryEGL* egl = &sEGLLibrary;
@@ -337,7 +340,7 @@ SurfaceFactory_ANGLEShareHandle::Create(GLContext* gl, const SurfaceCaps& caps,
 
 SurfaceFactory_ANGLEShareHandle::SurfaceFactory_ANGLEShareHandle(GLContext* gl,
                                                                  const SurfaceCaps& caps,
-                                                                 const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                                                 const RefPtr<layers::LayersIPCChannel>& allocator,
                                                                  const layers::TextureFlags& flags,
                                                                  GLLibraryEGL* egl,
                                                                  EGLConfig config)

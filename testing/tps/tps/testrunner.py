@@ -65,10 +65,12 @@ class TPSTestRunner(object):
         # Allow installing extensions dropped into the profile folder
         'extensions.autoDisableScopes': 10,
         'extensions.getAddons.get.url': 'http://127.0.0.1:4567/addons/api/%IDS%.xml',
+        # Our pretend addons server doesn't support metadata...
+        'extensions.getAddons.cache.enabled': False,
+        'extensions.install.requireSecureOrigin': False,
         'extensions.update.enabled': False,
         # Don't open a dialog to show available add-on updates
         'extensions.update.notifyUser': False,
-        'services.sync.addons.ignoreRepositoryChecking': True,
         'services.sync.firstSync': 'notReady',
         'services.sync.lastversion': '1.0',
         'toolkit.startup.max_resumed_crashes': -1,
@@ -236,12 +238,7 @@ class TPSTestRunner(object):
         except:
             test = json.loads(testcontent[testcontent.find('{'):testcontent.find('}') + 1])
 
-        testcontent += 'var config = %s;\n' % json.dumps(self.config, indent=2)
-        testcontent += 'var seconds_since_epoch = %d;\n' % int(time.time())
-
-        tmpfile = TempFile(prefix='tps_test_')
-        tmpfile.write(testcontent)
-        tmpfile.close()
+        self.preferences['tps.seconds_since_epoch'] = int(time.time())
 
         # generate the profiles defined in the test, and a list of test phases
         profiles = {}
@@ -259,7 +256,7 @@ class TPSTestRunner(object):
                 phase,
                 profiles[profilename],
                 testname,
-                tmpfile.filename,
+                testpath,
                 self.logfile,
                 self.env,
                 self.firefoxRunner,
@@ -281,7 +278,7 @@ class TPSTestRunner(object):
             cleanup_phase = TPSTestPhase(
                 'cleanup-' + profilename,
                 profiles[profilename], testname,
-                tmpfile.filename,
+                testpath,
                 self.logfile,
                 self.env,
                 self.firefoxRunner,
@@ -368,6 +365,11 @@ class TPSTestRunner(object):
 
         if self.debug:
             self.preferences.update(self.debug_preferences)
+
+        if 'preferences' in self.config:
+            self.preferences.update(self.config['preferences'])
+
+        self.preferences['tps.config'] = json.dumps(self.config)
 
     def run_tests(self):
         # delete the logfile if it already exists

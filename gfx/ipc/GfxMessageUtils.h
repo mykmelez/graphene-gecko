@@ -15,6 +15,7 @@
 #include "chrome/common/ipc_message_utils.h"
 #include "gfxPoint.h"
 #include "gfxRect.h"
+#include "gfxTelemetry.h"
 #include "gfxTypes.h"
 #include "ipc/IPCMessageUtils.h"
 #include "mozilla/gfx/Matrix.h"
@@ -24,6 +25,7 @@
 #include "mozilla/layers/LayersTypes.h"
 #include "nsRect.h"
 #include "nsRegion.h"
+#include "mozilla/Array.h"
 
 #include <stdint.h>
 
@@ -219,6 +221,22 @@ struct ParamTraits<mozilla::layers::LayersBackend>
              mozilla::layers::LayersBackend,
              mozilla::layers::LayersBackend::LAYERS_NONE,
              mozilla::layers::LayersBackend::LAYERS_LAST>
+{};
+
+template <>
+struct ParamTraits<mozilla::gfx::BackendType>
+  : public ContiguousEnumSerializer<
+             mozilla::gfx::BackendType,
+             mozilla::gfx::BackendType::NONE,
+             mozilla::gfx::BackendType::BACKEND_LAST>
+{};
+
+template <>
+struct ParamTraits<mozilla::gfx::FeatureStatus>
+  : public ContiguousEnumSerializer<
+             mozilla::gfx::FeatureStatus,
+             mozilla::gfx::FeatureStatus::Unused,
+             mozilla::gfx::FeatureStatus::LAST>
 {};
 
 template <>
@@ -859,6 +877,14 @@ struct ParamTraits<mozilla::layers::ScrollMetadata>
 };
 
 template<>
+struct ParamTraits<GeckoProcessType>
+  : public ContiguousEnumSerializer<
+             GeckoProcessType,
+             GeckoProcessType_Default,
+             GeckoProcessType_End>
+{};
+
+template<>
 struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
 {
   typedef mozilla::layers::TextureFactoryIdentifier paramType;
@@ -866,18 +892,22 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mParentBackend);
+    WriteParam(aMsg, aParam.mParentProcessType);
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
+    WriteParam(aMsg, aParam.mSupportsComponentAlpha);
     WriteParam(aMsg, aParam.mSyncHandle);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
   {
     bool result = ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
+                  ReadParam(aMsg, aIter, &aResult->mParentProcessType) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
+                  ReadParam(aMsg, aIter, &aResult->mSupportsComponentAlpha) &&
                   ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     return result;
   }
@@ -923,6 +953,14 @@ struct ParamTraits<mozilla::StereoMode>
              mozilla::StereoMode,
              mozilla::StereoMode::MONO,
              mozilla::StereoMode::MAX>
+{};
+
+template <>
+struct ParamTraits<mozilla::YUVColorSpace>
+  : public ContiguousEnumSerializer<
+             mozilla::YUVColorSpace,
+             mozilla::YUVColorSpace::BT601,
+             mozilla::YUVColorSpace::UNKNOWN>
 {};
 
 template <>
@@ -1228,6 +1266,42 @@ struct ParamTraits<mozilla::layers::AsyncDragMetrics>
             ReadParam(aMsg, aIter, &aResult->mScrollbarDragOffset) &&
             ReadParam(aMsg, aIter, &aResult->mScrollTrack) &&
             ReadParam(aMsg, aIter, &aResult->mDirection));
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::gfx::Glyph>
+{
+  typedef mozilla::gfx::Glyph paramType;
+  static void Write(Message* aMsg, const paramType& aParam) {
+    WriteParam(aMsg, aParam.mIndex);
+    WriteParam(aMsg, aParam.mPosition);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult) {
+    return (ReadParam(aMsg, aIter, &aResult->mIndex) &&
+            ReadParam(aMsg, aIter, &aResult->mPosition)
+      );
+  }
+};
+
+template<typename T, size_t Length>
+struct ParamTraits<mozilla::Array<T, Length>>
+{
+  typedef mozilla::Array<T, Length> paramType;
+  static void Write(Message* aMsg, const paramType& aParam) {
+    for (size_t i = 0; i < Length; i++) {
+      WriteParam(aMsg, aParam[i]);
+    }
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult) {
+    for (size_t i = 0; i < Length; i++) {
+      if (!ReadParam(aMsg, aIter, &aResult[i])) {
+        return false;
+      }
+    }
+    return true;
   }
 };
 

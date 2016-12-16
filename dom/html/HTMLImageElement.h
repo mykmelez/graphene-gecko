@@ -15,9 +15,6 @@
 #include "Units.h"
 #include "nsCycleCollectionParticipant.h"
 
-// Only needed for IsPictureEnabled()
-#include "mozilla/dom/HTMLPictureElement.h"
-
 namespace mozilla {
 class EventChainPreVisitor;
 namespace dom {
@@ -52,6 +49,9 @@ public:
   // Element
   virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override;
 
+  // EventTarget
+  virtual void AsyncEventRunning(AsyncEventDispatcher* aEvent) override;
+
   // nsIDOMHTMLImageElement
   NS_DECL_NSIDOMHTMLIMAGEELEMENT
 
@@ -70,7 +70,8 @@ public:
   NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
+  virtual nsresult GetEventTargetParent(
+                     EventChainPreVisitor& aVisitor) override;
 
   bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) override;
 
@@ -93,11 +94,11 @@ public:
   virtual EventStates IntrinsicState() const override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
+  virtual void NodeInfoChanged() override;
+
   nsresult CopyInnerTo(Element* aDest);
 
   void MaybeLoadImage();
-
-  static bool IsSrcsetEnabled();
 
   bool IsMap()
   {
@@ -292,6 +293,9 @@ protected:
   // only mode after Bug 1076583
   bool InResponsiveMode();
 
+  // True if the given URL and density equal the last URL and density that was loaded by this element.
+  bool SelectedSourceMatchesLast(nsIURI* aSelectedSource, double aSelectedDensity);
+
   // Resolve and load the current mResponsiveSelector (responsive mode) or src
   // attr image.
   nsresult LoadSelectedImage(bool aForce, bool aNotify, bool aAlwaysLoad);
@@ -333,9 +337,7 @@ protected:
   // If the node's srcset/sizes make for an invalid selector, returns
   // false. This does not guarantee the resulting selector matches an image,
   // only that it is valid.
-  bool TryCreateResponsiveSelector(nsIContent *aSourceNode,
-                                   const nsAString *aSrcset = nullptr,
-                                   const nsAString *aSizes = nullptr);
+  bool TryCreateResponsiveSelector(nsIContent *aSourceNode);
 
   CSSIntPoint GetXY();
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
@@ -363,6 +365,11 @@ private:
 
   bool mInDocResponsiveContent;
   RefPtr<ImageLoadTask> mPendingImageLoadTask;
+
+  // Last URL that was attempted to load by this element.
+  nsCOMPtr<nsIURI> mLastSelectedSource;
+  // Last pixel density that was selected.
+  double mCurrentDensity;
 };
 
 } // namespace dom

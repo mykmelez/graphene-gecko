@@ -19,10 +19,6 @@ var gEMEHandler = {
           Services.prefs.getPrefType("media.gmp-eme-adobe.enabled") &&
           !Services.prefs.getBoolPref("media.gmp-eme-adobe.enabled")) {
         Services.prefs.setBoolPref("media.gmp-eme-adobe.enabled", true);
-      } else if (keySystem == "org.w3.clearkey" &&
-                 Services.prefs.getPrefType("media.eme.clearkey.enabled") &&
-                 !Services.prefs.getBoolPref("media.eme.clearkey.enabled")) {
-        Services.prefs.setBoolPref("media.eme.clearkey.enabled", true);
       } else if (keySystem == "com.widevine.alpha" &&
                  Services.prefs.getPrefType("media.gmp-widevinecdm.enabled") &&
                  !Services.prefs.getBoolPref("media.gmp-widevinecdm.enabled")) {
@@ -71,7 +67,10 @@ var gEMEHandler = {
     switch (status) {
       case "available":
       case "cdm-created":
-        this.showPopupNotificationForSuccess(browser, keySystem);
+        // Only show the chain icon for proprietary CDMs. Clearkey is not one.
+        if (keySystem != "org.w3.clearkey") {
+          this.showPopupNotificationForSuccess(browser, keySystem);
+        }
         // ... and bail!
         return;
 
@@ -95,11 +94,9 @@ var gEMEHandler = {
       case "cdm-not-supported":
         // Not to pop up user-level notification because they cannot do anything
         // about it.
-      case "error":
-        // Fall through and do the same for unknown messages:
+        return;
       default:
-        let typeOfIssue = status == "error" ? "error" : "message ('" + status + "')";
-        Cu.reportError("Unknown " + typeOfIssue + " dealing with EME key request: " + data);
+        Cu.reportError(new Error("Unknown message ('" + status + "') dealing with EME key request: " + data));
         return;
     }
 
@@ -146,9 +143,8 @@ var gEMEHandler = {
     // We're playing EME content! Remove any "we can't play because..." messages.
     var box = gBrowser.getNotificationBox(browser);
     ["drmContentDisabled",
-     "drmContentCDMInsufficientVersion",
      "drmContentCDMInstalling"
-     ].forEach(function (value) {
+     ].forEach(function(value) {
         var notification = box.getNotificationWithValue(value);
         if (notification)
           box.removeNotification(notification);
@@ -202,10 +198,6 @@ const TELEMETRY_DDSTAT_CLICKED_FIRST = 3;
 const TELEMETRY_DDSTAT_SOLVED = 4;
 
 let gDecoderDoctorHandler = {
-  shouldShowLearnMoreButton() {
-    return AppConstants.platform == "win";
-  },
-
   getLabelForNotificationBox(type) {
     if (type == "adobe-cdm-not-found" &&
         AppConstants.platform == "win") {
@@ -220,15 +212,38 @@ let gDecoderDoctorHandler = {
       if (AppConstants.isPlatformAndVersionAtMost("win", "5.9")) {
         return gNavigatorBundle.getString("decoder.noCodecsXP.message");
       }
+      if (!AppConstants.isPlatformAndVersionAtLeast("win", "6.1")) {
+        return gNavigatorBundle.getString("decoder.noCodecsVista.message");
+      }
       return gNavigatorBundle.getString("decoder.noCodecs.message");
     }
     if (type == "platform-decoder-not-found") {
-      if (AppConstants.isPlatformAndVersionAtLeast("win", "6")) {
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "6.1")) {
         return gNavigatorBundle.getString("decoder.noHWAcceleration.message");
+      }
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "6")) {
+        return gNavigatorBundle.getString("decoder.noHWAccelerationVista.message");
       }
       if (AppConstants.platform == "linux") {
         return gNavigatorBundle.getString("decoder.noCodecsLinux.message");
       }
+    }
+    if (type == "cannot-initialize-pulseaudio") {
+      return gNavigatorBundle.getString("decoder.noPulseAudio.message");
+    }
+    if (type == "unsupported-libavcodec" &&
+        AppConstants.platform == "linux") {
+      return gNavigatorBundle.getString("decoder.unsupportedLibavcodec.message");
+    }
+    return "";
+  },
+
+  getSumoForLearnHowButton(type) {
+    if (AppConstants.platform == "win") {
+      return "fix-video-audio-problems-firefox-windows";
+    }
+    if (type == "cannot-initialize-pulseaudio") {
+      return "fix-common-audio-and-video-issues";
     }
     return "";
   },
@@ -288,10 +303,10 @@ let gDecoderDoctorHandler = {
         histogram.add(decoderDoctorReportId, TELEMETRY_DDSTAT_SHOWN_FIRST);
       } else {
         // Split existing formats into an array of strings.
-        let existing = formatsInPref.split(",").map(String.trim);
+        let existing = formatsInPref.split(",").map(x => x.trim());
         // Keep given formats that were not already recorded.
-        let newbies = formats.split(",").map(String.trim)
-                      .filter(x => existing.includes(x));
+        let newbies = formats.split(",").map(x => x.trim())
+                      .filter(x => !existing.includes(x));
         // And rewrite pref with the added new formats (if any).
         if (newbies.length) {
           Services.prefs.setCharPref(formatsPref,
@@ -301,7 +316,8 @@ let gDecoderDoctorHandler = {
       histogram.add(decoderDoctorReportId, TELEMETRY_DDSTAT_SHOWN);
 
       let buttons = [];
-      if (gDecoderDoctorHandler.shouldShowLearnMoreButton()) {
+      let sumo = gDecoderDoctorHandler.getSumoForLearnHowButton(type);
+      if (sumo) {
         buttons.push({
           label: gNavigatorBundle.getString("decoder.noCodecs.button"),
           accessKey: gNavigatorBundle.getString("decoder.noCodecs.accesskey"),
@@ -315,7 +331,7 @@ let gDecoderDoctorHandler = {
             histogram.add(decoderDoctorReportId, TELEMETRY_DDSTAT_CLICKED);
 
             let baseURL = Services.urlFormatter.formatURLPref("app.support.baseURL");
-            openUILinkIn(baseURL + "fix-video-audio-problems-firefox-windows", "tab");
+            openUILinkIn(baseURL + sumo, "tab");
           }
         });
       }
@@ -337,9 +353,9 @@ let gDecoderDoctorHandler = {
   },
 }
 
-window.messageManager.addMessageListener("DecoderDoctor:Notification", gDecoderDoctorHandler);
-window.messageManager.addMessageListener("EMEVideo:ContentMediaKeysRequest", gEMEHandler);
+window.getGroupMessageManager("browsers").addMessageListener("DecoderDoctor:Notification", gDecoderDoctorHandler);
+window.getGroupMessageManager("browsers").addMessageListener("EMEVideo:ContentMediaKeysRequest", gEMEHandler);
 window.addEventListener("unload", function() {
-  window.messageManager.removeMessageListener("EMEVideo:ContentMediaKeysRequest", gEMEHandler);
-  window.messageManager.removeMessageListener("DecoderDoctor:Notification", gDecoderDoctorHandler);
+  window.getGroupMessageManager("browsers").removeMessageListener("EMEVideo:ContentMediaKeysRequest", gEMEHandler);
+  window.getGroupMessageManager("browsers").removeMessageListener("DecoderDoctor:Notification", gDecoderDoctorHandler);
 }, false);

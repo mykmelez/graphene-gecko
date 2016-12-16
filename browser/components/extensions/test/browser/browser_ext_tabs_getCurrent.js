@@ -27,7 +27,6 @@ add_task(function* () {
                 browser.test.assertEq(currentTab.url, url, "getCurrent in non-active background tab");
 
                 browser.test.sendMessage("tab-finished");
-                browser.tabs.remove(tabId);
               });
             }
           });
@@ -62,8 +61,10 @@ add_task(function* () {
   yield extension.awaitMessage("tab-finished");
 
   clickBrowserAction(extension);
+  yield awaitExtensionPanel(extension);
   yield extension.awaitMessage("popup-finished");
   yield closeBrowserAction(extension);
 
+  // The extension tab is automatically closed when the extension unloads.
   yield extension.unload();
 });

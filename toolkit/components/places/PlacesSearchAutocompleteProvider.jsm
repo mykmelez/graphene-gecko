@@ -38,7 +38,7 @@ const SearchAutocompleteProviderInternal = {
    **/
   defaultMatch: null,
 
-  initialize: function () {
+  initialize: function() {
     return new Promise((resolve, reject) => {
       Services.search.init(status => {
         if (!Components.isSuccessCode(status)) {
@@ -62,7 +62,7 @@ const SearchAutocompleteProviderInternal = {
 
   initialized: false,
 
-  observe: function (subject, topic, data) {
+  observe: function(subject, topic, data) {
     switch (data) {
       case "engine-added":
       case "engine-changed":
@@ -72,7 +72,7 @@ const SearchAutocompleteProviderInternal = {
     }
   },
 
-  _refresh: function () {
+  _refresh: function() {
     this.priorityMatches = [];
     this.aliasMatches = [];
     this.defaultMatch = null;
@@ -91,7 +91,7 @@ const SearchAutocompleteProviderInternal = {
     Services.search.getVisibleEngines().forEach(e => this._addEngine(e));
   },
 
-  _addEngine: function (engine) {
+  _addEngine: function(engine) {
     if (engine.alias) {
       this.aliasMatches.push({
         alias: engine.alias,
@@ -113,13 +113,14 @@ const SearchAutocompleteProviderInternal = {
     }
   },
 
-  getSuggestionController(searchToken, inPrivateContext, maxResults) {
+  getSuggestionController(searchToken, inPrivateContext, maxResults, userContextId) {
     let engine = Services.search.currentEngine;
     if (!engine) {
       return null;
     }
     return new SearchSuggestionControllerWrapper(engine, searchToken,
-                                                 inPrivateContext, maxResults);
+                                                 inPrivateContext, maxResults,
+                                                 userContextId);
   },
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
@@ -127,11 +128,12 @@ const SearchAutocompleteProviderInternal = {
 }
 
 function SearchSuggestionControllerWrapper(engine, searchToken,
-                                           inPrivateContext, maxResults) {
+                                           inPrivateContext, maxResults,
+                                           userContextId) {
   this._controller = new SearchSuggestionController();
   this._controller.maxLocalResults = 0;
   this._controller.maxRemoteResults = maxResults;
-  let promise = this._controller.fetch(searchToken, inPrivateContext, engine);
+  let promise = this._controller.fetch(searchToken, inPrivateContext, engine, userContextId);
   this._suggestions = [];
   this._success = false;
   this._promise = promise.then(results => {
@@ -190,7 +192,7 @@ this.PlacesSearchAutocompleteProvider = Object.freeze({
    * rejected when initialization finished.  The same promise is returned if
    * this function is called multiple times.
    */
-  ensureInitialized: function () {
+  ensureInitialized: function() {
     if (!gInitializationPromise) {
       gInitializationPromise = SearchAutocompleteProviderInternal.initialize();
     }
@@ -271,7 +273,7 @@ this.PlacesSearchAutocompleteProvider = Object.freeze({
    * @note This API function needs to be synchronous because it is called inside
    *       a row processing callback of Sqlite.jsm, in UnifiedComplete.js.
    */
-  parseSubmissionURL: function (url) {
+  parseSubmissionURL: function(url) {
     if (!SearchAutocompleteProviderInternal.initialized) {
       throw new Error("The component has not been initialized.");
     }
@@ -283,11 +285,11 @@ this.PlacesSearchAutocompleteProvider = Object.freeze({
     };
   },
 
-  getSuggestionController(searchToken, inPrivateContext, maxResults) {
+  getSuggestionController(searchToken, inPrivateContext, maxResults, userContextId) {
     if (!SearchAutocompleteProviderInternal.initialized) {
       throw new Error("The component has not been initialized.");
     }
     return SearchAutocompleteProviderInternal.getSuggestionController(
-             searchToken, inPrivateContext, maxResults);
+             searchToken, inPrivateContext, maxResults, userContextId);
   },
 });

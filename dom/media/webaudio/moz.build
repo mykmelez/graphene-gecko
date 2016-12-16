@@ -9,7 +9,7 @@ with Files('*'):
 
 DIRS += ['blink']
 
-TEST_DIRS += ['compiledtest']
+TEST_DIRS += ['gtest']
 
 MOCHITEST_MANIFESTS += [
     'test/blink/mochitest.ini',
@@ -57,6 +57,7 @@ EXPORTS.mozilla.dom += [
     'BiquadFilterNode.h',
     'ChannelMergerNode.h',
     'ChannelSplitterNode.h',
+    'ConstantSourceNode.h',
     'ConvolverNode.h',
     'DelayNode.h',
     'DynamicsCompressorNode.h',
@@ -93,6 +94,7 @@ UNIFIED_SOURCES += [
     'BufferDecoder.cpp',
     'ChannelMergerNode.cpp',
     'ChannelSplitterNode.cpp',
+    'ConstantSourceNode.cpp',
     'ConvolverNode.cpp',
     'DelayBuffer.cpp',
     'DelayNode.cpp',
@@ -117,7 +119,7 @@ UNIFIED_SOURCES += [
 
 if CONFIG['CPU_ARCH'] == 'arm' and CONFIG['BUILD_ARM_NEON']:
     SOURCES += ['AudioNodeEngineNEON.cpp']
-    SOURCES['AudioNodeEngineNEON.cpp'].flags += ['-mfpu=neon']
+    SOURCES['AudioNodeEngineNEON.cpp'].flags += CONFIG['NEON_FLAGS']
     LOCAL_INCLUDES += [
         '/media/openmax_dl/dl/api/'
     ]

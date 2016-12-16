@@ -28,7 +28,7 @@ interface EventListener {};
 </pre>
 
    <pre id="audio-context-idl">callback DecodeSuccessCallback = void (AudioBuffer decodedData);
-callback DecodeErrorCallback = void ();
+callback DecodeErrorCallback = void (DOMException error);
 
 [Constructor]
 interface AudioContext : EventTarget {
@@ -125,7 +125,13 @@ interface AudioNode : EventTarget {
 
 };</pre>
 
-<pre id="delay-node-idl">interface DelayNode : AudioNode {
+<pre id="delay-node-idl">dictionary DelayOptions : AudioNodeOptions {
+             double maxDelayTime = 1;
+             double delayTime = 0;
+};
+
+[Constructor(AudioContext context, optional DelayOptions options)]
+interface DelayNode : AudioNode {
 
     readonly attribute AudioParam delayTime;
 

@@ -78,7 +78,7 @@ private:
         return flags;
     }
 
-    UniquePtr<gfxTextRun> mTextRun;
+    RefPtr<gfxTextRun> mTextRun;
 };
 
 class StubPropertyProvider : public gfxTextRun::PropertyProvider {
@@ -129,12 +129,13 @@ nsFontMetrics::nsFontMetrics(const nsFont& aFont, const Params& aParams,
                        aParams.explicitLanguage,
                        aFont.sizeAdjust,
                        aFont.systemFont,
-                       mDeviceContext->IsPrinterSurface(),
+                       mDeviceContext->IsPrinterContext(),
                        aFont.synthesis & NS_FONT_SYNTHESIS_WEIGHT,
                        aFont.synthesis & NS_FONT_SYNTHESIS_STYLE,
                        aFont.languageOverride);
 
     aFont.AddFontFeaturesToStyle(&style);
+    aFont.AddFontVariationsToStyle(&style);
 
     gfxFloat devToCssSize = gfxFloat(mP2A) /
         gfxFloat(mDeviceContext->AppUnitsPerCSSPixel());
@@ -170,6 +171,12 @@ nscoord
 nsFontMetrics::XHeight()
 {
     return ROUND_TO_TWIPS(GetMetrics().xHeight);
+}
+
+nscoord
+nsFontMetrics::CapHeight()
+{
+    return ROUND_TO_TWIPS(GetMetrics().capHeight);
 }
 
 nscoord

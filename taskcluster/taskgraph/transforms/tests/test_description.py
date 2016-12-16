@@ -32,11 +32,17 @@ test_description_schema = Schema({
     'description': basestring,
 
     # test suite name, or <suite>/<flavor>
-    'suite': basestring,
+    Required('suite'): Any(
+        basestring,
+        {'by-test-platform': {basestring: basestring}},
+    ),
 
     # the name by which this test suite is addressed in try syntax; defaults to
     # the test-name
     Optional('unittest-try-name'): basestring,
+
+    # the name by which this talos test is addressed in try syntax
+    Optional('talos-try-name'): basestring,
 
     # the symbol, or group(symbol), under which this task should appear in
     # treeherder.
@@ -51,8 +57,19 @@ test_description_schema = Schema({
     # common attributes)
     Optional('attributes'): {basestring: object},
 
+    # The `run_on_projects` attribute, defaulting to "all".  This dictates the
+    # projects on which this task should be included in the target task set.
+    # See the attributes documentation for details.
+    Optional('run-on-projects', default=['all']): Any(
+        [basestring],
+        {'by-test-platform': {basestring: [basestring]}},
+    ),
+
     # the sheriffing tier for this task (default: set based on test platform)
-    Optional('tier'): int,
+    Optional('tier'): Any(
+        int,
+        {'by-test-platform': {basestring: int}},
+    ),
 
     # number of chunks to create for this task.  This can be keyed by test
     # platform by passing a dictionary in the `by-test-platform` key.  If the
@@ -77,8 +94,8 @@ test_description_schema = Schema({
 
     # The EC2 instance size to run these tests on.
     Required('instance-size', default='default'): Any(
-        Any('default', 'large', 'xlarge'),
-        {'by-test-platform': {basestring: Any('default', 'large', 'xlarge')}},
+        Any('default', 'large', 'xlarge', 'legacy'),
+        {'by-test-platform': {basestring: Any('default', 'large', 'xlarge', 'legacy')}},
     ),
 
     # Whether the task requires loopback audio or video (whatever that may mean
@@ -86,12 +103,18 @@ test_description_schema = Schema({
     Required('loopback-audio', default=False): bool,
     Required('loopback-video', default=False): bool,
 
+    # Whether the test can run using a software GL implementation on Linux
+    # using the GL compositor. May not be used with "legacy" sized instances
+    # due to poor LLVMPipe performance (bug 1296086).
+    Optional('allow-software-gl-layers', default=True): bool,
+
     # The worker implementation for this test, as dictated by policy and by the
     # test platform.
     Optional('worker-implementation'): Any(
         'docker-worker',
-        # coming soon:
+        'macosx-engine',
         'generic-worker',
+        # coming soon:
         'docker-engine',
         'buildbot-bridge',
     ),
@@ -114,20 +137,32 @@ test_description_schema = Schema({
         {'by-test-platform': {basestring: int}},
     ),
 
+    # the exit status code that indicates the task should be retried
+    Optional('retry-exit-status'): int,
+
+    # Whether to perform a gecko checkout.
+    Required('checkout', default=False): bool,
+
     # What to run
     Required('mozharness'): Any({
         # the mozharness script used to run this task
         Required('script'): basestring,
 
         # the config files required for the task
-        Required('config'): [basestring],
+        Required('config'): Any(
+            [basestring],
+            {'by-test-platform': {basestring: [basestring]}},
+        ),
 
         # any additional actions to pass to the mozharness command
         Optional('actions'): [basestring],
 
         # additional command-line options for mozharness, beyond those
         # automatically added
-        Required('extra-options', default=[]): [basestring],
+        Required('extra-options', default=[]): Any(
+            [basestring],
+            {'by-test-platform': {basestring: [basestring]}},
+        ),
 
         # the artifact name (including path) to test on the build task; this is
         # generally set in a per-kind transformation
@@ -140,9 +175,12 @@ test_description_schema = Schema({
         # buildbot config file, so tell it not to do so in TaskCluster
         Required('no-read-buildbot-config', default=False): bool,
 
+        # Add --blob-upload-branch=<project> mozharness parameter
+        Optional('include-blob-upload-branch'): bool,
+
         # The setting for --download-symbols (if omitted, the option will not
         # be passed to mozharness)
-        Optional('download-symbols'): Any(True, False, 'ondemand'),
+        Optional('download-symbols'): Any(True, 'ondemand'),
 
         # If set, then MOZ_NODE_PATH=/usr/local/bin/node is included in the
         # environment.  This is more than just a helpful path setting -- it
@@ -171,6 +209,14 @@ test_description_schema = Schema({
     # The current chunk; this is filled in by `all_kinds.py`
     Optional('this-chunk'): int,
 
+    # os user groups for test task workers; required scopes, will be
+    # added automatically
+    Optional('os-groups', default=[]): Any(
+        [basestring],
+        # todo: create a dedicated elevated worker group and name here
+        {'by-test-platform': {basestring: [basestring]}},
+    ),
+
     # -- values supplied by the task-generation infrastructure
 
     # the platform of the build this task is testing
@@ -184,6 +230,9 @@ test_description_schema = Schema({
 
     # the name of the test (the key in tests.yml)
     'test-name': basestring,
+
+    # the product name, defaults to firefox
+    Optional('product'): basestring,
 
 }, required=True)
 

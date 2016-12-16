@@ -6,10 +6,10 @@
 #ifndef mozilla_gfx_config_gfxFeature_h
 #define mozilla_gfx_config_gfxFeature_h
 
+#include <functional>
 #include <stdint.h>
 #include "gfxTelemetry.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/Function.h"
 #include "nsString.h"
 
 namespace mozilla {
@@ -22,7 +22,8 @@ namespace gfx {
   _(D3D9_COMPOSITING,             Feature,      "Direct3D9 Compositing")          \
   _(OPENGL_COMPOSITING,           Feature,      "OpenGL Compositing")             \
   _(DIRECT2D,                     Feature,      "Direct2D")                       \
-  _(D3D11_HW_ANGLE,               Feature,      "Direct3D11 hardware ANGLE")               \
+  _(D3D11_HW_ANGLE,               Feature,      "Direct3D11 hardware ANGLE")      \
+  _(DIRECT_DRAW,                  Feature,      "DirectDraw")                     \
   _(GPU_PROCESS,                  Feature,      "GPU Process")                    \
   /* Add new entries above this comment */
 
@@ -63,19 +64,21 @@ class FeatureState
 
   // aType is "base", "user", "env", or "runtime".
   // aMessage may be null.
-  typedef mozilla::function<void(const char* aType,
-                                 FeatureStatus aStatus,
-                                 const char* aMessage)> StatusIterCallback;
+  typedef std::function<void(const char* aType,
+                             FeatureStatus aStatus,
+                             const char* aMessage)> StatusIterCallback;
   void ForEachStatusChange(const StatusIterCallback& aCallback) const;
 
-  const nsACString& GetFailureId() const;
+  const char* GetFailureMessage() const;
+  const nsCString& GetFailureId() const;
+
+  bool DisabledByDefault() const;
 
  private:
   void SetUser(FeatureStatus aStatus, const char* aMessage);
   void SetEnvironment(FeatureStatus aStatus, const char* aMessage);
   void SetRuntime(FeatureStatus aStatus, const char* aMessage);
   bool IsForcedOnByUser() const;
-  bool DisabledByDefault() const;
   const char* GetRuntimeMessage() const;
   bool IsInitialized() const {
     return mDefault.IsInitialized();
@@ -84,6 +87,9 @@ class FeatureState
   void AssertInitialized() const {
     MOZ_ASSERT(IsInitialized());
   }
+
+  // Clear all state.
+  void Reset();
 
  private:
   void SetFailureId(const nsACString& aFailureId);

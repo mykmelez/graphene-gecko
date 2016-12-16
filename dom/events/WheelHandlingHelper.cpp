@@ -257,6 +257,7 @@ WheelTransaction::OnEvent(WidgetEvent* aEvent)
     case eMouseUp:
     case eMouseDown:
     case eMouseDoubleClick:
+    case eMouseAuxClick:
     case eMouseClick:
     case eContextMenu:
     case eDrop:
@@ -331,7 +332,8 @@ WheelTransaction::SetTimeout()
   DebugOnly<nsresult> rv =
     sTimer->InitWithFuncCallback(OnTimeout, nullptr, GetTimeoutTime(),
                                  nsITimer::TYPE_ONE_SHOT);
-  NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "nsITimer::InitWithFuncCallback failed");
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "nsITimer::InitWithFuncCallback failed");
 }
 
 /* static */ nsIntPoint
@@ -410,12 +412,6 @@ WheelTransaction::OverrideSystemScrollSpeed(WidgetWheelEvent* aEvent)
   // If the event doesn't scroll to both X and Y, we don't need to do anything
   // here.
   if (!aEvent->mDeltaX && !aEvent->mDeltaY) {
-    return DeltaValues(aEvent);
-  }
-
-  // We shouldn't override the scrolling speed on non root scroll frame.
-  if (sTargetFrame !=
-        sTargetFrame->PresContext()->PresShell()->GetRootScrollFrame()) {
     return DeltaValues(aEvent);
   }
 

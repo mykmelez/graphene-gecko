@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 
+from buildconfig import substs
 from StringIO import StringIO
 from mozlog import structured
 from mozbuild.base import MozbuildObject
@@ -27,7 +28,6 @@ mozinfo.find_and_update_from_json()
 objdir = build_obj.topobjdir.encode("utf-8")
 
 if mozinfo.isMac:
-  from buildconfig import substs
   xpcshellBin = os.path.join(objdir, "dist", substs['MOZ_MACBUNDLE_NAME'], "Contents", "MacOS", "xpcshell")
 else:
   xpcshellBin = os.path.join(objdir, "dist", "bin", "xpcshell")
@@ -556,8 +556,6 @@ tail =
         self.assertTrue(any(re.search(line_pat, line) for line in log_lines),
                         "No line resembling a stack frame was found in\n%s" % pprint.pformat(log_lines))
 
-    @unittest.skipIf(build_obj.defines.get('MOZ_B2G'),
-                     'selftests with child processes fail on b2g desktop builds')
     def testChildPass(self):
         """
         Check that a simple test running in a child process passes.
@@ -577,8 +575,6 @@ tail =
         self.assertNotInLog(TEST_FAIL_STRING)
 
 
-    @unittest.skipIf(build_obj.defines.get('MOZ_B2G'),
-                     'selftests with child processes fail on b2g desktop builds')
     def testChildFail(self):
         """
         Check that a simple failing test running in a child process fails.
@@ -597,8 +593,6 @@ tail =
         self.assertInLog("CHILD-TEST-COMPLETED")
         self.assertNotInLog(TEST_PASS_STRING)
 
-    @unittest.skipIf(build_obj.defines.get('MOZ_B2G'),
-                     'selftests with child processes fail on b2g desktop builds')
     def testChildHang(self):
         """
         Check that incomplete output from a child process results in a
@@ -618,8 +612,6 @@ tail =
         self.assertNotInLog("CHILD-TEST-COMPLETED")
         self.assertNotInLog(TEST_PASS_STRING)
 
-    @unittest.skipIf(build_obj.defines.get('MOZ_B2G'),
-                     'selftests with child processes fail on b2g desktop builds')
     def testChild(self):
         """
         Checks that calling do_load_child_test_harness without run_test_in_child
@@ -858,7 +850,9 @@ add_test({
 
         self.assertTestResult(False)
         self.assertInLog(TEST_FAIL_STRING)
-        self.assertInLog("test_simple_uncaught_rejection.js:3:3")
+        if not substs.get('RELEASE_OR_BETA'):
+          # async stacks are currently not enabled in release builds.
+          self.assertInLog("test_simple_uncaught_rejection.js:3:3")
         self.assertInLog("Test rejection.")
         self.assertEquals(1, self.x.testCount)
         self.assertEquals(0, self.x.passCount)
@@ -1168,7 +1162,7 @@ add_test({
 
         self.assertTestResult(False)
         self.assertInLog(TEST_FAIL_STRING)
-        self.assertInLog("TypeError: generator function run_test returns a value at")
+        self.assertInLog("TypeError: generator function can't return a value at")
         self.assertInLog("test_error.js:4")
         self.assertNotInLog(TEST_PASS_STRING)
 

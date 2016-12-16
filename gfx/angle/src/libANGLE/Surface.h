@@ -17,6 +17,7 @@
 #include "libANGLE/Error.h"
 #include "libANGLE/FramebufferAttachment.h"
 #include "libANGLE/RefCountObject.h"
+#include "libANGLE/formatutils.h"
 #include "libANGLE/renderer/SurfaceImpl.h"
 
 namespace gl
@@ -54,6 +55,7 @@ class Surface : public gl::FramebufferAttachmentObject
 
     Error initialize();
     Error swap();
+    Error swapWithDamage(EGLint *rects, EGLint n_rects);
     Error postSubBuffer(EGLint x, EGLint y, EGLint width, EGLint height);
     Error querySurfacePointerANGLE(EGLint attribute, void **value);
     Error bindTexImage(gl::Texture *texture, EGLint buffer);
@@ -83,7 +85,8 @@ class Surface : public gl::FramebufferAttachmentObject
 
     // FramebufferAttachmentObject implementation
     gl::Extents getAttachmentSize(const gl::FramebufferAttachment::Target &target) const override;
-    GLenum getAttachmentInternalFormat(const gl::FramebufferAttachment::Target &target) const override;
+    const gl::Format &getAttachmentFormat(
+        const gl::FramebufferAttachment::Target &target) const override;
     GLsizei getAttachmentSamples(const gl::FramebufferAttachment::Target &target) const override;
 
     void onAttach() override {}
@@ -136,6 +139,9 @@ class Surface : public gl::FramebufferAttachmentObject
     EGLint mOrientation;
 
     BindingPointer<gl::Texture> mTexture;
+
+    gl::Format mBackFormat;
+    gl::Format mDSFormat;
 };
 
 class WindowSurface final : public Surface
@@ -156,7 +162,8 @@ class PbufferSurface final : public Surface
                    const AttributeMap &attribs);
     PbufferSurface(rx::EGLImplFactory *implFactory,
                    const Config *config,
-                   EGLClientBuffer shareHandle,
+                   EGLenum buftype,
+                   EGLClientBuffer clientBuffer,
                    const AttributeMap &attribs);
     ~PbufferSurface() override;
 };

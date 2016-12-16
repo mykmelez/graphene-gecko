@@ -43,7 +43,7 @@ nsUnknownDecoder::ConvertedStreamListener::~ConvertedStreamListener()
 {
 }
 
-NS_IMETHODIMP
+nsresult
 nsUnknownDecoder::ConvertedStreamListener::
                   AppendDataToString(nsIInputStream* inputStream,
                                      void* closure,
@@ -299,7 +299,7 @@ nsUnknownDecoder::OnStopRequest(nsIRequest* request, nsISupports *aCtxt,
   }
 
   rv = mNextListener->OnStopRequest(request, aCtxt, aStatus);
-  mNextListener = 0;
+  mNextListener = nullptr;
 
   return rv;
 }

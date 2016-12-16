@@ -20,9 +20,6 @@ config = {
     "buildbot_json_path": "buildprops.json",
     'exes': {
         'python2.7': sys.executable,
-        'hgtool.py': os.path.join(
-            os.getcwd(), 'build', 'tools', 'buildfarm', 'utils', 'hgtool.py'
-        ),
         "buildbot": "/tools/buildbot/bin/buildbot",
     },
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
@@ -30,7 +27,7 @@ config = {
     'enable_signing': True,
     'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
-    'objdir': 'obj-firefox/x86_64',
+    'objdir': 'obj-firefox',
     'tooltool_script': ["/builds/tooltool.py"],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': False,
@@ -76,7 +73,7 @@ config = {
         'MINIDUMP_STACKWALK': '%(abs_tools_dir)s/breakpad/osx64/minidump_stackwalk',
         'MINIDUMP_SAVE_PATH': '%(base_work_dir)s/minidumps',
     },
-    'src_mozconfig': 'browser/config/mozconfigs/macosx-universal/nightly',
+    'src_mozconfig': 'browser/config/mozconfigs/macosx64/nightly',
     'tooltool_manifest_src': 'browser/config/tooltool-manifests/macosx64/releng.manifest',
     #########################################################################
 }

@@ -7,10 +7,12 @@
 #include "ServiceWorkerPrivate.h"
 
 #include "ServiceWorkerManager.h"
+#include "ServiceWorkerWindowClient.h"
 #include "nsContentUtils.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIHttpHeaderVisitor.h"
 #include "nsINetworkInterceptController.h"
+#include "nsIPushErrorReporter.h"
 #include "nsISupportsImpl.h"
 #include "nsIUploadChannel2.h"
 #include "nsNetUtil.h"
@@ -26,13 +28,9 @@
 #include "mozilla/dom/InternalHeaders.h"
 #include "mozilla/dom/NotificationEvent.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
-#include "mozilla/dom/RequestBinding.h"
-#include "mozilla/unused.h"
-
-#ifndef MOZ_SIMPLEPUSH
-#include "nsIPushErrorReporter.h"
 #include "mozilla/dom/PushEventBinding.h"
-#endif
+#include "mozilla/dom/RequestBinding.h"
+#include "mozilla/Unused.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -45,6 +43,7 @@ NS_IMPL_CYCLE_COLLECTION(ServiceWorkerPrivate, mSupportsArray)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerPrivate)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
 NS_INTERFACE_MAP_END
 
 // Tracks the "dom.disable_open_click_delay" preference.  Modified on main
@@ -104,27 +103,6 @@ ServiceWorkerPrivate::~ServiceWorkerPrivate()
   mIdleWorkerTimer->Cancel();
 }
 
-nsresult
-ServiceWorkerPrivate::SendMessageEvent(JSContext* aCx,
-                                       JS::Handle<JS::Value> aMessage,
-                                       const Optional<Sequence<JS::Value>>& aTransferable,
-                                       UniquePtr<ServiceWorkerClientInfo>&& aClientInfo)
-{
-  ErrorResult rv(SpawnWorkerIfNeeded(MessageEvent, nullptr));
-  if (NS_WARN_IF(rv.Failed())) {
-    return rv.StealNSResult();
-  }
-
-  MOZ_ASSERT(mKeepAliveToken);
-  nsMainThreadPtrHandle<nsISupports> token(
-    new nsMainThreadPtrHolder<nsISupports>(mKeepAliveToken));
-
-  mWorkerPrivate->PostMessageToServiceWorker(aCx, aMessage, aTransferable,
-                                             Move(aClientInfo), token,
-                                             rv);
-  return rv.StealNSResult();
-}
-
 namespace {
 
 class CheckScriptEvaluationWithCallback final : public WorkerRunnable
@@ -178,7 +156,7 @@ private:
     mDone = true;
 #endif
     mCallback->SetResult(aResult);
-    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(mCallback));
+    MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(mCallback));
   }
 };
 
@@ -190,9 +168,9 @@ ServiceWorkerPrivate::CheckScriptEvaluation(LifeCycleEventCallback* aCallback)
   nsresult rv = SpawnWorkerIfNeeded(LifeCycleEvent, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  MOZ_ASSERT(mKeepAliveToken);
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
   RefPtr<WorkerRunnable> r = new CheckScriptEvaluationWithCallback(mWorkerPrivate,
-                                                                   mKeepAliveToken,
+                                                                   token,
                                                                    aCallback);
   if (NS_WARN_IF(!r->Dispatch())) {
     return NS_ERROR_FAILURE;
@@ -203,154 +181,186 @@ ServiceWorkerPrivate::CheckScriptEvaluation(LifeCycleEventCallback* aCallback)
 
 namespace {
 
-// Holds the worker alive until the waitUntil promise is resolved or
-// rejected.
-class KeepAliveHandler final
+enum ExtendableEventResult {
+    Rejected = 0,
+    Resolved
+};
+
+class ExtendableEventCallback {
+public:
+  virtual void
+  FinishedWithResult(ExtendableEventResult aResult) = 0;
+
+  NS_IMETHOD_(MozExternalRefCountType)
+  AddRef() = 0;
+
+  NS_IMETHOD_(MozExternalRefCountType)
+  Release() = 0;
+};
+
+class KeepAliveHandler final : public WorkerHolder
+                             , public ExtendableEvent::ExtensionsHandler
+                             , public PromiseNativeHandler
 {
-  // Use an internal class to listen for the promise resolve/reject
-  // callbacks.  This class also registers a feature so that it can
-  // preemptively cleanup if the service worker is timed out and
-  // terminated.
-  class InternalHandler final : public PromiseNativeHandler
-                              , public WorkerHolder
+  // This class manages lifetime extensions added by calling WaitUntil()
+  // or RespondWith(). We allow new extensions as long as we still hold
+  // |mKeepAliveToken|. Once the last promise was settled, we queue a microtask
+  // which releases the token and prevents further extensions. By doing this,
+  // we give other pending microtasks a chance to continue adding extensions.
+
+  nsMainThreadPtrHandle<KeepAliveToken> mKeepAliveToken;
+  WorkerPrivate* MOZ_NON_OWNING_REF mWorkerPrivate;
+  bool mWorkerHolderAdded;
+
+  // We start holding a self reference when the first extension promise is
+  // added. As far as I can tell, the only case where this is useful is when
+  // we're waiting indefinitely on a promise that's no longer reachable
+  // and will never be settled.
+  // The cycle is broken when the last promise was settled or when the
+  // worker is shutting down.
+  RefPtr<KeepAliveHandler> mSelfRef;
+
+  // Called when the last promise was settled.
+  RefPtr<ExtendableEventCallback> mCallback;
+
+  uint32_t mPendingPromisesCount;
+
+  // We don't actually care what values the promises resolve to, only whether
+  // any of them were rejected.
+  bool mRejected;
+
+public:
+  NS_DECL_ISUPPORTS
+
+  explicit KeepAliveHandler(const nsMainThreadPtrHandle<KeepAliveToken>& aKeepAliveToken,
+                            ExtendableEventCallback* aCallback)
+    : mKeepAliveToken(aKeepAliveToken)
+    , mWorkerPrivate(GetCurrentThreadWorkerPrivate())
+    , mWorkerHolderAdded(false)
+    , mCallback(aCallback)
+    , mPendingPromisesCount(0)
+    , mRejected(false)
   {
-    nsMainThreadPtrHandle<KeepAliveToken> mKeepAliveToken;
+    MOZ_ASSERT(mKeepAliveToken);
+    MOZ_ASSERT(mWorkerPrivate);
+  }
 
-    // Worker thread only
-    WorkerPrivate* mWorkerPrivate;
-    RefPtr<Promise> mPromise;
-    bool mWorkerHolderAdded;
+  bool
+  UseWorkerHolder()
+  {
+    MOZ_ASSERT(mWorkerPrivate);
+    mWorkerPrivate->AssertIsOnWorkerThread();
+    MOZ_ASSERT(!mWorkerHolderAdded);
+    mWorkerHolderAdded = HoldWorker(mWorkerPrivate, Terminating);
+    return mWorkerHolderAdded;
+  }
 
-    ~InternalHandler()
-    {
-      MaybeCleanup();
+  bool
+  WaitOnPromise(Promise& aPromise) override
+  {
+    if (!mKeepAliveToken) {
+      MOZ_ASSERT(!mSelfRef, "We shouldn't be holding a self reference!");
+      return false;
+    }
+    if (!mSelfRef) {
+      MOZ_ASSERT(!mPendingPromisesCount);
+      mSelfRef = this;
     }
 
-    bool
-    UseWorkerHolder()
-    {
-      MOZ_ASSERT(mWorkerPrivate);
-      mWorkerPrivate->AssertIsOnWorkerThread();
-      MOZ_ASSERT(!mWorkerHolderAdded);
-      mWorkerHolderAdded = HoldWorker(mWorkerPrivate);
-      return mWorkerHolderAdded;
-    }
+    ++mPendingPromisesCount;
+    aPromise.AppendNativeHandler(this);
 
-    void
-    MaybeCleanup()
-    {
-      MOZ_ASSERT(mWorkerPrivate);
-      mWorkerPrivate->AssertIsOnWorkerThread();
-      if (!mPromise) {
-        return;
-      }
-      if (mWorkerHolderAdded) {
-        ReleaseWorker();
-      }
-      mPromise = nullptr;
-      mKeepAliveToken = nullptr;
-    }
+    return true;
+  }
 
-    void
-    ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
-    {
-      MOZ_ASSERT(mWorkerPrivate);
-      mWorkerPrivate->AssertIsOnWorkerThread();
-      MaybeCleanup();
-    }
+  void
+  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  {
+    RemovePromise(Resolved);
+  }
 
-    void
-    RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
-    {
-      MOZ_ASSERT(mWorkerPrivate);
-      mWorkerPrivate->AssertIsOnWorkerThread();
-      MaybeCleanup();
-    }
+  void
+  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  {
+    RemovePromise(Rejected);
+  }
 
-    bool
-    Notify(Status aStatus) override
-    {
-      MOZ_ASSERT(mWorkerPrivate);
-      mWorkerPrivate->AssertIsOnWorkerThread();
-      if (aStatus < Terminating) {
-        return true;
-      }
-      MaybeCleanup();
+  bool
+  Notify(Status aStatus) override
+  {
+    MOZ_ASSERT(mWorkerPrivate);
+    mWorkerPrivate->AssertIsOnWorkerThread();
+    if (aStatus < Terminating) {
       return true;
     }
 
-    InternalHandler(const nsMainThreadPtrHandle<KeepAliveToken>& aKeepAliveToken,
-                    WorkerPrivate* aWorkerPrivate,
-                    Promise* aPromise)
-      : mKeepAliveToken(aKeepAliveToken)
-      , mWorkerPrivate(aWorkerPrivate)
-      , mPromise(aPromise)
-      , mWorkerHolderAdded(false)
-    {
-      MOZ_ASSERT(mKeepAliveToken);
-      MOZ_ASSERT(mWorkerPrivate);
-      MOZ_ASSERT(mPromise);
-    }
+    MaybeCleanup();
+    return true;
+  }
 
-  public:
-    static already_AddRefed<InternalHandler>
-    Create(const nsMainThreadPtrHandle<KeepAliveToken>& aKeepAliveToken,
-           WorkerPrivate* aWorkerPrivate,
-           Promise* aPromise)
-    {
-      RefPtr<InternalHandler> ref = new InternalHandler(aKeepAliveToken,
-                                                        aWorkerPrivate,
-                                                        aPromise);
-
-      if (NS_WARN_IF(!ref->UseWorkerHolder())) {
-        return nullptr;
-      }
-
-      return ref.forget();
-    }
-
-    NS_DECL_ISUPPORTS
-  };
-
-  // This is really just a wrapper class to keep the InternalHandler
-  // private.  We don't want any code to accidentally call
-  // Promise::AppendNativeHandler() without also referencing the promise.
-  // Therefore we force all code through the static CreateAndAttachToPromise()
-  // and use the private InternalHandler object.
-  KeepAliveHandler() = delete;
-  ~KeepAliveHandler() = delete;
-
-public:
-  // Create a private handler object and attach it to the given Promise.
-  // This will also create a strong ref to the Promise in a ref cycle.  The
-  // ref cycle is broken when the Promise is fulfilled or the worker thread
-  // is Terminated.
-  static void
-  CreateAndAttachToPromise(const nsMainThreadPtrHandle<KeepAliveToken>& aKeepAliveToken,
-                           Promise* aPromise)
+  void
+  MaybeDone()
   {
-    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
-    MOZ_ASSERT(workerPrivate);
-    workerPrivate->AssertIsOnWorkerThread();
-    MOZ_ASSERT(aKeepAliveToken);
-    MOZ_ASSERT(aPromise);
+    MOZ_ASSERT(mWorkerPrivate);
+    mWorkerPrivate->AssertIsOnWorkerThread();
 
-    // This creates a strong ref to the promise.
-    RefPtr<InternalHandler> handler = InternalHandler::Create(aKeepAliveToken,
-                                                              workerPrivate,
-                                                              aPromise);
-    if (NS_WARN_IF(!handler)) {
+    if (mPendingPromisesCount) {
+      return;
+    }
+    if (mCallback) {
+      mCallback->FinishedWithResult(mRejected ? Rejected : Resolved);
+    }
+
+    MaybeCleanup();
+  }
+
+private:
+  ~KeepAliveHandler()
+  {
+    MaybeCleanup();
+  }
+
+  void
+  MaybeCleanup()
+  {
+    MOZ_ASSERT(mWorkerPrivate);
+    mWorkerPrivate->AssertIsOnWorkerThread();
+    if (!mKeepAliveToken) {
+      return;
+    }
+    if (mWorkerHolderAdded) {
+      ReleaseWorker();
+    }
+
+    mKeepAliveToken = nullptr;
+    mSelfRef = nullptr;
+  }
+
+  void
+  RemovePromise(ExtendableEventResult aResult)
+  {
+    MOZ_ASSERT(mWorkerPrivate);
+    mWorkerPrivate->AssertIsOnWorkerThread();
+    MOZ_DIAGNOSTIC_ASSERT(mPendingPromisesCount > 0);
+    MOZ_ASSERT(mSelfRef);
+    MOZ_ASSERT(mKeepAliveToken);
+
+    mRejected |= (aResult == Rejected);
+
+    --mPendingPromisesCount;
+    if (mPendingPromisesCount) {
       return;
     }
 
-    // This then creates a strong ref cycle between the promise and the
-    // handler.  The cycle is broken when the Promise is fulfilled or
-    // the worker thread is Terminated.
-    aPromise->AppendNativeHandler(handler);
+    CycleCollectedJSContext* cx = CycleCollectedJSContext::Get();
+    MOZ_ASSERT(cx);
+
+    RefPtr<nsIRunnable> r = NewRunnableMethod(this, &KeepAliveHandler::MaybeDone);
+    cx->DispatchToMicroTask(r.forget());
   }
 };
 
-NS_IMPL_ISUPPORTS0(KeepAliveHandler::InternalHandler)
+NS_IMPL_ISUPPORTS0(KeepAliveHandler)
 
 class RegistrationUpdateRunnable : public Runnable
 {
@@ -395,48 +405,157 @@ public:
       new nsMainThreadPtrHolder<KeepAliveToken>(aKeepAliveToken);
   }
 
-  bool
+  nsresult
   DispatchExtendableEventOnWorkerScope(JSContext* aCx,
                                        WorkerGlobalScope* aWorkerScope,
                                        ExtendableEvent* aEvent,
-                                       PromiseNativeHandler* aPromiseHandler)
+                                       ExtendableEventCallback* aCallback)
   {
     MOZ_ASSERT(aWorkerScope);
     MOZ_ASSERT(aEvent);
     nsCOMPtr<nsIGlobalObject> sgo = aWorkerScope;
     WidgetEvent* internalEvent = aEvent->WidgetEventPtr();
 
+    RefPtr<KeepAliveHandler> keepAliveHandler =
+      new KeepAliveHandler(mKeepAliveToken, aCallback);
+    if (NS_WARN_IF(!keepAliveHandler->UseWorkerHolder())) {
+      return NS_ERROR_FAILURE;
+    }
+
+    // This must always be set *before* dispatching the event, otherwise
+    // waitUntil calls will fail.
+    aEvent->SetKeepAliveHandler(keepAliveHandler);
+
     ErrorResult result;
     result = aWorkerScope->DispatchDOMEvent(nullptr, aEvent, nullptr, nullptr);
-    if (NS_WARN_IF(result.Failed()) || internalEvent->mFlags.mExceptionWasRaised) {
+    if (NS_WARN_IF(result.Failed())) {
       result.SuppressException();
+      return NS_ERROR_FAILURE;
+    }
+
+    // [[ If e’s extend lifetime promises is empty, unset e’s extensions allowed
+    //    flag and abort these steps. ]]
+    keepAliveHandler->MaybeDone();
+
+    // We don't block the event when getting an exception but still report the
+    // error message.
+    // Report exception message. Note: This will not stop the event.
+    if (internalEvent->mFlags.mExceptionWasRaised) {
+      result.SuppressException();
+      return NS_ERROR_XPC_JS_THREW_EXCEPTION;
+    }
+
+    return NS_OK;
+  }
+};
+
+class SendMesssageEventRunnable final : public ExtendableEventWorkerRunnable
+                                      , public StructuredCloneHolder
+{
+  UniquePtr<ServiceWorkerClientInfo> mEventSource;
+
+public:
+  SendMesssageEventRunnable(WorkerPrivate*  aWorkerPrivate,
+                            KeepAliveToken* aKeepAliveToken,
+                            UniquePtr<ServiceWorkerClientInfo>&& aEventSource)
+    : ExtendableEventWorkerRunnable(aWorkerPrivate, aKeepAliveToken)
+    , StructuredCloneHolder(CloningSupported, TransferringSupported,
+                            StructuredCloneScope::SameProcessDifferentThread)
+    , mEventSource(Move(aEventSource))
+  {
+    AssertIsOnMainThread();
+    MOZ_ASSERT(mEventSource);
+  }
+
+  bool
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
+  {
+    JS::Rooted<JS::Value> messageData(aCx);
+    nsCOMPtr<nsIGlobalObject> sgo = aWorkerPrivate->GlobalScope();
+    ErrorResult rv;
+    Read(sgo, aCx, &messageData, rv);
+    if (NS_WARN_IF(rv.Failed())) {
+      return true;
+    }
+
+    Sequence<OwningNonNull<MessagePort>> ports;
+    if (!TakeTransferredPortsAsSequence(ports)) {
+      return true;
+    }
+
+    RefPtr<ServiceWorkerClient> client = new ServiceWorkerWindowClient(sgo,
+                                                                       *mEventSource);
+    RootedDictionary<ExtendableMessageEventInit> init(aCx);
+
+    init.mBubbles = false;
+    init.mCancelable = false;
+
+    init.mData = messageData;
+    init.mPorts = ports;
+    init.mSource.SetValue().SetAsClient() = client;
+
+    RefPtr<EventTarget> target = aWorkerPrivate->GlobalScope();
+    RefPtr<ExtendableMessageEvent> extendableEvent =
+      ExtendableMessageEvent::Constructor(target, NS_LITERAL_STRING("message"),
+                                          init, rv);
+    if (NS_WARN_IF(rv.Failed())) {
+      rv.SuppressException();
       return false;
     }
 
-    RefPtr<Promise> waitUntilPromise = aEvent->GetPromise();
-    if (!waitUntilPromise) {
-      waitUntilPromise =
-        Promise::Resolve(sgo, aCx, JS::UndefinedHandleValue, result);
-      MOZ_RELEASE_ASSERT(!result.Failed());
-    }
+    extendableEvent->SetTrusted(true);
 
-    MOZ_ASSERT(waitUntilPromise);
-
-    // Make sure to append the caller's promise handler before attaching
-    // our keep alive handler.  This can avoid terminating the worker
-    // before a success result is delivered to the caller in cases where
-    // the idle timeout has been set to zero.  This low timeout value is
-    // sometimes set in tests.
-    if (aPromiseHandler) {
-      waitUntilPromise->AppendNativeHandler(aPromiseHandler);
-    }
-
-    KeepAliveHandler::CreateAndAttachToPromise(mKeepAliveToken,
-                                               waitUntilPromise);
-
-    return true;
+    return NS_SUCCEEDED(DispatchExtendableEventOnWorkerScope(aCx,
+                                                             aWorkerPrivate->GlobalScope(),
+                                                             extendableEvent,
+                                                             nullptr));
   }
 };
+
+} // anonymous namespace
+
+nsresult
+ServiceWorkerPrivate::SendMessageEvent(JSContext* aCx,
+                                       JS::Handle<JS::Value> aMessage,
+                                       const Optional<Sequence<JS::Value>>& aTransferable,
+                                       UniquePtr<ServiceWorkerClientInfo>&& aClientInfo)
+{
+  AssertIsOnMainThread();
+
+  ErrorResult rv(SpawnWorkerIfNeeded(MessageEvent, nullptr));
+  if (NS_WARN_IF(rv.Failed())) {
+    return rv.StealNSResult();
+  }
+
+  JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedHandleValue);
+  if (aTransferable.WasPassed()) {
+    const Sequence<JS::Value>& value = aTransferable.Value();
+    JS::HandleValueArray elements =
+      JS::HandleValueArray::fromMarkedLocation(value.Length(), value.Elements());
+
+    JSObject* array = JS_NewArrayObject(aCx, elements);
+    if (!array) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+    transferable.setObject(*array);
+  }
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
+  RefPtr<SendMesssageEventRunnable> runnable =
+    new SendMesssageEventRunnable(mWorkerPrivate, token, Move(aClientInfo));
+
+  runnable->Write(aCx, aMessage, transferable, JS::CloneDataPolicy(), rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    return rv.StealNSResult();
+  }
+
+  if (!runnable->Dispatch()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+namespace {
 
 // Handle functional event
 // 9.9.7 If the time difference in seconds calculated by the current time minus
@@ -461,7 +580,7 @@ public:
   {
     nsCOMPtr<nsIRunnable> runnable =
       new RegistrationUpdateRunnable(mRegistration, true /* time check */);
-    NS_DispatchToMainThread(runnable.forget());
+    aWorkerPrivate->DispatchToMainThread(runnable.forget());
 
     ExtendableEventWorkerRunnable::PostRun(aCx, aWorkerPrivate, aRunResult);
   }
@@ -501,7 +620,7 @@ public:
   Cancel() override
   {
     mCallback->SetResult(false);
-    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(mCallback));
+    MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(mCallback));
 
     return WorkerRunnable::Cancel();
   }
@@ -517,7 +636,7 @@ private:
  * termination during the execution of life cycle events. It is responsible
  * with advancing the job queue for install/activate tasks.
  */
-class LifeCycleEventWatcher final : public PromiseNativeHandler,
+class LifeCycleEventWatcher final : public ExtendableEventCallback,
                                     public WorkerHolder
 {
   WorkerPrivate* mWorkerPrivate;
@@ -539,7 +658,7 @@ class LifeCycleEventWatcher final : public PromiseNativeHandler,
   }
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_INLINE_DECL_REFCOUNTING(LifeCycleEventWatcher, override)
 
   LifeCycleEventWatcher(WorkerPrivate* aWorkerPrivate,
                         LifeCycleEventCallback* aCallback)
@@ -564,7 +683,7 @@ public:
     //    case the registration/update promise will be rejected
     // 2. A new service worker is registered which will terminate the current
     //    installing worker.
-    if (NS_WARN_IF(!HoldWorker(mWorkerPrivate))) {
+    if (NS_WARN_IF(!HoldWorker(mWorkerPrivate, Terminating))) {
       NS_WARNING("LifeCycleEventWatcher failed to add feature.");
       ReportResult(false);
       return false;
@@ -597,30 +716,20 @@ public:
     mDone = true;
 
     mCallback->SetResult(aResult);
-    nsresult rv = NS_DispatchToMainThread(mCallback);
+    nsresult rv = mWorkerPrivate->DispatchToMainThread(mCallback);
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      NS_RUNTIMEABORT("Failed to dispatch life cycle event handler.");
+      MOZ_CRASH("Failed to dispatch life cycle event handler.");
     }
 
     ReleaseWorker();
   }
 
   void
-  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  FinishedWithResult(ExtendableEventResult aResult) override
   {
     MOZ_ASSERT(GetCurrentThreadWorkerPrivate() == mWorkerPrivate);
     mWorkerPrivate->AssertIsOnWorkerThread();
-
-    ReportResult(true);
-  }
-
-  void
-  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
-  {
-    MOZ_ASSERT(GetCurrentThreadWorkerPrivate() == mWorkerPrivate);
-    mWorkerPrivate->AssertIsOnWorkerThread();
-
-    ReportResult(false);
+    ReportResult(aResult == Resolved);
 
     // Note, all WaitUntil() rejections are reported to client consoles
     // by the WaitUntilHandler in ServiceWorkerEvents.  This ensures that
@@ -628,8 +737,6 @@ public:
     // reported properly.
   }
 };
-
-NS_IMPL_ISUPPORTS0(LifeCycleEventWatcher)
 
 bool
 LifecycleEventWorkerRunnable::DispatchLifecycleEvent(JSContext* aCx,
@@ -662,8 +769,12 @@ LifecycleEventWorkerRunnable::DispatchLifecycleEvent(JSContext* aCx,
     return true;
   }
 
-  if (!DispatchExtendableEventOnWorkerScope(aCx, aWorkerPrivate->GlobalScope(),
-                                       event, watcher)) {
+  nsresult rv = DispatchExtendableEventOnWorkerScope(aCx,
+                                                     aWorkerPrivate->GlobalScope(),
+                                                     event,
+                                                     watcher);
+  // Do not fail event processing when an exception is thrown.
+  if (NS_FAILED(rv) && rv != NS_ERROR_XPC_JS_THREW_EXCEPTION) {
     watcher->ReportResult(false);
   }
 
@@ -680,11 +791,11 @@ ServiceWorkerPrivate::SendLifeCycleEvent(const nsAString& aEventType,
   nsresult rv = SpawnWorkerIfNeeded(LifeCycleEvent, aLoadFailure);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  MOZ_ASSERT(mKeepAliveToken);
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
   RefPtr<WorkerRunnable> r = new LifecycleEventWorkerRunnable(mWorkerPrivate,
-                                                                mKeepAliveToken,
-                                                                aEventType,
-                                                                aCallback);
+                                                              token,
+                                                              aEventType,
+                                                              aCallback);
   if (NS_WARN_IF(!r->Dispatch())) {
     return NS_ERROR_FAILURE;
   }
@@ -692,10 +803,9 @@ ServiceWorkerPrivate::SendLifeCycleEvent(const nsAString& aEventType,
   return NS_OK;
 }
 
-#ifndef MOZ_SIMPLEPUSH
 namespace {
 
-class PushErrorReporter final : public PromiseNativeHandler
+class PushErrorReporter final : public ExtendableEventCallback
 {
   WorkerPrivate* mWorkerPrivate;
   nsString mMessageId;
@@ -705,7 +815,7 @@ class PushErrorReporter final : public PromiseNativeHandler
   }
 
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(PushErrorReporter, override)
 
   PushErrorReporter(WorkerPrivate* aWorkerPrivate,
                     const nsAString& aMessageId)
@@ -715,22 +825,18 @@ public:
     mWorkerPrivate->AssertIsOnWorkerThread();
   }
 
-  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  void
+  FinishedWithResult(ExtendableEventResult aResult) override
   {
-    mWorkerPrivate->AssertIsOnWorkerThread();
-    mWorkerPrivate = nullptr;
-    // Do nothing; we only use this to report errors to the Push service.
-  }
-
-  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
-  {
-    Report(nsIPushErrorReporter::DELIVERY_UNHANDLED_REJECTION);
+    if (aResult == Rejected) {
+      Report(nsIPushErrorReporter::DELIVERY_UNHANDLED_REJECTION);
+    }
   }
 
   void Report(uint16_t aReason = nsIPushErrorReporter::DELIVERY_INTERNAL_ERROR)
   {
+    WorkerPrivate* workerPrivate = mWorkerPrivate;
     mWorkerPrivate->AssertIsOnWorkerThread();
-    mWorkerPrivate = nullptr;
 
     if (NS_WARN_IF(aReason > nsIPushErrorReporter::DELIVERY_INTERNAL_ERROR) ||
         mMessageId.IsEmpty()) {
@@ -740,7 +846,7 @@ public:
       NewRunnableMethod<uint16_t>(this,
         &PushErrorReporter::ReportOnMainThread, aReason);
     MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-      NS_DispatchToMainThread(runnable.forget())));
+      workerPrivate->DispatchToMainThread(runnable.forget())));
   }
 
   void ReportOnMainThread(uint16_t aReason)
@@ -754,8 +860,6 @@ public:
     }
   }
 };
-
-NS_IMPL_ISUPPORTS0(PushErrorReporter)
 
 class SendPushEventRunnable final : public ExtendableFunctionalEventWorkerRunnable
 {
@@ -810,8 +914,12 @@ public:
     }
     event->SetTrusted(true);
 
-    if (!DispatchExtendableEventOnWorkerScope(aCx, aWorkerPrivate->GlobalScope(),
-                                              event, errorReporter)) {
+    nsresult rv = DispatchExtendableEventOnWorkerScope(aCx,
+                                                       aWorkerPrivate->GlobalScope(),
+                                                       event,
+                                                       errorReporter);
+    if (NS_FAILED(rv)) {
+      // We don't cancel WorkerPrivate when catching an excetpion.
       errorReporter->Report(nsIPushErrorReporter::DELIVERY_UNCAUGHT_EXCEPTION);
     }
 
@@ -858,26 +966,22 @@ public:
 };
 
 } // anonymous namespace
-#endif // !MOZ_SIMPLEPUSH
 
 nsresult
 ServiceWorkerPrivate::SendPushEvent(const nsAString& aMessageId,
                                     const Maybe<nsTArray<uint8_t>>& aData,
                                     ServiceWorkerRegistrationInfo* aRegistration)
 {
-#ifdef MOZ_SIMPLEPUSH
-  return NS_ERROR_NOT_AVAILABLE;
-#else
   nsresult rv = SpawnWorkerIfNeeded(PushEvent, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  MOZ_ASSERT(mKeepAliveToken);
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
 
   nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo> regInfo(
     new nsMainThreadPtrHolder<ServiceWorkerRegistrationInfo>(aRegistration, false));
 
   RefPtr<WorkerRunnable> r = new SendPushEventRunnable(mWorkerPrivate,
-                                                       mKeepAliveToken,
+                                                       token,
                                                        aMessageId,
                                                        aData,
                                                        regInfo);
@@ -894,27 +998,22 @@ ServiceWorkerPrivate::SendPushEvent(const nsAString& aMessageId,
   }
 
   return NS_OK;
-#endif // MOZ_SIMPLEPUSH
 }
 
 nsresult
 ServiceWorkerPrivate::SendPushSubscriptionChangeEvent()
 {
-#ifdef MOZ_SIMPLEPUSH
-  return NS_ERROR_NOT_AVAILABLE;
-#else
   nsresult rv = SpawnWorkerIfNeeded(PushSubscriptionChangeEvent, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  MOZ_ASSERT(mKeepAliveToken);
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
   RefPtr<WorkerRunnable> r =
-    new SendPushSubscriptionChangeEventRunnable(mWorkerPrivate, mKeepAliveToken);
+    new SendPushSubscriptionChangeEventRunnable(mWorkerPrivate, token);
   if (NS_WARN_IF(!r->Dispatch())) {
     return NS_ERROR_FAILURE;
   }
 
   return NS_OK;
-#endif // MOZ_SIMPLEPUSH
 }
 
 namespace {
@@ -968,7 +1067,7 @@ private:
   RefPtr<AllowWindowInteractionHandler> mHandler;
 };
 
-class AllowWindowInteractionHandler final : public PromiseNativeHandler
+class AllowWindowInteractionHandler final : public ExtendableEventCallback
 {
   friend class ClearWindowAllowedRunnable;
   nsCOMPtr<nsITimer> mTimer;
@@ -1047,7 +1146,7 @@ class AllowWindowInteractionHandler final : public PromiseNativeHandler
   }
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_INLINE_DECL_REFCOUNTING(AllowWindowInteractionHandler, override)
 
   explicit AllowWindowInteractionHandler(WorkerPrivate* aWorkerPrivate)
   {
@@ -1055,21 +1154,12 @@ public:
   }
 
   void
-  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  FinishedWithResult(ExtendableEventResult /* aResult */) override
   {
-    WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-    ClearWindowAllowed(workerPrivate);
-  }
-
-  void
-  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
-  {
-    WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     ClearWindowAllowed(workerPrivate);
   }
 };
-
-NS_IMPL_ISUPPORTS0(AllowWindowInteractionHandler)
 
 bool
 ClearWindowAllowedRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
@@ -1157,9 +1247,13 @@ public:
     aWorkerPrivate->GlobalScope()->AllowWindowInteraction();
     RefPtr<AllowWindowInteractionHandler> allowWindowInteraction =
       new AllowWindowInteractionHandler(aWorkerPrivate);
-    if (!DispatchExtendableEventOnWorkerScope(aCx, aWorkerPrivate->GlobalScope(),
-                                              event, allowWindowInteraction)) {
-      allowWindowInteraction->RejectedCallback(aCx, JS::UndefinedHandleValue);
+    nsresult rv = DispatchExtendableEventOnWorkerScope(aCx,
+                                                       aWorkerPrivate->GlobalScope(),
+                                                       event,
+                                                       allowWindowInteraction);
+    // Don't reject when catching an exception
+    if (NS_FAILED(rv) && rv != NS_ERROR_XPC_JS_THREW_EXCEPTION) {
+      allowWindowInteraction->FinishedWithResult(Rejected);
     }
     aWorkerPrivate->GlobalScope()->ConsumeWindowInteraction();
 
@@ -1196,8 +1290,10 @@ ServiceWorkerPrivate::SendNotificationEvent(const nsAString& aEventName,
   nsresult rv = SpawnWorkerIfNeeded(why, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
+
   RefPtr<WorkerRunnable> r =
-    new SendNotificationEventRunnable(mWorkerPrivate, mKeepAliveToken,
+    new SendNotificationEventRunnable(mWorkerPrivate, token,
                                       aEventName, aID, aTitle, aDir, aLang,
                                       aBody, aTag, aIcon, aData, aBehavior,
                                       aScope);
@@ -1220,6 +1316,7 @@ class FetchEventRunnable : public ExtendableFunctionalEventWorkerRunnable
   nsTArray<nsCString> mHeaderNames;
   nsTArray<nsCString> mHeaderValues;
   nsCString mSpec;
+  nsCString mFragment;
   nsCString mMethod;
   nsString mClientId;
   bool mIsReload;
@@ -1231,6 +1328,7 @@ class FetchEventRunnable : public ExtendableFunctionalEventWorkerRunnable
   nsCOMPtr<nsIInputStream> mUploadStream;
   nsCString mReferrer;
   ReferrerPolicy mReferrerPolicy;
+  nsString mIntegrity;
 public:
   FetchEventRunnable(WorkerPrivate* aWorkerPrivate,
                      KeepAliveToken* aKeepAliveToken,
@@ -1290,18 +1388,17 @@ public:
     nsCOMPtr<nsIURI> uriNoFragment;
     rv = uri->CloneIgnoringRef(getter_AddRefs(uriNoFragment));
     NS_ENSURE_SUCCESS(rv, rv);
-
     rv = uriNoFragment->GetSpec(mSpec);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = uri->GetRef(mFragment);
     NS_ENSURE_SUCCESS(rv, rv);
 
     uint32_t loadFlags;
     rv = channel->GetLoadFlags(&loadFlags);
     NS_ENSURE_SUCCESS(rv, rv);
-
     nsCOMPtr<nsILoadInfo> loadInfo;
     rv = channel->GetLoadInfo(getter_AddRefs(loadInfo));
     NS_ENSURE_SUCCESS(rv, rv);
-
     mContentPolicyType = loadInfo->InternalContentPolicyType();
 
     nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
@@ -1312,12 +1409,19 @@ public:
     httpChannel->GetRequestHeader(NS_LITERAL_CSTRING("Referer"), referrer);
     if (!referrer.IsEmpty()) {
       mReferrer = referrer;
+    } else {
+      // If there's no referrer Header, means the header was omitted for
+      // security/privacy reason.
+      mReferrer = EmptyCString();
     }
 
     uint32_t referrerPolicy = 0;
     rv = httpChannel->GetReferrerPolicy(&referrerPolicy);
     NS_ENSURE_SUCCESS(rv, rv);
     switch (referrerPolicy) {
+      case nsIHttpChannel::REFERRER_POLICY_UNSET:
+      mReferrerPolicy = ReferrerPolicy::_empty;
+      break;
     case nsIHttpChannel::REFERRER_POLICY_NO_REFERRER:
       mReferrerPolicy = ReferrerPolicy::No_referrer;
       break;
@@ -1332,6 +1436,15 @@ public:
       break;
     case nsIHttpChannel::REFERRER_POLICY_UNSAFE_URL:
       mReferrerPolicy = ReferrerPolicy::Unsafe_url;
+      break;
+    case nsIHttpChannel::REFERRER_POLICY_SAME_ORIGIN:
+      mReferrerPolicy = ReferrerPolicy::Same_origin;
+      break;
+    case nsIHttpChannel::REFERRER_POLICY_STRICT_ORIGIN_WHEN_XORIGIN:
+      mReferrerPolicy = ReferrerPolicy::Strict_origin_when_cross_origin;
+      break;
+    case nsIHttpChannel::REFERRER_POLICY_STRICT_ORIGIN:
+      mReferrerPolicy = ReferrerPolicy::Strict_origin;
       break;
     default:
       MOZ_ASSERT_UNREACHABLE("Invalid Referrer Policy enum value?");
@@ -1355,6 +1468,8 @@ public:
     uint32_t cacheMode;
     internalChannel->GetFetchCacheMode(&cacheMode);
     mCacheMode = static_cast<RequestCache>(cacheMode);
+
+    internalChannel->GetIntegrityMetadata(mIntegrity);
 
     mRequestCredentials = InternalRequest::MapChannelToRequestCredentials(channel);
 
@@ -1391,7 +1506,7 @@ public:
   Cancel() override
   {
     nsCOMPtr<nsIRunnable> runnable = new ResumeRequest(mInterceptedChannel);
-    if (NS_FAILED(NS_DispatchToMainThread(runnable))) {
+    if (NS_FAILED(mWorkerPrivate->DispatchToMainThread(runnable))) {
       NS_WARNING("Failed to resume channel on FetchEventRunnable::Cancel()!\n");
     }
     WorkerRunnable::Cancel();
@@ -1409,11 +1524,12 @@ private:
     {
     }
 
-    NS_IMETHOD Run()
+    NS_IMETHOD Run() override
     {
       AssertIsOnMainThread();
       nsresult rv = mChannel->ResetInterception();
-      NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to resume intercepted network request");
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                           "Failed to resume intercepted network request");
       return rv;
     }
   };
@@ -1443,8 +1559,8 @@ private:
       result.SuppressException();
       return false;
     }
-
     RefPtr<InternalRequest> internalReq = new InternalRequest(mSpec,
+                                                              mFragment,
                                                               mMethod,
                                                               internalHeaders.forget(),
                                                               mCacheMode,
@@ -1453,7 +1569,8 @@ private:
                                                               mRequestCredentials,
                                                               NS_ConvertUTF8toUTF16(mReferrer),
                                                               mReferrerPolicy,
-                                                              mContentPolicyType);
+                                                              mContentPolicyType,
+                                                              mIntegrity);
     internalReq->SetBody(mUploadStream);
     // For Telemetry, note that this Request object was created by a Fetch event.
     internalReq->SetCreatedByFetchEvent();
@@ -1485,31 +1602,22 @@ private:
     event->PostInit(mInterceptedChannel, mRegistration, mScriptSpec);
     event->SetTrusted(true);
 
-    RefPtr<EventTarget> target = do_QueryObject(aWorkerPrivate->GlobalScope());
-    nsresult rv2 = target->DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+    nsresult rv2 =
+      DispatchExtendableEventOnWorkerScope(aCx, aWorkerPrivate->GlobalScope(),
+                                           event, nullptr);
     if (NS_WARN_IF(NS_FAILED(rv2)) || !event->WaitToRespond()) {
       nsCOMPtr<nsIRunnable> runnable;
-      if (event->DefaultPrevented(aCx)) {
-        event->ReportCanceled();
-      } else if (event->WidgetEventPtr()->mFlags.mExceptionWasRaised) {
-        // Exception logged via the WorkerPrivate ErrorReporter
+      MOZ_ASSERT(!aWorkerPrivate->UsesSystemPrincipal(),
+                 "We don't support system-principal serviceworkers");
+      if (event->DefaultPrevented(CallerType::NonSystem)) {
+        runnable = new CancelChannelRunnable(mInterceptedChannel,
+                                             mRegistration,
+                                             NS_ERROR_INTERCEPTION_FAILED);
       } else {
         runnable = new ResumeRequest(mInterceptedChannel);
       }
 
-      if (!runnable) {
-        runnable = new CancelChannelRunnable(mInterceptedChannel,
-                                             mRegistration,
-                                             NS_ERROR_INTERCEPTION_FAILED);
-      }
-
-      MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable));
-    }
-
-    RefPtr<Promise> waitUntilPromise = event->GetPromise();
-    if (waitUntilPromise) {
-      KeepAliveHandler::CreateAndAttachToPromise(mKeepAliveToken,
-                                                 waitUntilPromise);
+      MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(runnable.forget()));
     }
 
     return true;
@@ -1598,8 +1706,10 @@ ServiceWorkerPrivate::SendFetchEvent(nsIInterceptedChannel* aChannel,
   nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo> regInfo(
     new nsMainThreadPtrHolder<ServiceWorkerRegistrationInfo>(registration, false));
 
+  RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
+
   RefPtr<FetchEventRunnable> r =
-    new FetchEventRunnable(mWorkerPrivate, mKeepAliveToken, handle,
+    new FetchEventRunnable(mWorkerPrivate, token, handle,
                            mInfo->ScriptSpec(), regInfo,
                            aDocumentId, aIsReload);
   rv = r->Init();
@@ -1653,7 +1763,7 @@ ServiceWorkerPrivate::SpawnWorkerIfNeeded(WakeUpReason aWhy,
   // TODO(catalinb): Bug 1192138 - Add telemetry for service worker wake-ups.
 
   // Ensure that the IndexedDatabaseManager is initialized
-  NS_WARN_IF(!IndexedDatabaseManager::GetOrCreate());
+  Unused << NS_WARN_IF(!IndexedDatabaseManager::GetOrCreate());
 
   WorkerLoadInfo info;
   nsresult rv = NS_NewURI(getter_AddRefs(info.mBaseURI), mInfo->ScriptSpec(),
@@ -1680,7 +1790,7 @@ ServiceWorkerPrivate::SpawnWorkerIfNeeded(WakeUpReason aWhy,
   nsContentUtils::StorageAccess access =
     nsContentUtils::StorageAllowedForPrincipal(info.mPrincipal);
   info.mStorageAllowed = access > nsContentUtils::StorageAccess::ePrivateBrowsing;
-  info.mPrivateBrowsing = false;
+  info.mOriginAttributes = mInfo->GetOriginAttributes();
 
   nsCOMPtr<nsIContentSecurityPolicy> csp;
   rv = info.mPrincipal->GetCsp(getter_AddRefs(csp));
@@ -1743,7 +1853,7 @@ ServiceWorkerPrivate::TerminateWorker()
   AssertIsOnMainThread();
 
   mIdleWorkerTimer->Cancel();
-  mKeepAliveToken = nullptr;
+  mIdleKeepAliveToken = nullptr;
   if (mWorkerPrivate) {
     if (Preferences::GetBool("dom.serviceWorkers.testing.enabled")) {
       nsCOMPtr<nsIObserverService> os = services::GetObserverService();
@@ -1752,7 +1862,7 @@ ServiceWorkerPrivate::TerminateWorker()
       }
     }
 
-    NS_WARN_IF(!mWorkerPrivate->Terminate());
+    Unused << NS_WARN_IF(!mWorkerPrivate->Terminate());
     mWorkerPrivate = nullptr;
     mSupportsArray.Clear();
 
@@ -1858,6 +1968,13 @@ ServiceWorkerPrivate::DetachDebugger()
   return NS_OK;
 }
 
+bool
+ServiceWorkerPrivate::IsIdle() const
+{
+  AssertIsOnMainThread();
+  return mTokenCount == 0 || (mTokenCount == 1 && mIdleKeepAliveToken);
+}
+
 /* static */ void
 ServiceWorkerPrivate::NoteIdleWorkerCallback(nsITimer* aTimer, void* aPrivate)
 {
@@ -1869,7 +1986,7 @@ ServiceWorkerPrivate::NoteIdleWorkerCallback(nsITimer* aTimer, void* aPrivate)
   MOZ_ASSERT(aTimer == swp->mIdleWorkerTimer, "Invalid timer!");
 
   // Release ServiceWorkerPrivate's token, since the grace period has ended.
-  swp->mKeepAliveToken = nullptr;
+  swp->mIdleKeepAliveToken = nullptr;
 
   if (swp->mWorkerPrivate) {
     // If we still have a workerPrivate at this point it means there are pending
@@ -1921,8 +2038,8 @@ ServiceWorkerPrivate::RenewKeepAliveToken(WakeUpReason aWhy)
     ResetIdleTimeout();
   }
 
-  if (!mKeepAliveToken) {
-    mKeepAliveToken = new KeepAliveToken(this);
+  if (!mIdleKeepAliveToken) {
+    mIdleKeepAliveToken = new KeepAliveToken(this);
   }
 }
 
@@ -1953,7 +2070,54 @@ ServiceWorkerPrivate::ReleaseToken()
   --mTokenCount;
   if (!mTokenCount) {
     TerminateWorker();
+  } else if (IsIdle()) {
+    RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+    if (swm) {
+      swm->WorkerIsIdle(mInfo);
+    }
   }
+}
+
+already_AddRefed<KeepAliveToken>
+ServiceWorkerPrivate::CreateEventKeepAliveToken()
+{
+  AssertIsOnMainThread();
+  MOZ_ASSERT(mWorkerPrivate);
+  MOZ_ASSERT(mIdleKeepAliveToken);
+  RefPtr<KeepAliveToken> ref = new KeepAliveToken(this);
+  return ref.forget();
+}
+
+void
+ServiceWorkerPrivate::AddPendingWindow(Runnable* aPendingWindow)
+{
+  AssertIsOnMainThread();
+  pendingWindows.AppendElement(aPendingWindow);
+}
+
+nsresult
+ServiceWorkerPrivate::Observe(nsISupports* aSubject, const char* aTopic, const char16_t* aData)
+{
+  AssertIsOnMainThread();
+
+  nsCString topic(aTopic);
+  if (!topic.Equals(NS_LITERAL_CSTRING("BrowserChrome:Ready"))) {
+    MOZ_ASSERT(false, "Unexpected topic.");
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
+  NS_ENSURE_STATE(os);
+  os->RemoveObserver(static_cast<nsIObserver*>(this), "BrowserChrome:Ready");
+
+  size_t len = pendingWindows.Length();
+  for (int i = len-1; i >= 0; i--) {
+    RefPtr<Runnable> runnable = pendingWindows[i];
+    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable));
+    pendingWindows.RemoveElementAt(i);
+  }
+
+  return NS_OK;
 }
 
 END_WORKERS_NAMESPACE

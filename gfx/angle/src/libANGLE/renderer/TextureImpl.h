@@ -16,6 +16,7 @@
 #include "libANGLE/Error.h"
 #include "libANGLE/ImageIndex.h"
 #include "libANGLE/Stream.h"
+#include "libANGLE/Texture.h"
 #include "libANGLE/renderer/FramebufferAttachmentObjectImpl.h"
 
 namespace egl
@@ -41,8 +42,8 @@ namespace rx
 class TextureImpl : public FramebufferAttachmentObjectImpl
 {
   public:
-    TextureImpl(const gl::TextureState &state) : mState(state) {}
-    virtual ~TextureImpl() {}
+    TextureImpl(const gl::TextureState &state);
+    virtual ~TextureImpl();
 
     virtual gl::Error setImage(GLenum target, size_t level, GLenum internalFormat, const gl::Extents &size, GLenum format, GLenum type,
                                const gl::PixelUnpackState &unpack, const uint8_t *pixels) = 0;
@@ -59,6 +60,21 @@ class TextureImpl : public FramebufferAttachmentObjectImpl
     virtual gl::Error copySubImage(GLenum target, size_t level, const gl::Offset &destOffset, const gl::Rectangle &sourceArea,
                                    const gl::Framebuffer *source) = 0;
 
+    virtual gl::Error copyTexture(GLenum internalFormat,
+                                  GLenum type,
+                                  bool unpackFlipY,
+                                  bool unpackPremultiplyAlpha,
+                                  bool unpackUnmultiplyAlpha,
+                                  const gl::Texture *source);
+    virtual gl::Error copySubTexture(const gl::Offset &destOffset,
+                                     const gl::Rectangle &sourceArea,
+                                     bool unpackFlipY,
+                                     bool unpackPremultiplyAlpha,
+                                     bool unpackUnmultiplyAlpha,
+                                     const gl::Texture *source);
+
+    virtual gl::Error copyCompressedTexture(const gl::Texture *source);
+
     virtual gl::Error setStorage(GLenum target, size_t levels, GLenum internalFormat, const gl::Extents &size) = 0;
 
     virtual gl::Error setEGLImageTarget(GLenum target, egl::Image *image) = 0;
@@ -73,6 +89,8 @@ class TextureImpl : public FramebufferAttachmentObjectImpl
 
     virtual void bindTexImage(egl::Surface *surface) = 0;
     virtual void releaseTexImage() = 0;
+
+    virtual void syncState(const gl::Texture::DirtyBits &dirtyBits) = 0;
 
   protected:
     const gl::TextureState &mState;

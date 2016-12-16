@@ -29,9 +29,6 @@ public:
   virtual void UpdateTransparency(nsTransparencyMode aMode) = 0;
   virtual void ClearTransparentWindow() = 0;
 
-  // Update the bounds of the transparent surface.
-  virtual void ResizeTransparentWindow(const gfx::IntSize& aSize) = 0;
-
   // If in-process and using software rendering, return the backing transparent
   // DC.
   virtual HDC GetTransparentDC() const = 0;
@@ -48,15 +45,17 @@ class WinCompositorWidget
 public:
   WinCompositorWidget(const CompositorWidgetInitData& aInitData);
 
-  bool PreRender(layers::LayerManagerComposite*) override;
-  void PostRender(layers::LayerManagerComposite*) override;
+  bool PreRender(WidgetRenderingContext*) override;
+  void PostRender(WidgetRenderingContext*) override;
   already_AddRefed<gfx::DrawTarget> StartRemoteDrawing() override;
   void EndRemoteDrawing() override;
+  bool NeedsToDeferEndRemoteDrawing() override;
   LayoutDeviceIntSize GetClientSize() override;
   already_AddRefed<gfx::DrawTarget> GetBackBufferDrawTarget(gfx::DrawTarget* aScreenTarget,
                                                             const LayoutDeviceIntRect& aRect,
                                                             const LayoutDeviceIntRect& aClearRect) override;
   already_AddRefed<gfx::SourceSurface> EndBackBufferDrawing() override;
+  bool InitCompositor(layers::Compositor* aCompositor) override;
   uintptr_t GetWidgetKey() override;
   WinCompositorWidget* AsWindows() override {
     return this;
@@ -71,7 +70,6 @@ public:
   void OnDestroyWindow() override;
   void UpdateTransparency(nsTransparencyMode aMode) override;
   void ClearTransparentWindow() override;
-  void ResizeTransparentWindow(const gfx::IntSize& aSize) override;
 
   bool RedrawTransparentWindow();
 
@@ -104,6 +102,8 @@ private:
 
   // Locked back buffer of BasicCompositor
   uint8_t* mLockedBackBufferData;
+
+  bool mNotDeferEndRemoteDrawing;
 };
 
 } // namespace widget

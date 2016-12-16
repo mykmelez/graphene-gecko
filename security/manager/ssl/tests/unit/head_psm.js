@@ -28,6 +28,7 @@ const isDebugBuild = Cc["@mozilla.org/xpcom/debug;1"]
 const gEVExpected = isDebugBuild && !("@mozilla.org/b2g-process-global;1" in Cc);
 
 const SSS_STATE_FILE_NAME = "SiteSecurityServiceState.txt";
+const PRELOAD_STATE_FILE_NAME = "SecurityPreloadState.txt";
 
 const SEC_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SEC_ERROR_BASE;
 const SSL_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SSL_ERROR_BASE;
@@ -81,6 +82,7 @@ const MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE      = MOZILLA_PKIX_ERROR_BAS
 const MOZILLA_PKIX_ERROR_NOT_YET_VALID_ISSUER_CERTIFICATE = MOZILLA_PKIX_ERROR_BASE + 6;
 const MOZILLA_PKIX_ERROR_OCSP_RESPONSE_FOR_CERT_MISSING = MOZILLA_PKIX_ERROR_BASE + 8;
 const MOZILLA_PKIX_ERROR_REQUIRED_TLS_FEATURE_MISSING   = MOZILLA_PKIX_ERROR_BASE + 10;
+const MOZILLA_PKIX_ERROR_EMPTY_ISSUER_NAME              = MOZILLA_PKIX_ERROR_BASE + 12;
 
 // Supported Certificate Usages
 const certificateUsageSSLClient              = 0x0001;
@@ -137,15 +139,11 @@ function readFile(file) {
 function addCertFromFile(certdb, filename, trustString) {
   let certFile = do_get_file(filename, false);
   let certBytes = readFile(certFile);
-  let successful = false;
   try {
-    certdb.addCert(certBytes, trustString, null);
-    successful = true;
+    return certdb.addCert(certBytes, trustString);
   } catch (e) {}
-  if (!successful) {
-    // It might be PEM instead of DER.
-    certdb.addCertFromBase64(pemToBase64(certBytes), trustString, null);
-  }
+  // It might be PEM instead of DER.
+  return certdb.addCertFromBase64(pemToBase64(certBytes), trustString);
 }
 
 function constructCertFromFile(filename) {
@@ -207,7 +205,8 @@ function checkEVStatus(certDB, cert, usage, isEVExpected) {
                "Actual and expected EV status should match");
 }
 
-function _getLibraryFunctionWithNoArguments(functionName, libraryName) {
+function _getLibraryFunctionWithNoArguments(functionName, libraryName,
+                                            returnType) {
   // Open the NSS library. copied from services/crypto/modules/WeaveCrypto.js
   let path = ctypes.libraryName(libraryName);
 
@@ -224,7 +223,8 @@ function _getLibraryFunctionWithNoArguments(functionName, libraryName) {
   }
 
   let SECStatus = ctypes.int;
-  let func = nsslib.declare(functionName, ctypes.default_abi, SECStatus);
+  let func = nsslib.declare(functionName, ctypes.default_abi,
+                            returnType || SECStatus);
   return func;
 }
 
@@ -247,6 +247,39 @@ function clearSessionCache() {
   if (!SSL_ClearSessionCache || SSL_ClearSessionCache() != 0) {
     throw new Error("Failed to clear SSL session cache");
   }
+}
+
+function getSSLStatistics() {
+  let SSL3Statistics = new ctypes.StructType("SSL3Statistics",
+                           [ { "sch_sid_cache_hits": ctypes.long },
+                             { "sch_sid_cache_misses": ctypes.long },
+                             { "sch_sid_cache_not_ok": ctypes.long },
+                             { "hsh_sid_cache_hits": ctypes.long },
+                             { "hsh_sid_cache_misses": ctypes.long },
+                             { "hsh_sid_cache_not_ok": ctypes.long },
+                             { "hch_sid_cache_hits": ctypes.long },
+                             { "hch_sid_cache_misses": ctypes.long },
+                             { "hch_sid_cache_not_ok": ctypes.long },
+                             { "sch_sid_stateless_resumes": ctypes.long },
+                             { "hsh_sid_stateless_resumes": ctypes.long },
+                             { "hch_sid_stateless_resumes": ctypes.long },
+                             { "hch_sid_ticket_parse_failures": ctypes.long }]);
+  let SSL3StatisticsPtr = new ctypes.PointerType(SSL3Statistics);
+  let SSL_GetStatistics = null;
+  try {
+    SSL_GetStatistics = _getLibraryFunctionWithNoArguments("SSL_GetStatistics",
+                                                           "ssl3",
+                                                           SSL3StatisticsPtr);
+  } catch (e) {
+    // On Windows, this is actually in the nss3 library.
+    SSL_GetStatistics = _getLibraryFunctionWithNoArguments("SSL_GetStatistics",
+                                                           "nss3",
+                                                           SSL3StatisticsPtr);
+  }
+  if (!SSL_GetStatistics) {
+    throw new Error("Failed to get SSL statistics");
+  }
+  return SSL_GetStatistics();
 }
 
 // Set up a TLS testing environment that has a TLS server running and
@@ -322,25 +355,33 @@ function add_tls_server_setup(serverBinName, certsPath) {
  * @param {Function} aAfterStreamOpen
  *   A callback function that is called with the nsISocketTransport once the
  *   output stream is ready.
+ * @param {OriginAttributes} aOriginAttributes (optional)
+ *   The origin attributes that the socket transport will have. This parameter
+ *   affects OCSP because OCSP cache is double-keyed by origin attributes' first
+ *   party domain.
  */
 function add_connection_test(aHost, aExpectedResult,
                              aBeforeConnect, aWithSecurityInfo,
-                             aAfterStreamOpen) {
+                             aAfterStreamOpen,
+                             /*optional*/ aOriginAttributes) {
   const REMOTE_PORT = 8443;
 
-  function Connection(aHost) {
-    this.host = aHost;
+  function Connection(host) {
+    this.host = host;
     let threadManager = Cc["@mozilla.org/thread-manager;1"]
                           .getService(Ci.nsIThreadManager);
     this.thread = threadManager.currentThread;
     this.defer = Promise.defer();
     let sts = Cc["@mozilla.org/network/socket-transport-service;1"]
                 .getService(Ci.nsISocketTransportService);
-    this.transport = sts.createTransport(["ssl"], 1, aHost, REMOTE_PORT, null);
+    this.transport = sts.createTransport(["ssl"], 1, host, REMOTE_PORT, null);
     // See bug 1129771 - attempting to connect to [::1] when the server is
     // listening on 127.0.0.1 causes frequent failures on OS X 10.10.
     this.transport.connectionFlags |= Ci.nsISocketTransport.DISABLE_IPV6;
     this.transport.setEventSink(this, this.thread);
+    if (aOriginAttributes) {
+      this.transport.originAttributes = aOriginAttributes;
+    }
     this.inputStream = null;
     this.outputStream = null;
     this.connected = false;
@@ -393,11 +434,11 @@ function add_connection_test(aHost, aExpectedResult,
     }
   };
 
-  /* Returns a promise to connect to aHost that resolves to the result of that
+  /* Returns a promise to connect to host that resolves to the result of that
    * connection */
-  function connectTo(aHost) {
-    Services.prefs.setCharPref("network.dns.localDomains", aHost);
-    let connection = new Connection(aHost);
+  function connectTo(host) {
+    Services.prefs.setCharPref("network.dns.localDomains", host);
+    let connection = new Connection(host);
     return connection.go();
   }
 
@@ -557,17 +598,18 @@ function getFailingHttpServer(serverPort, serverIdentities) {
 //
 // serverPort is the port of the http OCSP responder
 // identity is the http hostname that will answer the OCSP requests
-// invalidIdentities is an array of identities that if used an
-//   will cause a test failure
 // nssDBLocation is the location of the NSS database from where the OCSP
 //   responses will be generated (assumes appropiate keys are present)
 // expectedCertNames is an array of nicks of the certs to be responsed
 // expectedBasePaths is an optional array that is used to indicate
 //   what is the expected base path of the OCSP request.
-function startOCSPResponder(serverPort, identity, invalidIdentities,
-                            nssDBLocation, expectedCertNames,
-                            expectedBasePaths, expectedMethods,
-                            expectedResponseTypes) {
+// expectedMethods is an optional array of methods ("GET" or "POST") indicating
+//   by which HTTP method the server is expected to be queried.
+// expectedResponseTypes is an optional array of OCSP response types to use (see
+//   GenerateOCSPResponse.cpp).
+function startOCSPResponder(serverPort, identity, nssDBLocation,
+                            expectedCertNames, expectedBasePaths,
+                            expectedMethods, expectedResponseTypes) {
   let ocspResponseGenerationArgs = expectedCertNames.map(
     function(expectedNick) {
       let responseType = "good";
@@ -582,10 +624,6 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
   let httpServer = new HttpServer();
   httpServer.registerPrefixHandler("/",
     function handleServerCallback(aRequest, aResponse) {
-      invalidIdentities.forEach(function(identity) {
-        Assert.notEqual(aRequest.host, identity,
-                        "Request host and invalid identity should not match");
-      });
       do_print("got request for: " + aRequest.path);
       let basePath = aRequest.path.slice(1).split("/")[0];
       if (expectedBasePaths.length >= 1) {
@@ -603,9 +641,6 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
       aResponse.write(ocspResponses.shift());
     });
   httpServer.identity.setPrimary("http", identity, serverPort);
-  invalidIdentities.forEach(function(identity) {
-    httpServer.identity.add("http", identity, serverPort);
-  });
   httpServer.start(serverPort);
   return {
     stop: function(callback) {
@@ -792,4 +827,33 @@ function asyncTestCertificateUsages(certdb, cert, expectedUsages) {
     promises.push(promise);
   });
   return Promise.all(promises);
+}
+
+/**
+ * Loads the pkcs11testmodule.cpp test PKCS #11 module, and registers a cleanup
+ * function that unloads it once the calling test completes.
+ *
+ * @param {Boolean} expectModuleUnloadToFail
+ *                  Should be set to true for tests that manually unload the
+ *                  test module, so the attempt to auto unload the test module
+ *                  doesn't cause a test failure. Should be set to false
+ *                  otherwise, so failure to automatically unload the test
+ *                  module gets reported.
+ */
+function loadPKCS11TestModule(expectModuleUnloadToFail) {
+  let libraryFile = Services.dirsvc.get("CurWorkD", Ci.nsILocalFile);
+  libraryFile.append("pkcs11testmodule");
+  libraryFile.append(ctypes.libraryName("pkcs11testmodule"));
+  ok(libraryFile.exists(), "The pkcs11testmodule file should exist");
+
+  let pkcs11 = Cc["@mozilla.org/security/pkcs11;1"].getService(Ci.nsIPKCS11);
+  do_register_cleanup(() => {
+    try {
+      pkcs11.deleteModule("PKCS11 Test Module");
+    } catch (e) {
+      Assert.ok(expectModuleUnloadToFail,
+                `Module unload should suceed only when expected: ${e}`);
+    }
+  });
+  pkcs11.addModule("PKCS11 Test Module", libraryFile.path, 0, 0);
 }

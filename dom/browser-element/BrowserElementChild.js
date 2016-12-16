@@ -26,15 +26,19 @@ function parentDocShell(docshell) {
 function isTopBrowserElement(docShell) {
   while (docShell) {
     docShell = parentDocShell(docShell);
-    if (docShell && docShell.isMozBrowserOrApp) {
+    if (docShell && docShell.isMozBrowser) {
       return false;
     }
   }
   return true;
 }
 
+var BrowserElementIsReady;
+
+debug(`Might load BE scripts: BEIR: ${BrowserElementIsReady}`);
 if (!BrowserElementIsReady) {
-  if (!('BrowserElementIsPreloaded' in this)) {
+  debug("Loading BE scripts")
+  if (!("BrowserElementIsPreloaded" in this)) {
     if (isTopBrowserElement(docShell)) {
       if (Services.prefs.getBoolPref("dom.mozInputMethod.enabled")) {
         try {
@@ -54,27 +58,26 @@ if (!BrowserElementIsReady) {
       Services.scriptloader.loadSubScript("chrome://global/content/BrowserElementCopyPaste.js");
     }
 
-    if (Services.prefs.getIntPref("dom.w3c_touch_events.enabled") != 0) {
-      if (docShell.asyncPanZoomEnabled === false) {
-        Services.scriptloader.loadSubScript("chrome://global/content/BrowserElementPanningAPZDisabled.js");
-        ContentPanningAPZDisabled.init();
-      }
-
-      Services.scriptloader.loadSubScript("chrome://global/content/BrowserElementPanning.js");
-      ContentPanning.init();
-    }
-
     Services.scriptloader.loadSubScript("chrome://global/content/BrowserElementChildPreload.js");
-  } else {
-    if (Services.prefs.getIntPref("dom.w3c_touch_events.enabled") != 0) {
-      if (docShell.asyncPanZoomEnabled === false) {
-        ContentPanningAPZDisabled.init();
-      }
-      ContentPanning.init();
-    }
   }
-}
 
-var BrowserElementIsReady = true;
+  function onDestroy() {
+    removeMessageListener("browser-element-api:destroy", onDestroy);
+
+    if (api) {
+      api.destroy();
+    }
+    if ("CopyPasteAssistent" in this) {
+      CopyPasteAssistent.destroy();
+    }
+
+    BrowserElementIsReady = false;
+  }
+  addMessageListener("browser-element-api:destroy", onDestroy);
+
+  BrowserElementIsReady = true;
+} else {
+  debug("BE already loaded, abort");
+}
 
 sendAsyncMessage('browser-element-api:call', { 'msg_name': 'hello' });

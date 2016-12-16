@@ -98,10 +98,11 @@ this.evaluate = {};
  * @throws ScriptTimeoutError
  *   If the script was interrupted due to script timeout.
  */
-evaluate.sandbox = function(sb, script, args = [], opts = {}) {
-  let timeoutId, timeoutHandler, unloadHandler;
+evaluate.sandbox = function (sb, script, args = [], opts = {}) {
+  let scriptTimeoutID, timeoutHandler, unloadHandler;
 
   let promise = new Promise((resolve, reject) => {
+    let src = "";
     sb[COMPLETE] = resolve;
     timeoutHandler = () => reject(new ScriptTimeoutError("Timed out"));
     unloadHandler = () => reject(
@@ -109,11 +110,20 @@ evaluate.sandbox = function(sb, script, args = [], opts = {}) {
 
     // wrap in function
     if (!opts.directInject) {
-      sb[CALLBACK] = sb[COMPLETE];
+      if (opts.async) {
+        sb[CALLBACK] = sb[COMPLETE];
+      }
       sb[ARGUMENTS] = Cu.cloneInto(args, sb, {wrapReflectors: true});
 
-      script = `${ARGUMENTS}.push(${CALLBACK});` +
-          `(function() { ${script} }).apply(null, ${ARGUMENTS})`;
+      // callback function made private
+      // so that introspection is possible
+      // on the arguments object
+      if (opts.async) {
+        sb[CALLBACK] = sb[COMPLETE];
+        src += `${ARGUMENTS}.push(rv => ${CALLBACK}(rv));`;
+      }
+
+      src += `(function() { ${script} }).apply(null, ${ARGUMENTS})`;
 
       // marionetteScriptFinished is not WebDriver conformant,
       // hence it is only exposed to immutable sandboxes
@@ -134,14 +144,14 @@ evaluate.sandbox = function(sb, script, args = [], opts = {}) {
     }
 
     // timeout and unload handlers
-    timeoutId = setTimeout(
+    scriptTimeoutID = setTimeout(
         timeoutHandler, opts.timeout || DEFAULT_TIMEOUT);
     sb.window.addEventListener("unload", unloadHandler);
 
     let res;
     try {
       res = Cu.evalInSandbox(
-          script, sb, "1.8", opts.filename || "dummy file", 0);
+          src, sb, "1.8", opts.filename || "dummy file", 0);
     } catch (e) {
       let err = new JavaScriptError(
           e,
@@ -158,7 +168,7 @@ evaluate.sandbox = function(sb, script, args = [], opts = {}) {
   });
 
   return promise.then(res => {
-    sb.window.clearTimeout(timeoutId);
+    clearTimeout(scriptTimeoutID);
     sb.window.removeEventListener("unload", unloadHandler);
     return res;
   });
@@ -180,7 +190,7 @@ this.sandbox = {};
  * @return {Sandbox}
  *     The augmented sandbox.
  */
-sandbox.augment = function(sb, adapter) {
+sandbox.augment = function (sb, adapter) {
   function* entries(obj) {
      for (let key of Object.keys(obj)) {
        yield [key, obj[key]];
@@ -207,7 +217,7 @@ sandbox.augment = function(sb, adapter) {
  * @return {Sandbox}
  *     The created sandbox.
  */
-sandbox.create = function(window, principal = null, opts = {}) {
+sandbox.create = function (window, principal = null, opts = {}) {
   let p = principal || window;
   opts = Object.assign({
     sameZoneAs: window,
@@ -228,7 +238,7 @@ sandbox.create = function(window, principal = null, opts = {}) {
  * @return {Sandbox}
  *     The created sandbox.
  */
-sandbox.createMutable = function(window) {
+sandbox.createMutable = function (window) {
   let opts = {
     wantComponents: false,
     wantXrays: false,
@@ -236,13 +246,13 @@ sandbox.createMutable = function(window) {
   return sandbox.create(window, null, opts);
 };
 
-sandbox.createSystemPrincipal = function(window) {
+sandbox.createSystemPrincipal = function (window) {
   let principal = Cc["@mozilla.org/systemprincipal;1"]
       .createInstance(Ci.nsIPrincipal);
   return sandbox.create(window, principal);
 };
 
-sandbox.createSimpleTest = function(window, harness) {
+sandbox.createSimpleTest = function (window, harness) {
   let sb = sandbox.create(window);
   sb = sandbox.augment(sb, harness);
   sb[FINISH] = () => sb[COMPLETE](harness.generate_results());

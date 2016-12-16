@@ -1,3 +1,5 @@
+from marionette_harness import Marionette
+
 from external_media_harness.testcase import MediaTestCase
 
 
@@ -15,5 +17,5 @@ class TestSomethingElse(MediaTestCase):
 
     def test_foo(self):
         self.logger.info('foo!')
-        with self.marionette.using_context('content'):
+        with self.marionette.using_context(Marionette.CONTEXT_CONTENT):
             self.marionette.navigate(self.test_urls[0])

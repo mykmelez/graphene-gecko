@@ -17,6 +17,7 @@
 #include "nsEscape.h"
 #include "nsHostObjectProtocolHandler.h"
 #include "nsIIOService.h"
+#include "nsIURIWithQuery.h"
 #include "nsIURL.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
@@ -243,7 +244,9 @@ URLMainThread::Constructor(nsISupports* aParent, const nsAString& aURL,
   nsCOMPtr<nsIURI> uri;
   nsresult rv = NS_NewURI(getter_AddRefs(uri), aURL, nullptr, aBase,
                           nsContentUtils::GetIOService());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_FAILED(rv)) {
+    // No need to warn in this case. It's common to use the URL constructor
+    // to determine if a URL is valid and an exception will be propagated.
     aRv.ThrowTypeError<MSG_INVALID_URL>(aURL);
     return nullptr;
   }
@@ -519,37 +522,37 @@ URLMainThread::GetPathname(nsAString& aPathname, ErrorResult& aRv) const
 {
   aPathname.Truncate();
 
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mURI));
-  if (!url) {
-    nsAutoCString path;
-    nsresult rv = mURI->GetPath(path);
-    if (NS_FAILED(rv)){
-      // Do not throw!  Not having a valid URI or URL should result in an empty
-      // string.
-      return;
+  // Do not throw!  Not having a valid URI or URL should result in an empty
+  // string.
+
+  nsCOMPtr<nsIURIWithQuery> url(do_QueryInterface(mURI));
+  if (url) {
+    nsAutoCString file;
+    nsresult rv = url->GetFilePath(file);
+    if (NS_SUCCEEDED(rv)) {
+      CopyUTF8toUTF16(file, aPathname);
     }
 
-    CopyUTF8toUTF16(path, aPathname);
     return;
   }
 
-  nsAutoCString file;
-  nsresult rv = url->GetFilePath(file);
+  nsAutoCString path;
+  nsresult rv = mURI->GetPath(path);
   if (NS_SUCCEEDED(rv)) {
-    CopyUTF8toUTF16(file, aPathname);
+    CopyUTF8toUTF16(path, aPathname);
   }
 }
 
 void
 URLMainThread::SetPathname(const nsAString& aPathname, ErrorResult& aRv)
 {
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mURI));
-  if (!url) {
-    // Ignore failures to be compatible with NS4.
+  // Do not throw!
+
+  nsCOMPtr<nsIURIWithQuery> url(do_QueryInterface(mURI));
+  if (url) {
+    url->SetFilePath(NS_ConvertUTF16toUTF8(aPathname));
     return;
   }
-
-  url->SetFilePath(NS_ConvertUTF16toUTF8(aPathname));
 }
 
 void
@@ -557,17 +560,19 @@ URLMainThread::GetSearch(nsAString& aSearch, ErrorResult& aRv) const
 {
   aSearch.Truncate();
 
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mURI));
-  if (!url) {
-    // Do not throw!  Not having a valid URI or URL should result in an empty
-    // string.
-    return;
-  }
+  // Do not throw!  Not having a valid URI or URL should result in an empty
+  // string.
 
   nsAutoCString search;
-  nsresult rv = url->GetQuery(search);
-  if (NS_SUCCEEDED(rv) && !search.IsEmpty()) {
-    CopyUTF8toUTF16(NS_LITERAL_CSTRING("?") + search, aSearch);
+  nsresult rv;
+
+  nsCOMPtr<nsIURIWithQuery> url(do_QueryInterface(mURI));
+  if (url) {
+    rv = url->GetQuery(search);
+    if (NS_SUCCEEDED(rv) && !search.IsEmpty()) {
+      CopyUTF8toUTF16(NS_LITERAL_CSTRING("?") + search, aSearch);
+    }
+    return;
   }
 }
 
@@ -596,13 +601,13 @@ URLMainThread::SetHash(const nsAString& aHash, ErrorResult& aRv)
 void
 URLMainThread::SetSearchInternal(const nsAString& aSearch, ErrorResult& aRv)
 {
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mURI));
-  if (!url) {
-    // Ignore failures to be compatible with NS4.
+  // Ignore failures to be compatible with NS4.
+
+  nsCOMPtr<nsIURIWithQuery> uriWithQuery(do_QueryInterface(mURI));
+  if (uriWithQuery) {
+    uriWithQuery->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
     return;
   }
-
-  url->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
 }
 
 } // anonymous namespace
@@ -1819,7 +1824,7 @@ URL::URLSearchParamsUpdated(URLSearchParams* aSearchParams)
 
   ErrorResult rv;
   SetSearchInternal(search, rv);
-  NS_WARN_IF(rv.Failed());
+  NS_WARNING_ASSERTION(!rv.Failed(), "SetSearchInternal failed");
   rv.SuppressException();
 }
 

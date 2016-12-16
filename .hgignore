@@ -78,6 +78,9 @@ _OPT\.OBJ/
 ^devtools/client/chrome.manifest$
 ^devtools/shared/chrome.manifest$
 
+# Ignore node_modules directories in devtools
+^devtools/.*/node_modules/
+
 # git checkout of libstagefright
 ^media/libstagefright/android$
 
@@ -86,16 +89,6 @@ GTAGS
 GRTAGS
 GSYMS
 GPATH
-
-# Various items for Loop
-^browser/components/loop/standalone/content/config\.js$
-^browser/extensions/loop/.*/node_modules/
-^browser/extensions/loop/.*\.module-cache
-^browser/extensions/loop/test/coverage/desktop
-^browser/extensions/loop/test/coverage/shared_standalone
-^browser/extensions/loop/test/visual-regression/diff
-^browser/extensions/loop/test/visual-regression/new
-^browser/extensions/loop/test/visual-regression/refs
 
 # Git clone directory for updating web-platform-tests
 ^testing/web-platform/sync/
@@ -122,7 +115,7 @@ GPATH
 
 # Ignore talos virtualenv and tp5n files.
 # The tp5n set is supposed to be decompressed at
-# testing/talos/talos/page_load_test/tp5n in order to run tests like tps
+# testing/talos/talos/tests/tp5n in order to run tests like tps
 # locally. Similarly, running talos requires a Python package virtual
 # environment. Both the virtual environment and tp5n files end up littering
 # the status command, so we ignore them.
@@ -131,8 +124,13 @@ GPATH
 ^testing/talos/include/
 ^testing/talos/lib/
 ^testing/talos/talos/tests/tp5n.zip
+^testing/talos/talos/tests/tp5n.tar.gz
 ^testing/talos/talos/tests/tp5n
 ^testing/talos/talos/tests/devtools/damp.manifest.develop
+^talos-venv
 
 # Ignore files created when running a reftest.
 ^lextab.py$
+
+# tup database
+^\.tup

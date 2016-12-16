@@ -4,6 +4,8 @@ config = {
     "buildbot_json_path": "buildprops.json",
     "hostutils_manifest_path": "testing/config/tooltool-manifests/linux64/hostutils.manifest",
     "robocop_package_name": "org.mozilla.roboexample.test",
+    "marionette_address": "localhost:2828",
+    "marionette_test_manifest": "unit-tests.ini",
     "tooltool_manifest_path": "testing/config/tooltool-manifests/androidarm_4_3/releng.manifest",
     "tooltool_cache": "/builds/tooltool_cache",
     "avds_dir": "/home/cltbld/.android",
@@ -51,7 +53,6 @@ config = {
         'verify-emulator',
         'install',
         'run-tests',
-        'stop-emulator',
     ],
     "emulator": {
         "name": "test-1",
@@ -123,7 +124,7 @@ config = {
                 "--extra-profile-file=fonts",
                 "--extra-profile-file=hyphenation",
                 "--screenshot-on-fail",
-                "--chrome",
+                "--flavor=chrome",
             ],
         },
         "mochitest-plain-gpu": {
@@ -327,6 +328,7 @@ config = {
         "xpcshell": {
             "run_filename": "remotexpcshelltests.py",
             "testsdir": "xpcshell",
+            "install": False,
             "options": [
                 "--dm_trans=adb",
                 "--xre-path=%(xre_path)s",
@@ -344,6 +346,7 @@ config = {
         "cppunittest": {
             "run_filename": "remotecppunittests.py",
             "testsdir": "cppunittest",
+            "install": False,
             "options": [
                 "--symbols-path=%(symbols_path)s",
                 "--xre-path=%(xre_path)s",
@@ -351,6 +354,23 @@ config = {
                 "--localBinDir=../bin",
                 "--apk=%(installer_path)s",
                 ".",
+            ],
+        },
+        "marionette": {
+            "run_filename": os.path.join("harness", "marionette_harness", "runtests.py"),
+            "testsdir": "marionette",
+            "options": [
+                "--emulator",
+                "--app=fennec",
+                "--package=%(app)s",
+                "--address=%(address)s",
+                "%(test_manifest)s",
+                "--disable-e10s",
+                "--gecko-log=%(gecko_log)s",
+                "--log-raw=%(raw_log_file)s",
+                "--log-errorsummary=%(error_summary_file)s",
+                "--symbols-path=%(symbols_path)s",
+                "--startup-timeout=300",
             ],
         },
 

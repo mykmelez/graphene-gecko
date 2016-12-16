@@ -14,11 +14,12 @@
 #include "nsServiceManagerUtils.h"
 #include "nsString.h"
 #include "nsIXULAppInfo.h"
-#include "nsWindowsDllInterceptor.h"
 #include "WinUtils.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/PaintTracker.h"
+#include "mozilla/WindowsVersion.h"
 
 using namespace mozilla;
 using namespace mozilla::ipc;
@@ -436,95 +437,6 @@ ProcessOrDeferMessage(HWND hwnd,
   return res;
 }
 
-/*
- * It is bad to subclass a window when neutering is active because you'll end
- * up subclassing the *neutered* window procedure instead of the real window
- * procedure. Since CreateWindow* fires WM_CREATE (and could thus trigger
- * neutering), we intercept these calls and suppress neutering for the duration
- * of the call. This ensures that any subsequent subclassing replaces the
- * correct window procedure.
- */
-WindowsDllInterceptor sUser32Interceptor;
-typedef HWND (WINAPI *CreateWindowExWPtr)(DWORD,LPCWSTR,LPCWSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID);
-typedef HWND (WINAPI *CreateWindowExAPtr)(DWORD,LPCSTR,LPCSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID);
-typedef HWND (WINAPI *CreateWindowWPtr)(LPCWSTR,LPCWSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID);
-typedef HWND (WINAPI *CreateWindowAPtr)(LPCSTR,LPCSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID);
-
-CreateWindowExWPtr sCreateWindowExWStub = nullptr;
-CreateWindowExAPtr sCreateWindowExAStub = nullptr;
-CreateWindowWPtr sCreateWindowWStub = nullptr;
-CreateWindowAPtr sCreateWindowAStub = nullptr;
-
-HWND WINAPI
-CreateWindowExWHook(DWORD aExStyle, LPCWSTR aClassName, LPCWSTR aWindowName,
-                    DWORD aStyle, int aX, int aY, int aWidth, int aHeight,
-                    HWND aParent, HMENU aMenu, HINSTANCE aInstance,
-                    LPVOID aParam)
-{
-  SuppressedNeuteringRegion doNotNeuterThisWindowYet;
-  return sCreateWindowExWStub(aExStyle, aClassName, aWindowName, aStyle, aX, aY,
-                              aWidth, aHeight, aParent, aMenu, aInstance, aParam);
-}
-
-HWND WINAPI
-CreateWindowExAHook(DWORD aExStyle, LPCSTR aClassName, LPCSTR aWindowName,
-                    DWORD aStyle, int aX, int aY, int aWidth, int aHeight,
-                    HWND aParent, HMENU aMenu, HINSTANCE aInstance,
-                    LPVOID aParam)
-{
-  SuppressedNeuteringRegion doNotNeuterThisWindowYet;
-  return sCreateWindowExAStub(aExStyle, aClassName, aWindowName, aStyle, aX, aY,
-                              aWidth, aHeight, aParent, aMenu, aInstance, aParam);
-}
-
-HWND WINAPI
-CreateWindowWHook(LPCWSTR aClassName, LPCWSTR aWindowName, DWORD aStyle, int aX,
-                  int aY, int aWidth, int aHeight, HWND aParent, HMENU aMenu,
-                  HINSTANCE aInstance, LPVOID aParam)
-{
-  SuppressedNeuteringRegion doNotNeuterThisWindowYet;
-  return sCreateWindowWStub(aClassName, aWindowName, aStyle, aX, aY, aWidth,
-                            aHeight, aParent, aMenu, aInstance, aParam);
-}
-
-HWND WINAPI
-CreateWindowAHook(LPCSTR aClassName, LPCSTR aWindowName, DWORD aStyle, int aX,
-                  int aY, int aWidth, int aHeight, HWND aParent, HMENU aMenu,
-                  HINSTANCE aInstance, LPVOID aParam)
-{
-  SuppressedNeuteringRegion doNotNeuterThisWindowYet;
-  return sCreateWindowAStub(aClassName, aWindowName, aStyle, aX, aY, aWidth,
-                            aHeight, aParent, aMenu, aInstance, aParam);
-}
-
-void
-InitCreateWindowHook()
-{
-  // Forcing these interceptions to be detours due to conflicts with
-  // NVIDIA Optimus DLLs that are injected into our process.
-  sUser32Interceptor.Init("user32.dll");
-  if (!sCreateWindowExWStub) {
-    sUser32Interceptor.AddDetour("CreateWindowExW",
-                               reinterpret_cast<intptr_t>(CreateWindowExWHook),
-                               (void**) &sCreateWindowExWStub);
-  }
-  if (!sCreateWindowExAStub) {
-    sUser32Interceptor.AddDetour("CreateWindowExA",
-                               reinterpret_cast<intptr_t>(CreateWindowExAHook),
-                               (void**) &sCreateWindowExAStub);
-  }
-  if (!sCreateWindowWStub) {
-    sUser32Interceptor.AddDetour("CreateWindowW",
-                               reinterpret_cast<intptr_t>(CreateWindowWHook),
-                               (void**) &sCreateWindowWStub);
-  }
-  if (!sCreateWindowAStub) {
-    sUser32Interceptor.AddDetour("CreateWindowA",
-                               reinterpret_cast<intptr_t>(CreateWindowAHook),
-                               (void**) &sCreateWindowAStub);
-  }
-}
-
 } // namespace
 
 // We need the pointer value of this in PluginInstanceChild.
@@ -582,19 +494,7 @@ WindowIsDeferredWindow(HWND hWnd)
 
   // Plugin windows that can trigger ipc calls in child:
   // 'ShockwaveFlashFullScreen' - flash fullscreen window
-  // 'QTNSHIDDEN' - QuickTime
-  // 'AGFullScreenWinClass' - silverlight fullscreen window
-  if (className.EqualsLiteral("ShockwaveFlashFullScreen") ||
-      className.EqualsLiteral("QTNSHIDDEN") ||
-      className.EqualsLiteral("AGFullScreenWinClass")) {
-    SetPropW(hWnd, k3rdPartyWindowProp, (HANDLE)1);
-    return true;
-  }
-
-  // Google Earth bridging msg window between the plugin instance and a separate
-  // earth process. The earth process can trigger a plugin incall on the browser
-  // at any time, which is badness if the instance is already making an incall.
-  if (className.EqualsLiteral("__geplugin_bridge_window__")) {
+  if (className.EqualsLiteral("ShockwaveFlashFullScreen")) {
     SetPropW(hWnd, k3rdPartyWindowProp, (HANDLE)1);
     return true;
   }
@@ -801,8 +701,6 @@ InitUIThread()
     gCOMWindow = FindCOMWindow();
   }
   MOZ_ASSERT(gWinEventHook);
-
-  InitCreateWindowHook();
 }
 
 } // namespace windows
@@ -898,7 +796,7 @@ void
 MessageChannel::SpinInternalEventLoop()
 {
   if (mozilla::PaintTracker::IsPainting()) {
-    NS_RUNTIMEABORT("Don't spin an event loop while painting.");
+    MOZ_CRASH("Don't spin an event loop while painting.");
   }
 
   NS_ASSERTION(mTopFrame && mTopFrame->mSpinNestedEvents,
@@ -1056,12 +954,79 @@ SuppressedNeuteringRegion::~SuppressedNeuteringRegion()
 
 bool SuppressedNeuteringRegion::sSuppressNeutering = false;
 
+#if defined(ACCESSIBILITY)
+bool
+MessageChannel::WaitForSyncNotifyWithA11yReentry()
+{
+  mMonitor->AssertCurrentThreadOwns();
+  MonitorAutoUnlock unlock(*mMonitor);
+
+  const DWORD waitStart = ::GetTickCount();
+  DWORD elapsed = 0;
+  DWORD timeout = mTimeoutMs == kNoTimeout ? INFINITE :
+                  static_cast<DWORD>(mTimeoutMs);
+  bool timedOut = false;
+
+  while (true) {
+    { // Scope for lock
+      MonitorAutoLock lock(*mMonitor);
+      if (!Connected()) {
+        break;
+      }
+    }
+    if (timeout != static_cast<DWORD>(kNoTimeout)) {
+      elapsed = ::GetTickCount() - waitStart;
+    }
+    if (elapsed >= timeout) {
+      timedOut = true;
+      break;
+    }
+    DWORD waitResult = 0;
+    ::SetLastError(ERROR_SUCCESS);
+    HRESULT hr = ::CoWaitForMultipleHandles(COWAIT_ALERTABLE,
+                                            timeout - elapsed,
+                                            1, &mEvent, &waitResult);
+    if (hr == RPC_S_CALLPENDING) {
+      timedOut = true;
+      break;
+    }
+    if (hr == S_OK) {
+      if (waitResult == 0) {
+        // mEvent is signaled
+        BOOL success = ::ResetEvent(mEvent);
+        if (!success) {
+          gfxDevCrash(mozilla::gfx::LogReason::MessageChannelInvalidHandle) <<
+                      "WindowsMessageChannel::WaitForSyncNotifyWithA11yReentry failed to reset event. GetLastError: " <<
+                      GetLastError();
+        }
+        break;
+      }
+      if (waitResult == WAIT_IO_COMPLETION) {
+        // APC fired, keep waiting
+        continue;
+      }
+    }
+    NS_ERROR("CoWaitForMultipleHandles failed");
+    break;
+  }
+
+  return WaitResponse(timedOut);
+}
+#endif
+
 bool
 MessageChannel::WaitForSyncNotify(bool aHandleWindowsMessages)
 {
   mMonitor->AssertCurrentThreadOwns();
 
   MOZ_ASSERT(gUIThreadId, "InitUIThread was not called!");
+
+#if defined(ACCESSIBILITY)
+  if (IsVistaOrLater() && (mFlags & REQUIRE_A11Y_REENTRY)) {
+    MOZ_ASSERT(!(mFlags & REQUIRE_DEFERRED_MESSAGE_PROTECTION));
+    return WaitForSyncNotifyWithA11yReentry();
+  }
+#endif
 
   // Use a blocking wait if this channel does not require
   // Windows message deferral behavior.
@@ -1213,7 +1178,7 @@ MessageChannel::WaitForInterruptNotify()
 
   if (!InterruptStackDepth() && !AwaitingIncomingMessage()) {
     // There is currently no way to recover from this condition.
-    NS_RUNTIMEABORT("StackDepth() is 0 in call to MessageChannel::WaitForNotify!");
+    MOZ_CRASH("StackDepth() is 0 in call to MessageChannel::WaitForNotify!");
   }
 
   NS_ASSERTION(mFlags & REQUIRE_DEFERRED_MESSAGE_PROTECTION,

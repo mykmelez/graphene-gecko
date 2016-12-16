@@ -63,6 +63,18 @@ function promiseWindow(url) {
   });
 }
 
+function whenDelayedStartupFinished(aWindow) {
+  return new Promise(resolve => {
+    info("Waiting for delayed startup to finish");
+    Services.obs.addObserver(function observer(aSubject, aTopic) {
+      if (aWindow == aSubject) {
+        Services.obs.removeObserver(observer, aTopic);
+        resolve();
+      }
+    }, "browser-delayed-startup-finished", false);
+  });
+}
+
 function promiseIndicatorWindow() {
   // We don't show the indicator window on Mac.
   if ("nsISystemStatusBar" in Ci)
@@ -71,7 +83,7 @@ function promiseIndicatorWindow() {
   return promiseWindow("chrome://browser/content/webrtcIndicator.xul");
 }
 
-function assertWebRTCIndicatorStatus(expected) {
+function* assertWebRTCIndicatorStatus(expected) {
   let ui = Cu.import("resource:///modules/webrtcUI.jsm", {}).webrtcUI;
   let expectedState = expected ? "visible" : "hidden";
   let msg = "WebRTC indicator " + expectedState;
@@ -90,7 +102,7 @@ function assertWebRTCIndicatorStatus(expected) {
     if (expected.audio)
       expectAudio = true;
     if (expected.screen)
-      expectScreen = true;
+      expectScreen = expected.screen;
   }
   is(ui.showCameraIndicator, expectVideo, "camera global indicator as expected");
   is(ui.showMicrophoneIndicator, expectAudio, "microphone global indicator as expected");
@@ -205,15 +217,25 @@ function expectObserverCalled(aTopic) {
   });
 }
 
-function expectNoObserverCalled() {
+function expectNoObserverCalled(aIgnoreDeviceEvents = false) {
   return new Promise(resolve => {
     let mm = _mm();
     mm.addMessageListener("Test:ExpectNoObserverCalled:Reply",
                           function listener({data}) {
       mm.removeMessageListener("Test:ExpectNoObserverCalled:Reply", listener);
       for (let topic in data) {
-        if (data[topic])
+        if (!data[topic])
+          continue;
+
+        // If we are stopping tracks that were created from 2 different
+        // getUserMedia calls, the "recording-device-events" notification is
+        // fired twice on Windows and Mac, and intermittently twice on Linux.
+        if (topic == "recording-device-events" && aIgnoreDeviceEvents) {
+          todo(false, "Got " + data[topic] + " unexpected " + topic +
+               " notifications, see bug 1320994");
+        } else {
           is(data[topic], 0, topic + " notification unexpected");
+        }
       }
       resolve();
     });
@@ -221,34 +243,32 @@ function expectNoObserverCalled() {
   });
 }
 
-function promiseTodoObserverNotCalled(aTopic) {
-  return new Promise(resolve => {
+function promiseMessageReceived() {
+  return new Promise((resolve, reject) => {
     let mm = _mm();
-    mm.addMessageListener("Test:TodoObserverNotCalled:Reply",
-                          function listener({data}) {
-      mm.removeMessageListener("Test:TodoObserverNotCalled:Reply", listener);
-      resolve(data.count);
+    mm.addMessageListener("Test:MessageReceived", function listener({data}) {
+      mm.removeMessageListener("Test:MessageReceived", listener);
+      resolve(data);
     });
-    mm.sendAsyncMessage("Test:TodoObserverNotCalled", aTopic);
+    mm.sendAsyncMessage("Test:WaitForMessage");
   });
 }
 
 function promiseMessage(aMessage, aAction) {
-  let deferred = Promise.defer();
-
-  content.addEventListener("message", function messageListener(event) {
-    content.removeEventListener("message", messageListener);
-    is(event.data, aMessage, "received " + aMessage);
-    if (event.data == aMessage)
-      deferred.resolve();
-    else
-      deferred.reject();
+  let promise = new Promise((resolve, reject) => {
+    promiseMessageReceived(aAction).then(data => {
+      is(data, aMessage, "received " + aMessage);
+      if (data == aMessage)
+        resolve();
+      else
+        reject();
+    });
   });
 
   if (aAction)
     aAction();
 
-  return deferred.promise;
+  return promise;
 }
 
 function promisePopupNotificationShown(aName, aAction) {
@@ -303,22 +323,17 @@ const kActionNever = 3;
 
 function activateSecondaryAction(aAction) {
   let notification = PopupNotifications.panel.firstChild;
-  notification.button.focus();
-  let popup = notification.menupopup;
-  popup.addEventListener("popupshown", function () {
-    popup.removeEventListener("popupshown", arguments.callee, false);
-
-    // Press 'down' as many time as needed to select the requested action.
-    while (aAction--)
-      EventUtils.synthesizeKey("VK_DOWN", {});
-
-    // Activate
-    EventUtils.synthesizeKey("VK_RETURN", {});
-  }, false);
-
-  // One down event to open the popup
-  EventUtils.synthesizeKey("VK_DOWN",
-                           { altKey: !navigator.platform.includes("Mac") });
+  switch (aAction) {
+    case kActionNever:
+      notification.checkbox.setAttribute("checked", true); // fallthrough
+    case kActionDeny:
+      notification.secondaryButton.click();
+      break;
+    case kActionAlways:
+      notification.checkbox.setAttribute("checked", true);
+      notification.button.click();
+      break;
+  }
 }
 
 function getMediaCaptureState() {
@@ -329,6 +344,30 @@ function getMediaCaptureState() {
     });
     mm.sendAsyncMessage("Test:GetMediaCaptureState");
   });
+}
+
+function* stopSharing(aType = "camera", aShouldKeepSharing = false,
+                      aExpectDoubleRecordingEvent = false) {
+  let promiseRecordingEvent = promiseObserverCalled("recording-device-events");
+  gIdentityHandler._identityBox.click();
+  let permissions = document.getElementById("identity-popup-permission-list");
+  let cancelButton =
+    permissions.querySelector(".identity-popup-permission-icon." + aType + "-icon ~ " +
+                              ".identity-popup-permission-remove-button");
+  cancelButton.click();
+  gIdentityHandler._identityPopup.hidden = true;
+  yield promiseRecordingEvent;
+  yield expectObserverCalled("getUserMedia:revoke");
+
+  // If we are stopping screen sharing and expect to still have another stream,
+  // "recording-window-ended" won't be fired.
+  if (!aShouldKeepSharing)
+    yield expectObserverCalled("recording-window-ended");
+
+  yield expectNoObserverCalled(aExpectDoubleRecordingEvent);
+
+  if (!aShouldKeepSharing)
+    yield* checkNotSharing();
 }
 
 function promiseRequestDevice(aRequestAudio, aRequestVideo, aFrameId, aType) {
@@ -346,29 +385,39 @@ function promiseRequestDevice(aRequestAudio, aRequestVideo, aFrameId, aType) {
 function* closeStream(aAlreadyClosed, aFrameId) {
   yield expectNoObserverCalled();
 
-  let promise;
-  if (!aAlreadyClosed)
-    promise = promiseObserverCalled("recording-device-events");
+  let promises;
+  if (!aAlreadyClosed) {
+    promises = [promiseObserverCalled("recording-device-events"),
+                promiseObserverCalled("recording-window-ended")];
+  }
 
   info("closing the stream");
-  yield ContentTask.spawn(gBrowser.selectedBrowser, aFrameId, function*(aFrameId) {
+  yield ContentTask.spawn(gBrowser.selectedBrowser, aFrameId, function*(contentFrameId) {
     let global = content.wrappedJSObject;
-    if (aFrameId)
-      global = global.document.getElementById(aFrameId).contentWindow;
+    if (contentFrameId)
+      global = global.document.getElementById(contentFrameId).contentWindow;
     global.closeStream();
   });
 
-  if (!aAlreadyClosed)
-    yield promise;
-
-  yield promiseNoPopupNotification("webRTC-sharingDevices");
-  if (!aAlreadyClosed)
-    yield expectObserverCalled("recording-window-ended");
+  if (promises)
+    yield Promise.all(promises);
 
   yield* assertWebRTCIndicatorStatus(null);
 }
 
-function checkDeviceSelectors(aAudio, aVideo) {
+function* reloadAndAssertClosedStreams() {
+  info("reloading the web page");
+  let promise = promiseObserverCalled("recording-device-events");
+  yield ContentTask.spawn(gBrowser.selectedBrowser, null,
+                          "() => content.location.reload()");
+  yield promise;
+
+  yield expectObserverCalled("recording-window-ended");
+  yield expectNoObserverCalled();
+  yield checkNotSharing();
+}
+
+function checkDeviceSelectors(aAudio, aVideo, aScreen) {
   let micSelector = document.getElementById("webRTC-selectMicrophone");
   if (aAudio)
     ok(!micSelector.hidden, "microphone selector visible");
@@ -380,19 +429,67 @@ function checkDeviceSelectors(aAudio, aVideo) {
     ok(!cameraSelector.hidden, "camera selector visible");
   else
     ok(cameraSelector.hidden, "camera selector hidden");
+
+  let screenSelector = document.getElementById("webRTC-selectWindowOrScreen");
+  if (aScreen)
+    ok(!screenSelector.hidden, "screen selector visible");
+  else
+    ok(screenSelector.hidden, "screen selector hidden");
 }
 
-function* checkSharingUI(aExpected) {
-  yield promisePopupNotification("webRTC-sharingDevices");
+function* checkSharingUI(aExpected, aWin = window) {
+  let doc = aWin.document;
+  // First check the icon above the control center (i) icon.
+  let identityBox = doc.getElementById("identity-box");
+  ok(identityBox.hasAttribute("sharing"), "sharing attribute is set");
+  let sharing = identityBox.getAttribute("sharing");
+  if (aExpected.screen)
+    is(sharing, "screen", "showing screen icon on the control center icon");
+  else if (aExpected.video)
+    is(sharing, "camera", "showing camera icon on the control center icon");
+  else if (aExpected.audio)
+    is(sharing, "microphone", "showing mic icon on the control center icon");
 
+  // Then check the sharing indicators inside the control center panel.
+  identityBox.click();
+  let permissions = doc.getElementById("identity-popup-permission-list");
+  for (let id of ["microphone", "camera", "screen"]) {
+    let convertId = idToConvert => {
+      if (idToConvert == "camera")
+        return "video";
+      if (idToConvert == "microphone")
+        return "audio";
+      return idToConvert;
+    };
+    let expected = aExpected[convertId(id)];
+    is(!!aWin.gIdentityHandler._sharingState[id], !!expected,
+       "sharing state for " + id + " as expected");
+    let icon = permissions.querySelectorAll(
+      ".identity-popup-permission-icon." + id + "-icon");
+    if (expected) {
+      is(icon.length, 1, "should show " + id + " icon in control center panel");
+      ok(icon[0].classList.contains("in-use"), "icon should have the in-use class");
+    } else if (!icon.length) {
+      ok(true, "should not show " + id + " icon in the control center panel");
+    } else {
+      // This will happen if there are persistent permissions set.
+      ok(!icon[0].classList.contains("in-use"),
+         "if shown, the " + id + " icon should not have the in-use class");
+      is(icon.length, 1, "should not show more than 1 " + id + " icon");
+    }
+  }
+  aWin.gIdentityHandler._identityPopup.hidden = true;
+
+  // Check the global indicators.
   yield* assertWebRTCIndicatorStatus(aExpected);
 }
 
 function* checkNotSharing() {
-  is((yield getMediaCaptureState()), "none", "expected nothing to be shared");
+  Assert.deepEqual((yield getMediaCaptureState()), {},
+                   "expected nothing to be shared");
 
-  ok(!PopupNotifications.getNotification("webRTC-sharingDevices"),
-     "no webRTC-sharingDevices popup notification");
+  ok(!document.getElementById("identity-box").hasAttribute("sharing"),
+     "no sharing indicator on the control center icon");
 
   yield* assertWebRTCIndicatorStatus(null);
 }

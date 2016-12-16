@@ -23,7 +23,7 @@ this.EXPORTED_SYMBOLS = ["SpatialNavigation"];
 
 var SpatialNavigation = {
   init: function(browser, callback) {
-          browser.addEventListener("keydown", function (event) {
+          browser.addEventListener("keydown", function(event) {
             _onInputKeyPress(event, callback);
           }, true);
   }
@@ -57,7 +57,7 @@ function dumpRect(desc, rect) {
 
 function dumpNodeCoord(desc, node) {
   let rect = node.getBoundingClientRect();
-  dump(desc + " " + node.tagName + " x:" + Math.round(rect.left + rect.width/2) +
+  dump(desc + " " + node.tagName + " x:" + Math.round(rect.left + rect.width / 2) +
        " y:" + Math.round(rect.top + rect.height / 2));
 }
 
@@ -68,8 +68,8 @@ const kShift = "shift";
 const kCtrl  = "ctrl";
 const kNone  = "none";
 
-function _onInputKeyPress (event, callback) {
-  //If Spatial Navigation isn't enabled, return.
+function _onInputKeyPress(event, callback) {
+  // If Spatial Navigation isn't enabled, return.
   if (!PrefObserver['enabled']) {
     return;
   }
@@ -98,11 +98,10 @@ function _onInputKeyPress (event, callback) {
       event.stopPropagation();
       event.preventDefault();
       return;
-    } else {
-      // Leave the action key press to get reported to the DOM as a return
-      // keypress.
-      return;
     }
+    // Leave the action key press to get reported to the DOM as a return
+    // keypress.
+    return;
   }
 
   // If it is not using the modifiers it should, return.
@@ -209,7 +208,7 @@ function _onInputKeyPress (event, callback) {
 
   focusManager.setFocus(bestElementToFocus, focusManager.FLAG_SHOWRING);
 
-  //if it is a text element, select all.
+  // if it is a text element, select all.
   if ((bestElementToFocus instanceof Ci.nsIDOMHTMLInputElement &&
        bestElementToFocus.mozIsTextField(false)) ||
       bestElementToFocus instanceof Ci.nsIDOMHTMLTextAreaElement) {
@@ -250,7 +249,6 @@ function _getRootBounds(windowUtils) {
 function _getBestToFocus(nodes, key, currentlyFocused) {
   let best = null;
   let bestDist;
-  let bestMid;
   let nodeMid;
   let currentlyFocusedMid = _getMidpoint(currentlyFocused);
   let currentlyFocusedRect = currentlyFocused.getBoundingClientRect();
@@ -519,7 +517,7 @@ var PrefObserver = {
       case "enabled":
         try {
           this.enabled = this._branch.getBoolPref("enabled");
-        } catch(e) {
+        } catch (e) {
           this.enabled = false;
         }
         break;
@@ -527,7 +525,7 @@ var PrefObserver = {
       case "xulContentEnabled":
         try {
           this.xulContentEnabled = this._branch.getBoolPref("xulContentEnabled");
-        } catch(e) {
+        } catch (e) {
           this.xulContentEnabled = false;
         }
         break;
@@ -561,42 +559,42 @@ var PrefObserver = {
               }
             }
           }
-        } catch(e) { }
+        } catch (e) { }
         break;
       }
 
       case "keyCode.up":
         try {
           this.keyCodeUp = this._branch.getIntPref("keyCode.up");
-        } catch(e) {
+        } catch (e) {
           this.keyCodeUp = Ci.nsIDOMKeyEvent.DOM_VK_UP;
         }
         break;
       case "keyCode.down":
         try {
           this.keyCodeDown = this._branch.getIntPref("keyCode.down");
-        } catch(e) {
+        } catch (e) {
           this.keyCodeDown = Ci.nsIDOMKeyEvent.DOM_VK_DOWN;
         }
         break;
       case "keyCode.left":
         try {
           this.keyCodeLeft = this._branch.getIntPref("keyCode.left");
-        } catch(e) {
+        } catch (e) {
           this.keyCodeLeft = Ci.nsIDOMKeyEvent.DOM_VK_LEFT;
         }
         break;
       case "keyCode.right":
         try {
           this.keyCodeRight = this._branch.getIntPref("keyCode.right");
-        } catch(e) {
+        } catch (e) {
           this.keyCodeRight = Ci.nsIDOMKeyEvent.DOM_VK_RIGHT;
         }
         break;
       case "keyCode.return":
         try {
           this.keyCodeReturn = this._branch.getIntPref("keyCode.return");
-        } catch(e) {
+        } catch (e) {
           this.keyCodeReturn = Ci.nsIDOMKeyEvent.DOM_VK_RETURN;
         }
         break;

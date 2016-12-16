@@ -17,6 +17,7 @@ class BaseShape;
 class LazyScript;
 class ObjectGroup;
 class Shape;
+class Scope;
 namespace jit {
 class JitCode;
 } // namespace jit
@@ -55,12 +56,14 @@ enum class TraceKind
     // The following kinds do not have an exposed C++ idiom.
     BaseShape = 0x0F,
     JitCode = 0x1F,
-    LazyScript = 0x2F
+    LazyScript = 0x2F,
+    Scope = 0x3F
 };
 const static uintptr_t OutOfLineTraceKindMask = 0x07;
 static_assert(uintptr_t(JS::TraceKind::BaseShape) & OutOfLineTraceKindMask, "mask bits are set");
 static_assert(uintptr_t(JS::TraceKind::JitCode) & OutOfLineTraceKindMask, "mask bits are set");
 static_assert(uintptr_t(JS::TraceKind::LazyScript) & OutOfLineTraceKindMask, "mask bits are set");
+static_assert(uintptr_t(JS::TraceKind::Scope) & OutOfLineTraceKindMask, "mask bits are set");
 
 // When this header is imported inside SpiderMonkey, the class definitions are
 // available and we can query those definitions to find the correct kind
@@ -77,6 +80,7 @@ struct MapTypeToTraceKind {
     D(BaseShape,     js::BaseShape,     true) \
     D(JitCode,       js::jit::JitCode,  true) \
     D(LazyScript,    js::LazyScript,    true) \
+    D(Scope,         js::Scope,         true) \
     D(Object,        JSObject,          true) \
     D(ObjectGroup,   js::ObjectGroup,   true) \
     D(Script,        JSScript,          true) \
@@ -160,12 +164,12 @@ template <> struct MapTypeToRootKind<JSFunction*> : public MapTypeToRootKind<JSO
 // type designated by |traceKind| as the functor's template argument. The
 // |thing| parameter is optional; without it, we simply pass through |... args|.
 
-// GCC and Clang require an explicit template declaration in front of the
-// specialization of operator() because it is a dependent template. MSVC, on
-// the other hand, gets very confused if we have a |template| token there.
+// VS2017+, GCC and Clang require an explicit template declaration in front of
+// the specialization of operator() because it is a dependent template. VS2015,
+// on the other hand, gets very confused if we have a |template| token there.
 // The clang-cl front end defines _MSC_VER, but still requires the explicit
 // template declaration, so we must test for __clang__ here as well.
-#if defined(_MSC_VER) && !defined(__clang__)
+#if (defined(_MSC_VER) && _MSC_VER < 1910) && !defined(__clang__)
 # define JS_DEPENDENT_TEMPLATE_HINT
 #else
 # define JS_DEPENDENT_TEMPLATE_HINT template

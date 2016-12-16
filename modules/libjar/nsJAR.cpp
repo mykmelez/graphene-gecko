@@ -13,6 +13,7 @@
 #include "nsIDataSignatureVerifier.h"
 #include "prprf.h"
 #include "mozilla/Omnijar.h"
+#include "mozilla/Unused.h"
 
 #ifdef XP_UNIX
   #include <sys/stat.h>
@@ -1112,7 +1113,6 @@ nsZipReaderCache::IsCached(nsIFile* zipFile, bool* aResult)
 {
   NS_ENSURE_ARG_POINTER(zipFile);
   nsresult rv;
-  nsCOMPtr<nsIZipReader> antiLockZipGrip;
   MutexAutoLock lock(mLock);
 
   nsAutoCString uri;
@@ -1131,7 +1131,6 @@ nsZipReaderCache::GetZip(nsIFile* zipFile, nsIZipReader* *result)
 {
   NS_ENSURE_ARG_POINTER(zipFile);
   nsresult rv;
-  nsCOMPtr<nsIZipReader> antiLockZipGrip;
   MutexAutoLock lock(mLock);
 
 #ifdef ZIP_CACHE_HIT_RATE
@@ -1362,7 +1361,14 @@ nsZipReaderCache::Observe(nsISupports *aSubject,
     mZips.Clear();
   }
   else if (strcmp(aTopic, "flush-cache-entry") == 0) {
-    nsCOMPtr<nsIFile> file = do_QueryInterface(aSubject);
+    nsCOMPtr<nsIFile> file;
+    if (aSubject) {
+      file = do_QueryInterface(aSubject);
+    } else if (aSomeData) {
+      nsDependentString fileName(aSomeData);
+      Unused << NS_NewLocalFile(fileName, false, getter_AddRefs(file));
+    }
+
     if (!file)
       return NS_OK;
 

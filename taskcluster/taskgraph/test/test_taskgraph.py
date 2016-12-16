@@ -8,35 +8,45 @@ import unittest
 
 from ..graph import Graph
 from ..task.docker_image import DockerImageTask
-from ..task.legacy import LegacyTask
+from ..task.transform import TransformTask
 from ..taskgraph import TaskGraph
 from mozunit import main
+from taskgraph.util.docker import INDEX_PREFIX
 
 
 class TestTargetTasks(unittest.TestCase):
 
     def test_from_json(self):
-        legacy_dict = {
-            'attributes': {'kind': 'legacy'},
-            'task': {},
-            'dependencies': {},
-            'label': 'a',
-            'kind_implementation': 'taskgraph.task.legacy:LegacyTask'
+        task = {
+            "routes": [],
+            "extra": {
+                "imageMeta": {
+                    "contextHash": "<hash>",
+                    "imageName": "<image>",
+                    "level": "1"
+                }
+            }
         }
+        index_paths = ["{}.level-{}.<image>.hash.<hash>".format(INDEX_PREFIX, level)
+                       for level in range(1, 4)]
         graph = TaskGraph(tasks={
-            'a': LegacyTask(kind='legacy',
-                            label='a',
-                            attributes={},
-                            task={},
-                            task_dict=legacy_dict),
+            'a': TransformTask(
+                kind='fancy',
+                task={
+                    'label': 'a',
+                    'attributes': {},
+                    'dependencies': {},
+                    'when': {},
+                    'task': {'task': 'def'},
+                }),
             'b': DockerImageTask(kind='docker-image',
                                  label='b',
                                  attributes={},
-                                 task={"routes": []},
-                                 index_paths=[]),
+                                 task=task,
+                                 index_paths=index_paths),
         }, graph=Graph(nodes={'a', 'b'}, edges=set()))
 
-        tasks, new_graph = TaskGraph.from_json(graph.to_json(), "taskcluster/ci")
+        tasks, new_graph = TaskGraph.from_json(graph.to_json())
         self.assertEqual(graph.tasks['a'], new_graph.tasks['a'])
         self.assertEqual(graph, new_graph)
 

@@ -45,6 +45,7 @@
                 'angle_enable_gl%': 1,
             }],
         ],
+        'angle_enable_null%': 1, # Available on all platforms
     },
     'includes':
     [
@@ -58,7 +59,7 @@
         {
             'target_name': 'angle_common',
             'type': 'static_library',
-            'includes': [ '../build/common_defines.gypi', ],
+            'includes': [ '../gyp/common_defines.gypi', ],
             'sources':
             [
                 '<@(libangle_common_sources)',
@@ -143,9 +144,36 @@
         },
 
         {
+            'target_name': 'angle_image_util',
+            'type': 'static_library',
+            'includes': [ '../gyp/common_defines.gypi', ],
+            'sources':
+            [
+                '<@(libangle_image_util_sources)',
+            ],
+            'include_dirs':
+            [
+                '.',
+                '../include',
+            ],
+            'dependencies':
+            [
+                'angle_common',
+            ],
+            'direct_dependent_settings':
+            {
+                'include_dirs':
+                [
+                    '<(angle_path)/include',
+                    '<(angle_path)/src',
+                ],
+            },
+        },
+
+        {
             'target_name': 'copy_scripts',
             'type': 'none',
-            'includes': [ '../build/common_defines.gypi', ],
+            'includes': [ '../gyp/common_defines.gypi', ],
             'hard_dependency': 1,
             'copies':
             [
@@ -172,7 +200,7 @@
                 {
                     'target_name': 'commit_id',
                     'type': 'none',
-                    'includes': [ '../build/common_defines.gypi', ],
+                    'includes': [ '../gyp/common_defines.gypi', ],
                     'dependencies': [ 'copy_scripts', ],
                     'hard_dependency': 1,
                     'actions':
@@ -214,7 +242,7 @@
                     'target_name': 'commit_id',
                     'type': 'none',
                     'hard_dependency': 1,
-                    'includes': [ '../build/common_defines.gypi', ],
+                    'includes': [ '../gyp/common_defines.gypi', ],
                     'copies':
                     [
                         {
@@ -247,7 +275,7 @@
                     'target_name': 'copy_compiler_dll',
                     'type': 'none',
                     'dependencies': [ 'copy_scripts', ],
-                    'includes': [ '../build/common_defines.gypi', ],
+                    'includes': [ '../gyp/common_defines.gypi', ],
                     'conditions':
                     [
                         ['angle_build_winrt==0',

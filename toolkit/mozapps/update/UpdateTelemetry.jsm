@@ -64,18 +64,7 @@ this.AUSTLMY = {
   CHK_DISABLED_FOR_SESSION: 16,
   // Unable to perform a background check while offline (no notification)
   CHK_OFFLINE: 17,
-  // No update found certificate check failed and threshold reached
-  // (possible mitm attack notification)
-  CHK_CERT_ATTR_NO_UPDATE_PROMPT: 18,
-  // No update found certificate check failed and threshold not reached
-  // (no notification)
-  CHK_CERT_ATTR_NO_UPDATE_SILENT: 19,
-  // Update found certificate check failed and threshold reached
-  // (possible mitm attack notification)
-  CHK_CERT_ATTR_WITH_UPDATE_PROMPT: 20,
-  // Update found certificate check failed and threshold not reached
-  // (no notification)
-  CHK_CERT_ATTR_WITH_UPDATE_SILENT: 21,
+  // Note: codes 18 - 21 were removed along with the certificate checking code.
   // General update check failure and threshold reached
   // (check failure notification)
   CHK_GENERAL_ERROR_PROMPT: 22,
@@ -99,10 +88,6 @@ this.AUSTLMY = {
   CHK_NO_OS_ABI: 31,
   // Invalid url for app.update.url default preference (no notification)
   CHK_INVALID_DEFAULT_URL: 32,
-  // Invalid url for app.update.url user preference (no notification)
-  CHK_INVALID_USER_OVERRIDE_URL: 33,
-  // Invalid url for app.update.url.override user preference (no notification)
-  CHK_INVALID_DEFAULT_OVERRIDE_URL: 34,
   // Update elevation failures or cancelations threshold reached for this
   // version, OSX only (no notification)
   CHK_ELEVATION_DISABLED_FOR_VERSION: 35,
@@ -249,7 +234,7 @@ this.AUSTLMY = {
       let id = "UPDATE_STATE_CODE_" + aSuffix;
       // enumerated type histogram
       Services.telemetry.getHistogramById(id).add(aCode);
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   },
@@ -274,7 +259,7 @@ this.AUSTLMY = {
       let id = "UPDATE_STATUS_ERROR_CODE_" + aSuffix;
       // enumerated type histogram
       Services.telemetry.getHistogramById(id).add(aCode);
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   },
@@ -301,7 +286,7 @@ this.AUSTLMY = {
             let id = "UPDATE_INVALID_LASTUPDATETIME_" + aSuffix;
             // count type histogram
             Services.telemetry.getHistogramById(id).add();
-          } catch(e) {
+          } catch (e) {
             Cu.reportError(e);
           }
         } else {
@@ -311,7 +296,7 @@ this.AUSTLMY = {
             let id = "UPDATE_LAST_NOTIFY_INTERVAL_DAYS_" + aSuffix;
             // exponential type histogram
             Services.telemetry.getHistogramById(id).add(intervalDays);
-          } catch(e) {
+          } catch (e) {
             Cu.reportError(e);
           }
         }
@@ -379,7 +364,7 @@ this.AUSTLMY = {
       let id = "UPDATE_SERVICE_INSTALLED_" + aSuffix;
       // boolean type histogram
       Services.telemetry.getHistogramById(id).add(aInstalled);
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
 
@@ -393,7 +378,7 @@ this.AUSTLMY = {
       // Was the service at some point installed, but is now uninstalled?
       attempted = wrk.readIntValue("Attempted");
       wrk.close();
-    } catch(e) {
+    } catch (e) {
       // Since this will throw if the registry key doesn't exist (e.g. the
       // service has never been installed) don't report an error.
     }
@@ -404,7 +389,7 @@ this.AUSTLMY = {
         // count type histogram
         Services.telemetry.getHistogramById(id).add();
       }
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   },
@@ -435,7 +420,7 @@ this.AUSTLMY = {
         // count type histogram
         Services.telemetry.getHistogramById(aID).add();
       }
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   },
@@ -466,7 +451,7 @@ this.AUSTLMY = {
         // enumerated or exponential type histogram
         Services.telemetry.getHistogramById(aID).add(val);
       }
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   },
@@ -495,7 +480,7 @@ this.AUSTLMY = {
         // count type histogram
         Services.telemetry.getHistogramById(aID).add();
       }
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
     }
   }

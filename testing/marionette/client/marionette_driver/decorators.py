@@ -2,11 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from errors import MarionetteException
 from functools import wraps
 import socket
-import sys
-import traceback
 
 
 def _find_marionette_in_args(*args, **kwargs):
@@ -18,33 +15,18 @@ def _find_marionette_in_args(*args, **kwargs):
     return m
 
 
-def do_crash_check(func, always=False):
-    """Decorator which checks for crashes after the function has run.
-
-    :param always: If False, only checks for crashes if an exception
-                   was raised. If True, always checks for crashes.
-    """
+def do_process_check(func):
+    """Decorator which checks the process status after the function has run."""
     @wraps(func)
     def _(*args, **kwargs):
-        def check():
-            m = _find_marionette_in_args(*args, **kwargs)
-            try:
-                m.check_for_crash()
-            except:
-                # don't want to lose the original exception
-                traceback.print_exc()
-
         try:
             return func(*args, **kwargs)
-        except (MarionetteException, socket.error, IOError) as e:
-            exc, val, tb = sys.exc_info()
-            if not isinstance(e, MarionetteException) or type(e) is MarionetteException:
-                if not always:
-                    check()
-            raise exc, val, tb
-        finally:
-            if always:
-                check()
+        except (socket.error, socket.timeout):
+            # In case of socket failures which will also include crashes of the
+            # application, make sure to handle those correctly.
+            m = _find_marionette_in_args(*args, **kwargs)
+            m._handle_socket_failure()
+
     return _
 
 

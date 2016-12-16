@@ -472,6 +472,8 @@ nsFilePicker::PutLocalFile(const nsString& inTitle, const nsString& inDefaultNam
       thePanel.allowedFileTypes = @[extension];
     }
   }
+  // Allow users to change the extension.
+  thePanel.allowsOtherFileTypes = YES;
 
   // set up default directory
   NSString *theDir = PanelDefaultDirectory();
@@ -564,6 +566,10 @@ nsFilePicker::SetDialogTitle(const nsString& inTitle, id aPanel)
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
   [aPanel setTitle:[NSString stringWithCharacters:(const unichar*)inTitle.get() length:inTitle.Length()]];
+
+  if (!mOkButtonLabel.IsEmpty()) {
+    [aPanel setPrompt:[NSString stringWithCharacters:(const unichar*)mOkButtonLabel.get() length:mOkButtonLabel.Length()]];
+  }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 } 

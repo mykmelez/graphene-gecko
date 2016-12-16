@@ -2,6 +2,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
@@ -12,6 +13,12 @@ Cu.import("resource://gre/modules/UpdateUtils.jsm");
  // The amount of people to be part of e10s
 const TEST_THRESHOLD = {
   "beta"    : 0.5,  // 50%
+  "release" : 1.0,  // 100%
+};
+
+const ADDON_ROLLOUT_POLICY = {
+  "beta"    : "51alladdons", // Any WebExtension or addon except with mpc = false
+  "release" : "50allmpc", // Any WebExtension or addon with mpc = true
 };
 
 const PREF_COHORT_SAMPLE       = "e10s.rollout.cohortSample";
@@ -20,7 +27,9 @@ const PREF_E10S_OPTED_IN       = "browser.tabs.remote.autostart";
 const PREF_E10S_FORCE_ENABLED  = "browser.tabs.remote.force-enable";
 const PREF_E10S_FORCE_DISABLED = "browser.tabs.remote.force-disable";
 const PREF_TOGGLE_E10S         = "browser.tabs.remote.autostart.2";
-
+const PREF_E10S_ADDON_POLICY   = "extensions.e10s.rollout.policy";
+const PREF_E10S_ADDON_BLOCKLIST = "extensions.e10s.rollout.blocklist";
+const PREF_E10S_HAS_NONEXEMPT_ADDON = "extensions.e10s.rollout.hasAddon";
 
 function startup() {
   // In theory we only need to run this once (on install()), but
@@ -53,20 +62,54 @@ function defineCohort() {
     return;
   }
 
+  let addonPolicy = "unknown";
+  if (updateChannel in ADDON_ROLLOUT_POLICY) {
+    addonPolicy = ADDON_ROLLOUT_POLICY[updateChannel];
+    Preferences.set(PREF_E10S_ADDON_POLICY, addonPolicy);
+    // This is also the proper place to set the blocklist pref
+    // in case it is necessary.
+
+    // Tab Mix Plus exception tracked at bug 1185672.
+    Preferences.set(PREF_E10S_ADDON_BLOCKLIST,
+                    "{dc572301-7619-498c-a57d-39143191b318}");
+  } else {
+    Preferences.reset(PREF_E10S_ADDON_POLICY);
+  }
+
   let userOptedOut = optedOut();
   let userOptedIn = optedIn();
   let disqualified = (Services.appinfo.multiprocessBlockPolicy != 0);
   let testGroup = (getUserSample() < TEST_THRESHOLD[updateChannel]);
+  let hasNonExemptAddon = Preferences.get(PREF_E10S_HAS_NONEXEMPT_ADDON, false);
+  let temporaryDisqualification = getTemporaryDisqualification();
+
+  let cohortPrefix = "";
+  if (disqualified) {
+    cohortPrefix = "disqualified-";
+  } else if (hasNonExemptAddon) {
+    cohortPrefix = `addons-set${addonPolicy}-`;
+  }
 
   if (userOptedOut) {
     setCohort("optedOut");
   } else if (userOptedIn) {
     setCohort("optedIn");
+  } else if (temporaryDisqualification != "") {
+    // Users who are disqualified by the backend (from multiprocessBlockPolicy)
+    // can be put into either the test or control groups, because e10s will
+    // still be denied by the backend, which is useful so that the E10S_STATUS
+    // telemetry probe can be correctly set.
+
+    // For these volatile disqualification reasons, however, we must not try
+    // to activate e10s because the backend doesn't know about it. E10S_STATUS
+    // here will be accumulated as "2 - Disabled", which is fine too.
+    setCohort(`temp-disqualified-${temporaryDisqualification}`);
+    Preferences.reset(PREF_TOGGLE_E10S);
   } else if (testGroup) {
-    setCohort(disqualified ? "disqualified-test" : "test");
+    setCohort(`${cohortPrefix}test`);
     Preferences.set(PREF_TOGGLE_E10S, true);
   } else {
-    setCohort(disqualified ? "disqualified-control" : "control");
+    setCohort(`${cohortPrefix}control`);
     Preferences.reset(PREF_TOGGLE_E10S);
   }
 }
@@ -118,4 +161,14 @@ function optedOut() {
   return Preferences.get(PREF_E10S_FORCE_DISABLED, false) ||
          (Preferences.isSet(PREF_TOGGLE_E10S) &&
           Preferences.get(PREF_TOGGLE_E10S) == false);
+}
+
+/* If this function returns a non-empty string, it
+ * means that this particular user should be temporarily
+ * disqualified due to some particular reason.
+ * If a user shouldn't be disqualified, then an empty
+ * string must be returned.
+ */
+function getTemporaryDisqualification() {
+  return "";
 }

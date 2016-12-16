@@ -44,6 +44,14 @@ public:
 void
 ServiceWorkerRegistrationInfo::Clear()
 {
+  if (mEvaluatingWorker) {
+    mEvaluatingWorker = nullptr;
+  }
+
+  UpdateRegistrationStateProperties(WhichServiceWorker::INSTALLING_WORKER |
+                                    WhichServiceWorker::WAITING_WORKER |
+                                    WhichServiceWorker::ACTIVE_WORKER, Invalidate);
+
   if (mInstallingWorker) {
     mInstallingWorker->UpdateState(ServiceWorkerState::Redundant);
     mInstallingWorker->WorkerPrivate()->NoteDeadServiceWorkerInfo();
@@ -62,10 +70,6 @@ ServiceWorkerRegistrationInfo::Clear()
     mActiveWorker->WorkerPrivate()->NoteDeadServiceWorkerInfo();
     mActiveWorker = nullptr;
   }
-
-  NotifyListenersOnChange(WhichServiceWorker::INSTALLING_WORKER |
-                          WhichServiceWorker::WAITING_WORKER |
-                          WhichServiceWorker::ACTIVE_WORKER);
 }
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(const nsACString& aScope,
@@ -186,8 +190,12 @@ ServiceWorkerRegistrationInfo::RemoveListener(
 already_AddRefed<ServiceWorkerInfo>
 ServiceWorkerRegistrationInfo::GetServiceWorkerInfoById(uint64_t aId)
 {
+  AssertIsOnMainThread();
+
   RefPtr<ServiceWorkerInfo> serviceWorker;
-  if (mInstallingWorker && mInstallingWorker->ID() == aId) {
+  if (mEvaluatingWorker && mEvaluatingWorker->ID() == aId) {
+    serviceWorker = mEvaluatingWorker;
+  } else if (mInstallingWorker && mInstallingWorker->ID() == aId) {
     serviceWorker = mInstallingWorker;
   } else if (mWaitingWorker && mWaitingWorker->ID() == aId) {
     serviceWorker = mWaitingWorker;
@@ -207,14 +215,16 @@ ServiceWorkerRegistrationInfo::TryToActivateAsync()
 }
 
 /*
- * TryToActivate should not be called directly, use TryToACtivateAsync instead.
+ * TryToActivate should not be called directly, use TryToActivateAsync instead.
  */
 void
 ServiceWorkerRegistrationInfo::TryToActivate()
 {
-  if (!IsControllingDocuments() ||
-      // Waiting worker will be removed if the registration is removed
-      (mWaitingWorker && mWaitingWorker->SkipWaitingFlag())) {
+  AssertIsOnMainThread();
+  bool controlling = IsControllingDocuments();
+  bool skipWaiting = mWaitingWorker && mWaitingWorker->SkipWaitingFlag();
+  bool idle = IsIdle();
+  if (idle && (!controlling || skipWaiting)) {
     Activate();
   }
 }
@@ -230,10 +240,8 @@ ServiceWorkerRegistrationInfo::Activate()
 
   // FIXME(nsm): Unlink appcache if there is one.
 
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  swm->CheckPendingReadyPromises();
-
   // "Queue a task to fire a simple event named controllerchange..."
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   nsCOMPtr<nsIRunnable> controllerChangeRunnable =
     NewRunnableMethod<RefPtr<ServiceWorkerRegistrationInfo>>(
       swm, &ServiceWorkerManager::FireControllerChange, this);
@@ -299,16 +307,40 @@ ServiceWorkerRegistrationInfo::IsLastUpdateCheckTimeOverOneDay() const
 }
 
 void
-ServiceWorkerRegistrationInfo::NotifyListenersOnChange(WhichServiceWorker aChangedWorkers)
+ServiceWorkerRegistrationInfo::AsyncUpdateRegistrationStateProperties(WhichServiceWorker aWorker,
+                                                                      TransitionType aTransition)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aChangedWorkers & (WhichServiceWorker::INSTALLING_WORKER |
-                                WhichServiceWorker::WAITING_WORKER |
-                                WhichServiceWorker::ACTIVE_WORKER));
-
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  swm->InvalidateServiceWorkerRegistrationWorker(this, aChangedWorkers);
+  if (aTransition == Invalidate) {
+    swm->InvalidateServiceWorkerRegistrationWorker(this, aWorker);
+  } else {
+    MOZ_ASSERT(aTransition == TransitionToNextState);
+    swm->TransitionServiceWorkerRegistrationWorker(this, aWorker);
 
+    if (aWorker == WhichServiceWorker::WAITING_WORKER) {
+      swm->CheckPendingReadyPromises();
+    }
+  }
+}
+
+void
+ServiceWorkerRegistrationInfo::UpdateRegistrationStateProperties(WhichServiceWorker aWorker,
+                                                                 TransitionType aTransition)
+{
+  AssertIsOnMainThread();
+
+  nsCOMPtr<nsIRunnable> runnable = NewRunnableMethod<WhichServiceWorker, TransitionType>(
+         this,
+         &ServiceWorkerRegistrationInfo::AsyncUpdateRegistrationStateProperties, aWorker, aTransition);
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable.forget()));
+
+  NotifyChromeRegistrationListeners();
+}
+
+void
+ServiceWorkerRegistrationInfo::NotifyChromeRegistrationListeners()
+{
   nsTArray<nsCOMPtr<nsIServiceWorkerRegistrationInfoListener>> listeners(mListeners);
   for (size_t index = 0; index < listeners.Length(); ++index) {
     listeners[index]->OnChange();
@@ -364,6 +396,13 @@ ServiceWorkerRegistrationInfo::CheckAndClearIfUpdateNeeded()
 }
 
 ServiceWorkerInfo*
+ServiceWorkerRegistrationInfo::GetEvaluating() const
+{
+  AssertIsOnMainThread();
+  return mEvaluatingWorker;
+}
+
+ServiceWorkerInfo*
 ServiceWorkerRegistrationInfo::GetInstalling() const
 {
   AssertIsOnMainThread();
@@ -385,6 +424,32 @@ ServiceWorkerRegistrationInfo::GetActive() const
 }
 
 void
+ServiceWorkerRegistrationInfo::SetEvaluating(ServiceWorkerInfo* aServiceWorker)
+{
+  AssertIsOnMainThread();
+  MOZ_ASSERT(aServiceWorker);
+  MOZ_ASSERT(!mEvaluatingWorker);
+  MOZ_ASSERT(!mInstallingWorker);
+  MOZ_ASSERT(mWaitingWorker != aServiceWorker);
+  MOZ_ASSERT(mActiveWorker != aServiceWorker);
+
+  mEvaluatingWorker = aServiceWorker;
+}
+
+void
+ServiceWorkerRegistrationInfo::ClearEvaluating()
+{
+  AssertIsOnMainThread();
+
+  if (!mEvaluatingWorker) {
+    return;
+  }
+
+  mEvaluatingWorker->UpdateState(ServiceWorkerState::Redundant);
+  mEvaluatingWorker = nullptr;
+}
+
+void
 ServiceWorkerRegistrationInfo::ClearInstalling()
 {
   AssertIsOnMainThread();
@@ -393,23 +458,22 @@ ServiceWorkerRegistrationInfo::ClearInstalling()
     return;
   }
 
+  UpdateRegistrationStateProperties(WhichServiceWorker::INSTALLING_WORKER,
+                                    Invalidate);
   mInstallingWorker->UpdateState(ServiceWorkerState::Redundant);
   mInstallingWorker = nullptr;
-  NotifyListenersOnChange(WhichServiceWorker::INSTALLING_WORKER);
 }
 
 void
-ServiceWorkerRegistrationInfo::SetInstalling(ServiceWorkerInfo* aServiceWorker)
+ServiceWorkerRegistrationInfo::TransitionEvaluatingToInstalling()
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aServiceWorker);
+  MOZ_ASSERT(mEvaluatingWorker);
   MOZ_ASSERT(!mInstallingWorker);
-  MOZ_ASSERT(mWaitingWorker != aServiceWorker);
-  MOZ_ASSERT(mActiveWorker != aServiceWorker);
 
-  mInstallingWorker = aServiceWorker;
+  mInstallingWorker = mEvaluatingWorker.forget();
   mInstallingWorker->UpdateState(ServiceWorkerState::Installing);
-  NotifyListenersOnChange(WhichServiceWorker::INSTALLING_WORKER);
+  NotifyChromeRegistrationListeners();
 }
 
 void
@@ -424,9 +488,9 @@ ServiceWorkerRegistrationInfo::TransitionInstallingToWaiting()
   }
 
   mWaitingWorker = mInstallingWorker.forget();
+  UpdateRegistrationStateProperties(WhichServiceWorker::INSTALLING_WORKER,
+                                    TransitionToNextState);
   mWaitingWorker->UpdateState(ServiceWorkerState::Installed);
-  NotifyListenersOnChange(WhichServiceWorker::INSTALLING_WORKER |
-                          WhichServiceWorker::WAITING_WORKER);
 
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   swm->StoreRegistration(mPrincipal, this);
@@ -456,7 +520,7 @@ ServiceWorkerRegistrationInfo::SetActive(ServiceWorkerInfo* aServiceWorker)
   // Activated state.
   mActiveWorker = aServiceWorker;
   mActiveWorker->SetActivateStateUncheckedWithoutEvent(ServiceWorkerState::Activated);
-  NotifyListenersOnChange(WhichServiceWorker::ACTIVE_WORKER);
+  UpdateRegistrationStateProperties(WhichServiceWorker::ACTIVE_WORKER, Invalidate);
 }
 
 void
@@ -473,9 +537,15 @@ ServiceWorkerRegistrationInfo::TransitionWaitingToActive()
   // We are transitioning from waiting to active normally, so go to
   // the activating state.
   mActiveWorker = mWaitingWorker.forget();
+  UpdateRegistrationStateProperties(WhichServiceWorker::WAITING_WORKER,
+                                    TransitionToNextState);
   mActiveWorker->UpdateState(ServiceWorkerState::Activating);
-  NotifyListenersOnChange(WhichServiceWorker::WAITING_WORKER |
-                          WhichServiceWorker::ACTIVE_WORKER);
+}
+
+bool
+ServiceWorkerRegistrationInfo::IsIdle() const
+{
+  return !mActiveWorker || mActiveWorker->WorkerPrivate()->IsIdle();
 }
 
 END_WORKERS_NAMESPACE

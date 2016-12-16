@@ -16,7 +16,6 @@ const REMOTE_INSTALL_URL = TESTROOT + "addons/browser_searching.xpi";
 var gManagerWindow;
 var gCategoryUtilities;
 var gProvider;
-var gServer;
 var gAddonInstalled = false;
 
 function test() {
@@ -212,21 +211,21 @@ function get_expected_results(aSortBy, aLocalExpected) {
   var expectedOrder = null, unknownOrder = null;
   switch (aSortBy) {
     case "relevancescore":
-      expectedOrder = [ "addon2"  , "remote1", "install2", "addon1",
-                        "install1", "remote2", "remote3" , "remote4" ];
+      expectedOrder = [ "addon2", "remote1", "install2", "addon1",
+                        "install1", "remote2", "remote3", "remote4" ];
       unknownOrder = [];
       break;
     case "name":
       // Defaults to ascending order
-      expectedOrder = [ "install1", "remote1",  "addon2" , "remote2",
-                        "remote3" , "addon1" , "install2", "remote4" ];
+      expectedOrder = [ "install1", "remote1",  "addon2", "remote2",
+                        "remote3", "addon1", "install2", "remote4" ];
       unknownOrder = [];
       break;
     case "dateUpdated":
       expectedOrder = [ "addon1", "addon2" ];
       // Updated date not available for installs and remote add-ons
       unknownOrder = [ "install1", "install2", "remote1",
-                       "remote2" , "remote3" , "remote4" ];
+                       "remote2", "remote3", "remote4" ];
       break;
     default:
       ok(false, "Should recognize sortBy when checking the order of items");
@@ -378,25 +377,6 @@ function get_addon_item(aName) {
   var rows = list.getElementsByTagName("richlistitem");
   for (var row of rows) {
     if (row.mAddon && row.mAddon.id == id)
-      return row;
-  }
-
-  return null;
-}
-
-/*
- * Get item for a specific install by name
- *
- * @param  aName
- *         The name of the install to search for
- * @return Row of install if found, null otherwise
- */
-function get_install_item(aName) {
-  var sourceURI = "http://example.com/" + aName + ".xpi";
-  var list = gManagerWindow.document.getElementById("search-list");
-  var rows = list.getElementsByTagName("richlistitem");
-  for (var row of rows) {
-    if (row.mInstall && row.mInstall.sourceURI.spec == sourceURI)
       return row;
   }
 

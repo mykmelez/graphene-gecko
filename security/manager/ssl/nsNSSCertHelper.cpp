@@ -6,9 +6,10 @@
 
 #include <algorithm>
 
+#include "ScopedNSSTypes.h"
 #include "mozilla/Casting.h"
 #include "mozilla/NotNull.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
 #include "nsComponentManagerUtils.h"
@@ -627,7 +628,7 @@ ProcessRawBytes(nsINSSComponent *nssComponent, SECItem *data,
   uint32_t i;
   char buffer[5];
   for (i=0; i<data->len; i++) {
-    snprintf_literal(buffer, "%02x ", data->data[i]);
+    SprintfLiteral(buffer, "%02x ", data->data[i]);
     AppendASCIItoUTF16(buffer, text);
     if ((i+1)%16 == 0) {
       text.AppendLiteral(SEPARATOR);
@@ -971,7 +972,7 @@ ProcessGeneralName(const UniquePLArenaPool& arena, CERTGeneralName* current,
 	    && guid.len == 16) {
 	  char buf[40];
 	  unsigned char *d = guid.data;
-          snprintf_literal(buf,
+          SprintfLiteral(buf,
             "{%.2x%.2x%.2x%.2x-%.2x%.2x-%.2x%.2x-%.2x%.2x-%.2x%.2x%.2x%.2x%.2x%.2x}",
             d[3], d[2], d[1], d[0], d[5], d[4], d[7], d[6],
             d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
@@ -1199,7 +1200,7 @@ ProcessUserNotice(SECItem* derNotice, nsAString& text,
       unsigned long number;
       char buffer[60];
       if (SEC_ASN1DecodeInteger(*itemList, &number) == SECSuccess) {
-        snprintf_literal(buffer, "#%d", number);
+        SprintfLiteral(buffer, "#%lu", number);
         if (itemList != notice->noticeReference.noticeNumbers)
           text.AppendLiteral(", ");
         AppendASCIItoUTF16(buffer, text);
@@ -1232,7 +1233,6 @@ ProcessUserNotice(SECItem* derNotice, nsAString& text,
 static nsresult
 ProcessCertificatePolicies(SECItem  *extData, 
 			   nsAString &text,
-                           SECOidTag ev_oid_tag, // SEC_OID_UNKNOWN means: not EV
 			   nsINSSComponent *nssComponent)
 {
   CERTPolicyInfo **policyInfos, *policyInfo;
@@ -1259,26 +1259,10 @@ ProcessCertificatePolicies(SECItem  *extData,
       text.Append(local);
     }
 
-    bool needColon = true;
-    if (ev_oid_tag != SEC_OID_UNKNOWN) {
-      // This is an EV cert. Let's see if this oid is the EV oid,
-      // because we want to display the EV information string
-      // next to the correct OID.
-
-      if (policyInfo->oid == ev_oid_tag) {
-        text.Append(':');
-        text.AppendLiteral(SEPARATOR);
-        needColon = false;
-        nssComponent->GetPIPNSSBundleString("CertDumpPolicyOidEV", local);
-        text.Append(local);
-      }
-    }
-
     if (policyInfo->policyQualifiers) {
       /* Add all qualifiers on separate lines, indented */
       policyQualifiers = policyInfo->policyQualifiers;
-      if (needColon)
-        text.Append(':');
+      text.Append(':');
       text.AppendLiteral(SEPARATOR);
       while (*policyQualifiers) {
 	text.AppendLiteral("  ");
@@ -1488,7 +1472,7 @@ ProcessMSCAVersion(SECItem  *extData,
 
   /* Apparently, the encoding is <minor><major>, with 16 bits each */
   char buf[50];
-  if (snprintf_literal(buf, "%d.%d", version & 0xFFFF, version >> 16) <= 0) {
+  if (SprintfLiteral(buf, "%lu.%lu", version & 0xFFFF, version >> 16) <= 0) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1499,7 +1483,6 @@ ProcessMSCAVersion(SECItem  *extData,
 static nsresult
 ProcessExtensionData(SECOidTag oidTag, SECItem *extData, 
                      nsAString &text, 
-                     SECOidTag ev_oid_tag, // SEC_OID_UNKNOWN means: not EV
                      nsINSSComponent *nssComponent)
 {
   nsresult rv;
@@ -1524,7 +1507,7 @@ ProcessExtensionData(SECOidTag oidTag, SECItem *extData,
     rv = ProcessAuthKeyId(extData, text, nssComponent);
     break;
   case SEC_OID_X509_CERTIFICATE_POLICIES:
-    rv = ProcessCertificatePolicies(extData, text, ev_oid_tag, nssComponent);
+    rv = ProcessCertificatePolicies(extData, text, nssComponent);
     break;
   case SEC_OID_X509_CRL_DIST_POINTS:
     rv = ProcessCrlDistPoints(extData, text, nssComponent);
@@ -1549,7 +1532,6 @@ ProcessExtensionData(SECOidTag oidTag, SECItem *extData,
 
 static nsresult
 ProcessSingleExtension(CERTCertExtension *extension,
-                       SECOidTag ev_oid_tag, // SEC_OID_UNKNOWN means: not EV
                        nsINSSComponent *nssComponent,
                        nsIASN1PrintableItem **retExtension)
 {
@@ -1571,7 +1553,7 @@ ProcessSingleExtension(CERTCertExtension *extension,
   }
   text.AppendLiteral(SEPARATOR);
   nsresult rv = ProcessExtensionData(oidTag, &extension->value, extvalue, 
-                                     ev_oid_tag, nssComponent);
+                                     nssComponent);
   if (NS_FAILED(rv)) {
     extvalue.Truncate();
     rv = ProcessRawBytes(nssComponent, &extension->value, extvalue, false);
@@ -1767,7 +1749,6 @@ ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo *spki,
 static nsresult
 ProcessExtensions(CERTCertExtension **extensions, 
                   nsIASN1Sequence *parentSequence,
-                  SECOidTag ev_oid_tag, // SEC_OID_UNKNOWN means: not EV
                   nsINSSComponent *nssComponent)
 {
   nsCOMPtr<nsIASN1Sequence> extensionSequence = new nsNSSASN1Sequence;
@@ -1782,7 +1763,6 @@ ProcessExtensions(CERTCertExtension **extensions,
   extensionSequence->GetASN1Objects(getter_AddRefs(asn1Objects));
   for (i=0; extensions[i] != nullptr; i++) {
     rv = ProcessSingleExtension(extensions[i], 
-                                ev_oid_tag,
                                 nssComponent,
                                 getter_AddRefs(newExtension));
     if (NS_FAILED(rv))
@@ -1904,7 +1884,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence **retSequence,
 
   validityData->GetNotBefore(&notBefore);
   validityData->GetNotAfter(&notAfter);
-  validityData = 0;
+  validityData = nullptr;
   rv = ProcessTime(notBefore, text.get(), validitySequence);
   if (NS_FAILED(rv))
     return rv;
@@ -1965,19 +1945,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence **retSequence,
 
   }
   if (mCert->extensions) {
-    SECOidTag ev_oid_tag = SEC_OID_UNKNOWN;
-
-#ifndef MOZ_NO_EV_CERTS
-    bool validEV;
-    rv = hasValidEVOidTag(ev_oid_tag, validEV);
-    if (NS_FAILED(rv))
-      return rv;
-
-    if (!validEV)
-      ev_oid_tag = SEC_OID_UNKNOWN;
-#endif
-
-    rv = ProcessExtensions(mCert->extensions, sequence, ev_oid_tag, nssComponent);
+    rv = ProcessExtensions(mCert->extensions, sequence, nssComponent);
     if (NS_FAILED(rv))
       return rv;
   }
@@ -1999,13 +1967,16 @@ nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
   nsCOMPtr<nsIMutableArray> asn1Objects;
   sequence->GetASN1Objects(getter_AddRefs(asn1Objects));
 
-  nsAutoString title;
-  nsresult rv = GetWindowTitle(title);
+  nsAutoString displayName;
+  nsresult rv = GetDisplayName(displayName);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
-  sequence->SetDisplayName(title);
+  rv = sequence->SetDisplayName(displayName);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
   sequence.forget(aRetVal);
 
   // This sequence will be contain the tbsCertificate, signatureAlgorithm,
@@ -2064,37 +2035,6 @@ getCertType(CERTCertificate *cert)
   if (cert->emailAddr)
     return nsIX509Cert::EMAIL_CERT;
   return nsIX509Cert::UNKNOWN_CERT;
-}
-
-CERTCertNicknames*
-getNSSCertNicknamesFromCertList(const UniqueCERTCertList& certList)
-{
-  static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
-
-  nsresult rv;
-
-  nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID, &rv));
-  if (NS_FAILED(rv))
-    return nullptr;
-
-  nsAutoString expiredString, notYetValidString;
-  nsAutoString expiredStringLeadingSpace, notYetValidStringLeadingSpace;
-
-  nssComponent->GetPIPNSSBundleString("NicknameExpired", expiredString);
-  nssComponent->GetPIPNSSBundleString("NicknameNotYetValid", notYetValidString);
-
-  expiredStringLeadingSpace.Append(' ');
-  expiredStringLeadingSpace.Append(expiredString);
-
-  notYetValidStringLeadingSpace.Append(' ');
-  notYetValidStringLeadingSpace.Append(notYetValidString);
-
-  NS_ConvertUTF16toUTF8 aUtf8ExpiredString(expiredStringLeadingSpace);
-  NS_ConvertUTF16toUTF8 aUtf8NotYetValidString(notYetValidStringLeadingSpace);
-
-  return CERT_NicknameStringsFromCertList(certList.get(),
-                                          const_cast<char*>(aUtf8ExpiredString.get()),
-                                          const_cast<char*>(aUtf8NotYetValidString.get()));
 }
 
 nsresult

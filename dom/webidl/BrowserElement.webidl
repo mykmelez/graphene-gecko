@@ -152,11 +152,6 @@ interface BrowserElementPrivileged {
   [Throws,
    Pref="dom.mozBrowserFramesEnabled",
    Func="nsDocument::IsBrowserElementEnabled"]
-  void setNFCFocus(boolean isFocus);
-
-  [Throws,
-   Pref="dom.mozBrowserFramesEnabled",
-   Func="nsDocument::IsBrowserElementEnabled"]
   void findAll(DOMString searchString, BrowserFindCaseSensitivity caseSensitivity);
 
   [Throws,

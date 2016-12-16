@@ -24,6 +24,7 @@ namespace dom {
 class PerformanceEntry;
 class PerformanceNavigation;
 class PerformanceObserver;
+class PerformanceService;
 class PerformanceTiming;
 
 namespace workers {
@@ -45,8 +46,7 @@ public:
   static already_AddRefed<Performance>
   CreateForMainThread(nsPIDOMWindowInner* aWindow,
                       nsDOMNavigationTiming* aDOMTiming,
-                      nsITimedChannel* aChannel,
-                      Performance* aParentPerformance);
+                      nsITimedChannel* aChannel);
 
   static already_AddRefed<Performance>
   CreateForWorker(workers::WorkerPrivate* aWorkerPrivate);
@@ -68,7 +68,9 @@ public:
 
   void ClearResourceTimings();
 
-  virtual DOMHighResTimeStamp Now() const = 0;
+  DOMHighResTimeStamp Now() const;
+
+  DOMHighResTimeStamp TimeOrigin();
 
   void Mark(const nsAString& aName, ErrorResult& aRv);
 
@@ -100,8 +102,6 @@ public:
   virtual nsDOMNavigationTiming* GetDOMTiming() const = 0;
 
   virtual nsITimedChannel* GetChannel() const = 0;
-
-  virtual Performance* GetParentPerformance() const = 0;
 
 protected:
   Performance();
@@ -154,6 +154,8 @@ private:
   uint64_t mResourceTimingBufferSize;
   static const uint64_t kDefaultResourceTimingBufferSize = 150;
   bool mPendingNotificationObserversTask;
+
+  RefPtr<PerformanceService> mPerformanceService;
 };
 
 } // namespace dom

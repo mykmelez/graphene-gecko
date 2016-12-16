@@ -6,11 +6,7 @@
 
 window.performance.mark('gecko-shell-loadstart');
 
-Cu.import('resource://gre/modules/ContactService.jsm');
-Cu.import('resource://gre/modules/AlarmService.jsm');
 Cu.import('resource://gre/modules/NotificationDB.jsm');
-Cu.import('resource://gre/modules/Payment.jsm');
-Cu.import("resource://gre/modules/AppsUtils.jsm");
 Cu.import('resource://gre/modules/UserAgentOverrides.jsm');
 Cu.import('resource://gre/modules/Keyboard.jsm');
 Cu.import('resource://gre/modules/ErrorPage.jsm');
@@ -18,7 +14,6 @@ Cu.import('resource://gre/modules/AlertsHelper.jsm');
 Cu.import('resource://gre/modules/SystemUpdateService.jsm');
 
 if (isGonk) {
-  Cu.import('resource://gre/modules/NetworkStatsService.jsm');
   Cu.import('resource://gre/modules/ResourceStatsService.jsm');
 }
 
@@ -28,7 +23,6 @@ SignInToWebsiteController.init();
 
 Cu.import('resource://gre/modules/FxAccountsMgmtService.jsm');
 Cu.import('resource://gre/modules/DownloadsAPI.jsm');
-Cu.import('resource://gre/modules/MobileIdentityManager.jsm');
 Cu.import('resource://gre/modules/PresentationDeviceInfoManager.jsm');
 Cu.import('resource://gre/modules/AboutServiceWorkers.jsm');
 
@@ -66,10 +60,8 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   '@mozilla.org/toolkit/captive-detector;1',
                                   'nsICaptivePortalDetector');
 
-if (AppConstants.MOZ_SAFE_BROWSING) {
-  XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
-                "resource://gre/modules/SafeBrowsing.jsm");
-}
+XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
+              "resource://gre/modules/SafeBrowsing.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "SafeMode",
                                   "resource://gre/modules/SafeMode.jsm");
@@ -364,7 +356,6 @@ var shell = {
       document.createElementNS('http://www.w3.org/1999/xhtml', 'html:iframe');
     systemAppFrame.setAttribute('id', 'systemapp');
     systemAppFrame.setAttribute('mozbrowser', 'true');
-    systemAppFrame.setAttribute('mozapp', manifestURL);
     systemAppFrame.setAttribute('allowfullscreen', 'true');
     systemAppFrame.setAttribute('src', 'blank.html');
     let container = document.getElementById('container');
@@ -436,11 +427,9 @@ var shell = {
     ppmm.addMessageListener("mail-handler", this);
     ppmm.addMessageListener("file-picker", this);
 
-    if (AppConstants.MOZ_SAFE_BROWSING) {
-      setTimeout(function() {
-        SafeBrowsing.init();
-      }, 5000);
-    }
+    setTimeout(function() {
+      SafeBrowsing.init();
+    }, 5000);
   },
 
   stop: function shell_stop() {
@@ -715,8 +704,6 @@ var shell = {
 
     Services.obs.notifyObservers(null, 'content-start', null);
 
-    isGonk && Cu.import('resource://gre/modules/OperatorApps.jsm');
-
     if (AppConstants.MOZ_GRAPHENE &&
         Services.prefs.getBoolPref("b2g.nativeWindowGeometry.fullscreen")) {
       window.fullScreen = true;
@@ -955,9 +942,6 @@ window.addEventListener('ContentStart', function cr_onContentStart() {
 });
 
 window.addEventListener('ContentStart', function update_onContentStart() {
-  Cu.import('resource://gre/modules/WebappsUpdater.jsm');
-  WebappsUpdater.handleContentStart(shell);
-
   if (!AppConstants.MOZ_UPDATER) {
     return;
   }

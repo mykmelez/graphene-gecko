@@ -6,7 +6,7 @@
 
 #include "mozilla/dom/cache/CacheStorage.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/CacheStorageBinding.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/Response.h"
@@ -76,14 +76,7 @@ IsTrusted(const PrincipalInfo& aPrincipalInfo, bool aTestingPrefEnabled)
   }
 
   // Require a ContentPrincipal to avoid null principal, etc.
-  //
-  // Also, an unknown appId means that this principal was created for the
-  // codebase without all the security information from the end document or
-  // worker.  We require exact knowledge of this information before allowing
-  // the caller to touch the disk using the Cache API.
-  if (NS_WARN_IF(aPrincipalInfo.type() != PrincipalInfo::TContentPrincipalInfo ||
-                 aPrincipalInfo.get_ContentPrincipalInfo().attrs().mAppId ==
-                 nsIScriptSecurityManager::UNKNOWN_APP_ID)) {
+  if (NS_WARN_IF(aPrincipalInfo.type() != PrincipalInfo::TContentPrincipalInfo)) {
     return false;
   }
 
@@ -119,7 +112,6 @@ IsTrusted(const PrincipalInfo& aPrincipalInfo, bool aTestingPrefEnabled)
 
   nsAutoCString scheme(Substring(flatURL, schemePos, schemeLen));
   if (scheme.LowerCaseEqualsLiteral("https") ||
-      scheme.LowerCaseEqualsLiteral("app") ||
       scheme.LowerCaseEqualsLiteral("file")) {
     return true;
   }
@@ -196,7 +188,7 @@ CacheStorage::CreateOnWorker(Namespace aNamespace, nsIGlobalObject* aGlobal,
     return ref.forget();
   }
 
-  if (aWorkerPrivate->IsInPrivateBrowsing()) {
+  if (aWorkerPrivate->GetOriginAttributes().mPrivateBrowsingId > 0) {
     NS_WARNING("CacheStorage not supported during private browsing.");
     RefPtr<CacheStorage> ref = new CacheStorage(NS_ERROR_DOM_SECURITY_ERR);
     return ref.forget();

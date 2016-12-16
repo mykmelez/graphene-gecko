@@ -26,6 +26,7 @@ EXPORTS += [
     'gfxFontPrefLangList.h',
     'gfxFontTest.h',
     'gfxFontUtils.h',
+    'gfxFontVariations.h',
     'gfxGradientCache.h',
     'gfxImageSurface.h',
     'gfxLineSegment.h',
@@ -51,28 +52,13 @@ EXPORTS += [
 ]
 
 EXPORTS.mozilla.gfx += [
+    'D3D11Checks.h',
+    'DeviceManagerDx.h',
     'PrintTarget.h',
     'PrintTargetThebes.h',
 ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
-    EXPORTS += [
-        'gfxAndroidPlatform.h',
-        'gfxFT2FontBase.h',
-        'gfxFT2Fonts.h',
-    ]
-    EXPORTS.mozilla.gfx += [
-        'PrintTargetPDF.h',
-    ]
-    SOURCES += [
-        'gfxAndroidPlatform.cpp',
-        'gfxFT2FontBase.cpp',
-        'gfxFT2FontList.cpp',
-        'gfxFT2Fonts.cpp',
-        'gfxFT2Utils.cpp',
-        'PrintTargetPDF.cpp',
-    ]
-elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     EXPORTS += [
         'gfxAndroidPlatform.h',
         'gfxFT2FontBase.h',
@@ -104,7 +90,7 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'gfxPlatformMac.cpp',
         'gfxQuartzNativeDrawing.cpp',
         'gfxQuartzSurface.cpp',
-        'PrintTargetCG.cpp',
+        'PrintTargetCG.mm',
     ]
 elif 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     EXPORTS += [
@@ -232,6 +218,19 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     UNIFIED_SOURCES += [
         'gfxMacPlatformFontList.mm',
     ]
+elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+    UNIFIED_SOURCES += [
+        'D3D11Checks.cpp',
+        'DeviceManagerDx.cpp',
+    ]
+
+if CONFIG['MOZ_ENABLE_SKIA_PDF']:
+    EXPORTS.mozilla.gfx += [
+        'PrintTargetSkPDF.h',
+    ]
+    SOURCES += [
+        'PrintTargetSkPDF.cpp',
+    ]
 
 # We prefer to use ICU for normalization functions, but currently it is only
 # available if we're building with the Intl API enabled:
@@ -254,10 +253,7 @@ LOCAL_INCLUDES += [
     '/dom/xml',
 ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-  LOCAL_INCLUDES += ['/widget/gonk']
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3', 'gonk'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3'):
     DEFINES['MOZ_ENABLE_FREETYPE'] = True
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
@@ -270,18 +266,14 @@ CXXFLAGS += CONFIG['TK_CFLAGS']
 CFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
 CFLAGS += CONFIG['TK_CFLAGS']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android'):
     CXXFLAGS += CONFIG['CAIRO_FT_CFLAGS']
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
-    # This is set for "normal Android", that is, when Gecko is running on
-    # top of the android java runtime.
-    DEFINES['MOZ_USING_ANDROID_JAVA_WIDGETS'] = True
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3'):
     CXXFLAGS += CONFIG['MOZ_PANGO_CFLAGS']
 
 LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
+LOCAL_INCLUDES += ['/media/libyuv/include']
 
 DEFINES['GRAPHITE2_STATIC'] = True
 

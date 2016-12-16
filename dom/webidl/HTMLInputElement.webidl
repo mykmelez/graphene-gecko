@@ -21,6 +21,7 @@ enum SelectionMode {
 
 interface nsIControllers;
 
+[HTMLConstructor]
 interface HTMLInputElement : HTMLElement {
   [Pure, SetterThrows]
            attribute DOMString accept;
@@ -65,6 +66,8 @@ interface HTMLInputElement : HTMLElement {
   [Pure, SetterThrows]
            attribute DOMString min;
   [Pure, SetterThrows]
+           attribute long minLength;
+  [Pure, SetterThrows]
            attribute boolean multiple;
   [Pure, SetterThrows]
            attribute DOMString name;
@@ -86,7 +89,7 @@ interface HTMLInputElement : HTMLElement {
            attribute DOMString type;
   [Pure, SetterThrows]
            attribute DOMString defaultValue;
-  [Pure, TreatNullAs=EmptyString, Throws]
+  [Pure, TreatNullAs=EmptyString, SetterThrows, NeedsCallerType]
            attribute DOMString value;
   [Throws, Func="HTMLInputElement::ValueAsDateEnabled"]
            attribute Date? valueAsDate;
@@ -115,11 +118,11 @@ interface HTMLInputElement : HTMLElement {
 
   [Throws]
            // TODO: unsigned vs signed
-           attribute long selectionStart;
+           attribute long? selectionStart;
   [Throws]
-           attribute long selectionEnd;
+           attribute long? selectionEnd;
   [Throws]
-           attribute DOMString selectionDirection;
+           attribute DOMString? selectionDirection;
   [Throws]
   void setRangeText(DOMString replacement);
   [Throws]
@@ -144,7 +147,8 @@ partial interface HTMLInputElement {
 
   [GetterThrows, ChromeOnly]
   readonly attribute nsIControllers        controllers;
-  [GetterThrows]
+  // Binaryname because we have a FragmentOrElement function named "TextLength()".
+  [NeedsCallerType, BinaryName="inputTextLength"]
   readonly attribute long                  textLength;
 
   [Throws, ChromeOnly]
@@ -194,7 +198,7 @@ partial interface HTMLInputElement {
   // This is similar to set .value on nsIDOMInput/TextAreaElements, but handling
   // of the value change is closer to the normal user input, so 'change' event
   // for example will be dispatched when focusing out the element.
-  [ChromeOnly]
+  [Func="IsChromeOrXBL", NeedsSubjectPrincipal]
   void setUserInput(DOMString input);
 };
 
@@ -226,9 +230,34 @@ HTMLInputElement implements MozPhonetic;
 
 // Webkit/Blink
 partial interface HTMLInputElement {
-  [Pref="dom.webkitBlink.filesystem.enabled", Cached, Constant]
-  readonly attribute sequence<Entry> webkitEntries;
+  [Pref="dom.webkitBlink.filesystem.enabled", Frozen, Cached, Pure]
+  readonly attribute sequence<FileSystemEntry> webkitEntries;
 
   [Pref="dom.webkitBlink.dirPicker.enabled", BinaryName="WebkitDirectoryAttr", SetterThrows]
           attribute boolean webkitdirectory;
+};
+
+dictionary DateTimeValue {
+  long hour;
+  long minute;
+};
+
+partial interface HTMLInputElement {
+  [Pref="dom.forms.datetime", ChromeOnly]
+  DateTimeValue getDateTimeInputBoxValue();
+
+  [Pref="dom.forms.datetime", ChromeOnly]
+  void updateDateTimeInputBox(optional DateTimeValue value);
+
+  [Pref="dom.forms.datetime", ChromeOnly]
+  void setDateTimePickerState(boolean open);
+
+  [Pref="dom.forms.datetime", Func="IsChromeOrXBL"]
+  void openDateTimePicker(optional DateTimeValue initialValue);
+
+  [Pref="dom.forms.datetime", Func="IsChromeOrXBL"]
+  void updateDateTimePicker(optional DateTimeValue value);
+
+  [Pref="dom.forms.datetime", Func="IsChromeOrXBL"]
+  void closeDateTimePicker();
 };

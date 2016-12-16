@@ -77,6 +77,7 @@ JsepCodecDescToCodecConfig(const JsepCodecDescription& aCodec,
                                   desc.mBitrate,
                                   desc.mFECEnabled);
   (*aConfig)->mMaxPlaybackRate = desc.mMaxPlaybackRate;
+  (*aConfig)->mDtmfEnabled = desc.mDtmfEnabled;
 
   return NS_OK;
 }
@@ -149,6 +150,7 @@ JsepCodecDescToCodecConfig(const JsepCodecDescription& aCodec,
   configRaw->mNackFbTypes = desc.mNackFbTypes;
   configRaw->mCcmFbTypes = desc.mCcmFbTypes;
   configRaw->mRembFbSet = desc.RtcpFbRembIsSet();
+  configRaw->mFECFbSet = desc.mFECEnabled;
 
   *aConfig = configRaw;
   return NS_OK;
@@ -165,6 +167,8 @@ NegotiatedDetailsToVideoCodecConfigs(const JsepTrackNegotiatedDetails& aDetails,
       return NS_ERROR_INVALID_ARG;
     }
 
+    config->mTias = aDetails.GetTias();
+
     for (size_t i = 0; i < aDetails.GetEncodingCount(); ++i) {
       const JsepTrackEncoding& jsepEncoding(aDetails.GetEncoding(i));
       if (jsepEncoding.HasFormat(codec->mDefaultPt)) {
@@ -174,6 +178,7 @@ NegotiatedDetailsToVideoCodecConfigs(const JsepTrackNegotiatedDetails& aDetails,
         config->mSimulcastEncodings.push_back(encoding);
       }
     }
+
     aConfigs->values.push_back(config);
   }
 
@@ -476,6 +481,20 @@ MediaPipelineFactory::CreateOrUpdateMediaPipeline(
         return NS_ERROR_FAILURE;
       }
     }
+  } else {
+    if (receiving) {
+      auto error = conduit->StopReceiving();
+      if (error) {
+        MOZ_MTLOG(ML_ERROR, "StopReceiving failed: " << error);
+        return NS_ERROR_FAILURE;
+      }
+    } else {
+      auto error = conduit->StopTransmitting();
+      if (error) {
+        MOZ_MTLOG(ML_ERROR, "StopTransmitting failed: " << error);
+        return NS_ERROR_FAILURE;
+      }
+    }
   }
 
   RefPtr<MediaPipeline> pipeline =
@@ -731,6 +750,13 @@ MediaPipelineFactory::GetOrCreateAudioConduit(
 
     conduit->SetLocalCNAME(aTrack.GetCNAME().c_str());
 
+    if (configs.values.size() > 1
+        && configs.values.back()->mName == "telephone-event") {
+      // we have a telephone event codec, so we need to make sure
+      // the dynamic pt is set properly
+      conduit->SetDtmfPayloadType(configs.values.back()->mType);
+    }
+
     auto error = conduit->ConfigureSendMediaCodec(configs.values[0]);
     if (error) {
       MOZ_MTLOG(ML_ERROR, "ConfigureSendMediaCodec failed: " << error);
@@ -862,7 +888,22 @@ MediaPipelineFactory::GetOrCreateVideoConduit(
       return NS_ERROR_FAILURE;
     }
 
+
     auto error = conduit->ConfigureSendMediaCodec(configs.values[0]);
+
+    const SdpExtmapAttributeList::Extmap* rtpStreamIdExt =
+        aTrack.GetNegotiatedDetails()->GetExt(
+            "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id");
+
+    if (rtpStreamIdExt) {
+      MOZ_MTLOG(ML_DEBUG, "Calling EnableRTPSenderIdExtension");
+      error = conduit->EnableRTPStreamIdExtension(true, rtpStreamIdExt->entry);
+
+      if (error) {
+        MOZ_MTLOG(ML_ERROR, "EnableRTPSenderIdExtension failed: " << error);
+        return NS_ERROR_FAILURE;
+      }
+    }
 
     if (error) {
       MOZ_MTLOG(ML_ERROR, "ConfigureSendMediaCodec failed: " << error);

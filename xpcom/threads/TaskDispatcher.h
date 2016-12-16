@@ -8,8 +8,9 @@
 #define TaskDispatcher_h_
 
 #include "mozilla/AbstractThread.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "nsISupportsImpl.h"
 #include "nsTArray.h"
@@ -174,7 +175,7 @@ private:
     public:
       explicit TaskGroupRunnable(UniquePtr<PerThreadTaskGroup>&& aTasks) : mTasks(Move(aTasks)) {}
 
-      NS_IMETHODIMP Run()
+      NS_IMETHOD Run() override
       {
         // State change tasks get run all together before any code is run, so
         // that all state changes are made in an atomic unit.

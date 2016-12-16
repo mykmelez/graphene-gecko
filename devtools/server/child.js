@@ -61,8 +61,8 @@ try {
       try {
         m = require(module);
 
-        if (!setupChild in m) {
-          dumpn(`ERROR: module '${module}' does not export 'setupChild'`);
+        if (!(setupChild in m)) {
+          dumpn(`ERROR: module '${module}' does not export '${setupChild}'`);
           return false;
         }
 
@@ -85,17 +85,21 @@ try {
     addMessageListener("debug:setup-in-child", onSetupInChild);
 
     let onDisconnect = DevToolsUtils.makeInfallible(function (msg) {
-      removeMessageListener("debug:disconnect", onDisconnect);
+      let prefix = msg.data.prefix;
+      let conn = connections.get(prefix);
+      if (!conn) {
+        // Several copies of this frame script can be running for a single frame since it
+        // is loaded once for each DevTools connection to the frame.  If this disconnect
+        // request doesn't match a connection known here, ignore it.
+        return;
+      }
 
+      removeMessageListener("debug:disconnect", onDisconnect);
       // Call DebuggerServerConnection.close to destroy all child actors. It should end up
       // calling DebuggerServerConnection.onClosed that would actually cleanup all actor
       // pools.
-      let prefix = msg.data.prefix;
-      let conn = connections.get(prefix);
-      if (conn) {
-        conn.close();
-        connections.delete(prefix);
-      }
+      conn.close();
+      connections.delete(prefix);
     });
     addMessageListener("debug:disconnect", onDisconnect);
 
@@ -108,15 +112,6 @@ try {
       }
       connections.clear();
     });
-
-    let onInspect = DevToolsUtils.makeInfallible(function (msg) {
-      // Store the node to be inspected in a global variable (gInspectingNode). Later
-      // we'll fetch this variable again using the findInspectingNode request over the
-      // remote debugging protocol.
-      let inspector = require("devtools/server/actors/inspector");
-      inspector.setInspectingNode(msg.objects.node);
-    });
-    addMessageListener("debug:inspect", onInspect);
   })();
 } catch (e) {
   dump(`Exception in app child process: ${e}\n`);

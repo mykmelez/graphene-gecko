@@ -19,10 +19,6 @@
 #include "VP8TrackEncoder.h"
 #include "WebMWriter.h"
 #endif
-#ifdef MOZ_OMX_ENCODER
-#include "OmxTrackEncoder.h"
-#include "ISOMediaWriter.h"
-#endif
 
 #ifdef LOG
 #undef LOG
@@ -32,6 +28,13 @@ mozilla::LazyLogModule gMediaEncoderLog("MediaEncoder");
 #define LOG(type, msg) MOZ_LOG(gMediaEncoderLog, type, msg)
 
 namespace mozilla {
+
+void
+MediaStreamVideoRecorderSink::SetCurrentFrames(const VideoSegment& aSegment)
+{
+  MOZ_ASSERT(mVideoEncoder);
+  mVideoEncoder->SetCurrentFrames(aSegment);
+}
 
 void
 MediaEncoder::SetDirectConnect(bool aConnected)
@@ -53,8 +56,9 @@ MediaEncoder::NotifyRealtimeData(MediaStreamGraph* aGraph,
       mAudioEncoder->NotifyQueuedTrackChanges(aGraph, aID,
                                               aTrackOffset, aTrackEvents,
                                               aRealtimeMedia);
-
-    } else if (mVideoEncoder && aRealtimeMedia.GetType() == MediaSegment::VIDEO) {
+    } else if (mVideoEncoder &&
+               aRealtimeMedia.GetType() == MediaSegment::VIDEO &&
+               aTrackEvents != TrackEventCommand::TRACK_EVENT_NONE) {
       mVideoEncoder->NotifyQueuedTrackChanges(aGraph, aID,
                                               aTrackOffset, aTrackEvents,
                                               aRealtimeMedia);
@@ -141,7 +145,8 @@ MediaEncoder::NotifyEvent(MediaStreamGraph* aGraph,
 already_AddRefed<MediaEncoder>
 MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint32_t aAudioBitrate,
                             uint32_t aVideoBitrate, uint32_t aBitrate,
-                            uint8_t aTrackTypes)
+                            uint8_t aTrackTypes,
+                            TrackRate aTrackRate)
 {
   PROFILER_LABEL("MediaEncoder", "CreateEncoder",
     js::ProfileEntry::Category::OTHER);
@@ -164,44 +169,13 @@ MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint32_t aAudioBitrate,
       audioEncoder = new OpusTrackEncoder();
       NS_ENSURE_TRUE(audioEncoder, nullptr);
     }
-    videoEncoder = new VP8TrackEncoder();
+    videoEncoder = new VP8TrackEncoder(aTrackRate);
     writer = new WebMWriter(aTrackTypes);
     NS_ENSURE_TRUE(writer, nullptr);
     NS_ENSURE_TRUE(videoEncoder, nullptr);
     mimeType = NS_LITERAL_STRING(VIDEO_WEBM);
   }
 #endif //MOZ_WEBM_ENCODER
-#ifdef MOZ_OMX_ENCODER
-  else if (MediaEncoder::IsOMXEncoderEnabled() &&
-          (aMIMEType.EqualsLiteral(VIDEO_MP4) ||
-          (aTrackTypes & ContainerWriter::CREATE_VIDEO_TRACK))) {
-    if (aTrackTypes & ContainerWriter::CREATE_AUDIO_TRACK) {
-      audioEncoder = new OmxAACAudioTrackEncoder();
-      NS_ENSURE_TRUE(audioEncoder, nullptr);
-    }
-    videoEncoder = new OmxVideoTrackEncoder();
-    writer = new ISOMediaWriter(aTrackTypes);
-    NS_ENSURE_TRUE(writer, nullptr);
-    NS_ENSURE_TRUE(videoEncoder, nullptr);
-    mimeType = NS_LITERAL_STRING(VIDEO_MP4);
-  } else if (MediaEncoder::IsOMXEncoderEnabled() &&
-            (aMIMEType.EqualsLiteral(AUDIO_3GPP))) {
-    audioEncoder = new OmxAMRAudioTrackEncoder();
-    NS_ENSURE_TRUE(audioEncoder, nullptr);
-
-    writer = new ISOMediaWriter(aTrackTypes, ISOMediaWriter::TYPE_FRAG_3GP);
-    NS_ENSURE_TRUE(writer, nullptr);
-    mimeType = NS_LITERAL_STRING(AUDIO_3GPP);
-  } else if (MediaEncoder::IsOMXEncoderEnabled() &&
-            (aMIMEType.EqualsLiteral(AUDIO_3GPP2))) {
-    audioEncoder = new OmxEVRCAudioTrackEncoder();
-    NS_ENSURE_TRUE(audioEncoder, nullptr);
-
-    writer = new ISOMediaWriter(aTrackTypes, ISOMediaWriter::TYPE_FRAG_3G2);
-    NS_ENSURE_TRUE(writer, nullptr);
-    mimeType = NS_LITERAL_STRING(AUDIO_3GPP2) ;
-  }
-#endif // MOZ_OMX_ENCODER
   else if (MediaDecoder::IsOggEnabled() && MediaDecoder::IsOpusEnabled() &&
            (aMIMEType.EqualsLiteral(AUDIO_OGG) ||
            (aTrackTypes & ContainerWriter::CREATE_AUDIO_TRACK))) {
@@ -299,17 +273,19 @@ MediaEncoder::GetEncodedData(nsTArray<nsTArray<uint8_t> >* aOutputBufs,
       LOG(LogLevel::Debug, ("ENCODE_TRACK TimeStamp = %f", GetEncodeTimeStamp()));
       EncodedFrameContainer encodedData;
       nsresult rv = NS_OK;
+      // We're most likely to actually wait for a video frame, so do that first to minimize
+      // capture offset/lipsync issues
+      rv = WriteEncodedDataToMuxer(mVideoEncoder.get());
+      if (NS_FAILED(rv)) {
+        LOG(LogLevel::Error, ("Fail to write video encoder data to muxer"));
+        break;
+      }
       rv = WriteEncodedDataToMuxer(mAudioEncoder.get());
       if (NS_FAILED(rv)) {
         LOG(LogLevel::Error, ("Error! Fail to write audio encoder data to muxer"));
         break;
       }
       LOG(LogLevel::Debug, ("Audio encoded TimeStamp = %f", GetEncodeTimeStamp()));
-      rv = WriteEncodedDataToMuxer(mVideoEncoder.get());
-      if (NS_FAILED(rv)) {
-        LOG(LogLevel::Error, ("Fail to write video encoder data to muxer"));
-        break;
-      }
       LOG(LogLevel::Debug, ("Video encoded TimeStamp = %f", GetEncodeTimeStamp()));
       // In audio only or video only case, let unavailable track's flag to be true.
       bool isAudioCompleted = (mAudioEncoder && mAudioEncoder->IsEncodingComplete()) || !mAudioEncoder;
@@ -405,14 +381,6 @@ bool
 MediaEncoder::IsWebMEncoderEnabled()
 {
   return Preferences::GetBool("media.encoder.webm.enabled");
-}
-#endif
-
-#ifdef MOZ_OMX_ENCODER
-bool
-MediaEncoder::IsOMXEncoderEnabled()
-{
-  return Preferences::GetBool("media.encoder.omx.enabled");
 }
 #endif
 

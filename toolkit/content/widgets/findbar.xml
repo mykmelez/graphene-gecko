@@ -115,9 +115,7 @@
       ]]></handler>
 
       <handler event="focus"><![CDATA[
-        let { AppConstants } =
-            Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
-        if (AppConstants.platform == "macosx") {
+        if (/Mac/.test(navigator.platform)) {
           let findbar = this.findbar;
           findbar._onFindFieldFocus();
         }
@@ -141,7 +139,7 @@
       ]]></handler>
 
       <handler event="dragover"><![CDATA[
-        if (event.dataTransfer.types.contains("text/plain"))
+        if (event.dataTransfer.types.includes("text/plain"))
           event.preventDefault();
       ]]></handler>
 
@@ -201,7 +199,7 @@
                          label="&entireWord.label;"
                          accesskey="&entireWord.accesskey;"
                          tooltiptext="&entireWord.tooltiptext;"
-                         oncommand="_setEntireWord(this.checked);"
+                         oncommand="toggleEntireWord(this.checked);"
                          type="checkbox"
                          xbl:inherits="accesskey=entirewordaccesskey"/>
       <xul:label anonid="match-case-status" class="findbar-find-fast"/>
@@ -345,7 +343,7 @@
               break;
             case "findbar.entireword":
               this._self._entireWord = prefsvc.getBoolPref(aPrefName);
-              this._self._updateEntireWord();
+              this._self.toggleEntireWord(this._self._entireWord, true);
               break;
             case "findbar.highlightAll":
               this._self.toggleHighlight(prefsvc.getBoolPref(aPrefName), true);
@@ -368,18 +366,12 @@
         this._findStatusIcon = this.getElement("find-status-icon");
         this._findStatusDesc = this.getElement("find-status");
 
-        this._foundURL = null;
-
         let prefsvc = this._prefsvc;
 
         this._quickFindTimeoutLength =
           prefsvc.getIntPref("accessibility.typeaheadfind.timeout");
         this._flashFindBar =
           prefsvc.getIntPref("accessibility.typeaheadfind.flashBar");
-        this._matchesCountTimeoutLength =
-          prefsvc.getIntPref("accessibility.typeaheadfind.matchesCountTimeout");
-        this._matchesCountLimit =
-          prefsvc.getIntPref("accessibility.typeaheadfind.matchesCountLimit");
         this._useModalHighlight = prefsvc.getBoolPref("findbar.modalHighlight");
 
         prefsvc.addObserver("accessibility.typeaheadfind",
@@ -401,17 +393,17 @@
         this._entireWord = prefsvc.getBoolPref("findbar.entireword");
         this._highlightAll = prefsvc.getBoolPref("findbar.highlightAll");
 
-        // Convenience
+        // Convenience.
         this.nsITypeAheadFind = Components.interfaces.nsITypeAheadFind;
-        this.nsISelectionController = Components.interfaces.nsISelectionController;
-        this._findSelection = this.nsISelectionController.SELECTION_FIND;
 
         this._findResetTimeout = -1;
 
         // Make sure the FAYT keypress listener is attached by initializing the
-        // browser property
+        // browser property.
         if (this.getAttribute("browserid"))
-          setTimeout(function(aSelf) { aSelf.browser = aSelf.browser; }, 0, this);
+          setTimeout(() => this.browser = this.browser, 0);
+
+        this._enableFindButtons(false);
       ]]></constructor>
 
       <destructor><![CDATA[
@@ -458,17 +450,9 @@
             clearTimeout(this._quickFindTimeout);
             this._quickFindTimeout = null;
           }
-          if (this._highlightTimeout) {
-            clearTimeout(this._highlightTimeout);
-            this._highlightTimeout = null;
-          }
           if (this._findResetTimeout) {
             clearTimeout(this._findResetTimeout);
             this._findResetTimeout = null;
-          }
-          if (this._updateMatchesCountTimeout) {
-            clearTimeout(this._updateMatchesCountTimeout);
-            this._updateMatchesCountTimeout = null;
           }
         ]]></body>
       </method>
@@ -511,17 +495,11 @@
         -->
       <method name="_updateMatchesCount">
         <body><![CDATA[
-          if (this._matchesCountLimit == 0 || !this._dispatchFindEvent("matchescount"))
+          if (!this._dispatchFindEvent("matchescount"))
             return;
 
-          if (this._updateMatchesCountTimeout) {
-            window.clearTimeout(this._updateMatchesCountTimeout);
-          }
-          this._updateMatchesCountTimeout =
-            window.setTimeout(() => {
-              this.browser.finder.requestMatchesCount(this._findField.value, this._matchesCountLimit,
-                  this._findMode == this.FIND_LINKS);
-            }, this._matchesCountTimeoutLength);
+          this.browser.finder.requestMatchesCount(this._findField.value,
+            this._findMode == this.FIND_LINKS);
         ]]></body>
       </method>
 
@@ -542,6 +520,8 @@
           }
           this._highlightAll = aHighlight;
 
+          this.browser.finder.onHighlightAllChange(aHighlight);
+
           if (!this._dispatchFindEvent("highlightallchange")) {
             return;
           }
@@ -553,7 +533,8 @@
           if (aHighlight && !word)
             return;
 
-          this.browser.finder.highlight(aHighlight, word);
+          this.browser.finder.highlight(aHighlight, word,
+            this._findMode == this.FIND_LINKS);
 
           // Update the matches count
           this._updateMatchesCount(this.nsITypeAheadFind.FIND_FOUND);
@@ -581,6 +562,18 @@
           this._highlightAll = aHighlight;
           let checkbox = this.getElement("highlight");
           checkbox.checked = this._highlightAll;
+        ]]></body>
+      </method>
+
+      <method name="_maybeHighlightAll">
+        <body><![CDATA[
+          let word = this._findField.value;
+          // Bug 429723. Don't attempt to highlight ""
+          if (!this._highlightAll || !word)
+            return;
+
+          this.browser.finder.highlight(true, word,
+            this._findMode == this.FIND_LINKS);
         ]]></body>
       </method>
 
@@ -631,8 +624,6 @@
           this._updateCaseSensitivity();
           this._findFailedString = null;
           this._find();
-          if (this.getElement("highlight").checked)
-            this._setHighlightTimeout();
 
           this._dispatchFindEvent("casesensitivitychange");
         ]]></body>
@@ -641,7 +632,7 @@
       <!--
         - Updates the entire-word mode of the findbar and its UI.
         -->
-      <method name="_updateEntireWord">
+      <method name="_setEntireWord">
         <body><![CDATA[
           let entireWord = this._entireWord;
           let checkbox = this.getElement("find-entire-word");
@@ -657,9 +648,6 @@
           statusLabel.hidden = !hideCheckbox;
 
           this.browser.finder.entireWord = entireWord;
-
-          // Update the matches count
-          this._updateMatchesCount(this.nsITypeAheadFind.FIND_FOUND);
         ]]></body>
       </method>
 
@@ -668,18 +656,18 @@
         - @param aEntireWord (boolean)
         - Whether or not entire-word mode should be turned on.
         -->
-      <method name="_setEntireWord">
+      <method name="toggleEntireWord">
         <parameter name="aEntireWord"/>
+        <parameter name="aFromPrefObserver"/>
         <body><![CDATA[
-          let prefsvc =
-            Components.classes["@mozilla.org/preferences-service;1"]
-                      .getService(Components.interfaces.nsIPrefBranch);
+          if (!aFromPrefObserver) {
+            // Just set the pref; our observer will change the find bar behavior.
+            this._prefsvc.setBoolPref("findbar.entireword", aEntireWord);
+            return;
+          }
 
-          // Just set the pref; our observer will change the find bar behavior.
-          prefsvc.setBoolPref("findbar.entireword", aEntireWord);
-
-          if (this.getElement("highlight").checked)
-            this._setHighlightTimeout();
+          this._findFailedString = null;
+          this._find();
         ]]></body>
       </method>
 
@@ -743,6 +731,8 @@
             event.initEvent("findbaropen", true, false);
             this.dispatchEvent(event);
 
+            this.browser.finder.onFindbarOpen();
+
             return true;
           }
           return false;
@@ -762,6 +752,9 @@
             this.setAttribute("noanim", true);
           this.hidden = true;
 
+          // 'focusContent()' iterates over all listeners in the chrome
+          // process, so we need to call it from here.
+          this.browser.finder.focusContent();
           this.browser.finder.onFindbarClose();
 
           this._cancelTimers();
@@ -787,7 +780,7 @@
           if (!aTarget)
             return;
 
-          let event = document.createEvent("KeyEvents");
+          let event = document.createEvent("KeyboardEvent");
           event.initKeyEvent(aEvent.type, aEvent.bubbles, aEvent.cancelable,
                              aEvent.view, aEvent.ctrlKey, aEvent.altKey,
                              aEvent.shiftKey, aEvent.metaKey, aEvent.keyCode,
@@ -811,7 +804,7 @@
                       .getInterface(Components.interfaces.nsIXULWindow)
                       .XULBrowserWindow;
             }
-            catch(ex) { }
+            catch (ex) { }
             if (!this._xulBrowserWindow)
               return false;
           }
@@ -973,7 +966,7 @@
             this.getElement("find-previous").hidden = showMinimalUI;
           foundMatches.hidden = showMinimalUI || !foundMatches.value;
           this._updateCaseSensitivity();
-          this._updateEntireWord();
+          this._setEntireWord();
           this._setHighlightAll();
 
           if (showMinimalUI)
@@ -1019,12 +1012,8 @@
               this._startFindDeferred = null;
             }
 
-            this._enableFindButtons(val);
-            if (this.getElement("highlight").checked)
-              this._setHighlightTimeout();
-
             this._updateCaseSensitivity(val);
-            this._updateEntireWord();
+            this._setEntireWord();
 
             this.browser.finder.fastFind(val, this._findMode == this.FIND_LINKS,
                                          this._findMode != this.FIND_NORMAL);
@@ -1061,18 +1050,6 @@
           this.setAttribute("flash",
                             (this._flashFindBarCount % 2 == 0) ?
                             "false" : "true");
-        ]]></body>
-      </method>
-
-      <method name="_setHighlightTimeout">
-        <body><![CDATA[
-          if (this._highlightTimeout)
-            clearTimeout(this._highlightTimeout);
-          this._highlightTimeout =
-            setTimeout(function(aSelf) {
-                         aSelf.toggleHighlight(false);
-                         aSelf.toggleHighlight(true);
-                       }, 500, this);
         ]]></body>
       </method>
 
@@ -1113,7 +1090,6 @@
               this._findField.removeAttribute("status");
               break;
           }
-          this._updateMatchesCount(res);
         ]]></body>
       </method>
 
@@ -1141,7 +1117,6 @@
           return this.dispatchEvent(event);
         ]]></body>
       </method>
-
 
       <!--
         - Opens the findbar, focuses the findfield and selects its contents.
@@ -1308,7 +1283,7 @@
             this._findFailedString = null;
           }
 
-          this._updateStatusUI(aData.result, aData.findBackwards);
+          this.updateControlState(aData.result, aData.findBackwards);
           this._updateStatusUIBar(aData.linkURL);
 
           if (this._findMode != this.FIND_NORMAL)
@@ -1328,9 +1303,9 @@
           if (aResult.total !== 0) {
             if (aResult.total == -1) {
               this._foundMatches.value = this.pluralForm.get(
-                this._matchesCountLimit,
+                aResult.limit,
                 this.strBundle.GetStringFromName("FoundMatchesCountLimit")
-              ).replace("#1", this._matchesCountLimit);
+              ).replace("#1", aResult.limit);
             } else {
               this._foundMatches.value = this.pluralForm.get(
                 aResult.total,
@@ -1362,9 +1337,7 @@
           if (aIsInitialSelection && !this._startFindDeferred)
             return;
 
-          let { AppConstants } =
-              Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
-          if (AppConstants.platform == "macosx" && aIsInitialSelection && !aSelectionString) {
+          if (/Mac/.test(navigator.platform) && aIsInitialSelection && !aSelectionString) {
             let clipboardSearchString = this.browser.finder.clipboardSearchString;
             if (clipboardSearchString)
               aSelectionString = clipboardSearchString;
@@ -1374,7 +1347,6 @@
             this._findField.value = aSelectionString;
 
           if (aIsInitialSelection) {
-            this._enableFindButtons(!!this._findField.value);
             this._findField.select();
             this._findField.focus();
 

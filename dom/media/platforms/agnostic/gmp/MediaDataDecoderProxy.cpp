@@ -10,7 +10,7 @@
 namespace mozilla {
 
 void
-MediaDataDecoderCallbackProxy::Error(MediaDataDecoderError aError)
+MediaDataDecoderCallbackProxy::Error(const MediaResult& aError)
 {
   mProxyCallback->Error(aError);
 }
@@ -24,8 +24,6 @@ MediaDataDecoderCallbackProxy::FlushComplete()
 RefPtr<MediaDataDecoder::InitPromise>
 MediaDataDecoderProxy::InternalInit()
 {
-  MOZ_ASSERT(!mIsShutdown);
-
   return mProxyDecoder->Init();
 }
 
@@ -38,7 +36,7 @@ MediaDataDecoderProxy::Init()
                      &MediaDataDecoderProxy::InternalInit);
 }
 
-nsresult
+void
 MediaDataDecoderProxy::Input(MediaRawData* aSample)
 {
   MOZ_ASSERT(!IsOnProxyThread());
@@ -46,11 +44,9 @@ MediaDataDecoderProxy::Input(MediaRawData* aSample)
 
   nsCOMPtr<nsIRunnable> task(new InputTask(mProxyDecoder, aSample));
   mProxyThread->Dispatch(task.forget());
-
-  return NS_OK;
 }
 
-nsresult
+void
 MediaDataDecoderProxy::Flush()
 {
   MOZ_ASSERT(!IsOnProxyThread());
@@ -61,21 +57,18 @@ MediaDataDecoderProxy::Flush()
   mProxyThread->Dispatch(NewRunnableMethod(mProxyDecoder, &MediaDataDecoder::Flush));
 
   mFlushComplete.WaitUntil(true);
-
-  return NS_OK;
 }
 
-nsresult
+void
 MediaDataDecoderProxy::Drain()
 {
   MOZ_ASSERT(!IsOnProxyThread());
   MOZ_ASSERT(!mIsShutdown);
 
   mProxyThread->Dispatch(NewRunnableMethod(mProxyDecoder, &MediaDataDecoder::Drain));
-  return NS_OK;
 }
 
-nsresult
+void
 MediaDataDecoderProxy::Shutdown()
 {
   // Note that this *may* be called from the proxy thread also.
@@ -83,11 +76,9 @@ MediaDataDecoderProxy::Shutdown()
 #if defined(DEBUG)
   mIsShutdown = true;
 #endif
-  nsresult rv = mProxyThread->AsXPCOMThread()->Dispatch(NewRunnableMethod(mProxyDecoder,
-                                                                          &MediaDataDecoder::Shutdown),
-                                                        NS_DISPATCH_SYNC);
-  NS_ENSURE_SUCCESS(rv, rv);
-  return NS_OK;
+  mProxyThread->AsXPCOMThread()->Dispatch(NewRunnableMethod(mProxyDecoder,
+                                                            &MediaDataDecoder::Shutdown),
+                                          NS_DISPATCH_SYNC);
 }
 
 void

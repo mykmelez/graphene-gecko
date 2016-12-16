@@ -28,7 +28,6 @@ var FullZoom = {
     return this._siteSpecificPref;
   },
 
-  //**************************************************************************//
   // nsISupports
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMEventListener,
@@ -37,7 +36,6 @@ var FullZoom = {
                                          Ci.nsISupportsWeakReference,
                                          Ci.nsISupports]),
 
-  //**************************************************************************//
   // Initialization & Destruction
 
   init: function FullZoom_init() {
@@ -75,7 +73,6 @@ var FullZoom = {
   },
 
 
-  //**************************************************************************//
   // Event Handlers
 
   // nsIDOMEventListener
@@ -92,7 +89,7 @@ var FullZoom = {
 
   // nsIObserver
 
-  observe: function (aSubject, aTopic, aData) {
+  observe: function(aSubject, aTopic, aData) {
     switch (aTopic) {
       case "nsPref:changed":
         switch (aData) {
@@ -157,8 +154,8 @@ var FullZoom = {
     let hasPref = false;
     let token = this._getBrowserToken(browser);
     this._cps2.getByDomainAndName(browser.currentURI.spec, this.name, ctxt, {
-      handleResult: function () { hasPref = true; },
-      handleCompletion: function () {
+      handleResult: function() { hasPref = true; },
+      handleCompletion: function() {
         if (!hasPref && token.isCurrent)
           this._applyPrefToZoom(undefined, browser);
       }.bind(this)
@@ -194,14 +191,14 @@ var FullZoom = {
     this._ignorePendingZoomAccesses(browser);
 
     if (!aURI || (aIsTabSwitch && !this.siteSpecific)) {
-      this._notifyOnLocationChange();
+      this._notifyOnLocationChange(browser);
       return;
     }
 
     // Avoid the cps roundtrip and apply the default/global pref.
     if (aURI.spec == "about:blank") {
       this._applyPrefToZoom(undefined, browser,
-                            this._notifyOnLocationChange.bind(this));
+                            this._notifyOnLocationChange.bind(this, browser));
       return;
     }
 
@@ -209,7 +206,7 @@ var FullZoom = {
     if (!aIsTabSwitch && browser.isSyntheticDocument) {
       ZoomManager.setZoomForBrowser(browser, 1);
       // _ignorePendingZoomAccesses already called above, so no need here.
-      this._notifyOnLocationChange();
+      this._notifyOnLocationChange(browser);
       return;
     }
 
@@ -218,7 +215,7 @@ var FullZoom = {
     let pref = this._cps2.getCachedByDomainAndName(aURI.spec, this.name, ctxt);
     if (pref) {
       this._applyPrefToZoom(pref.value, browser,
-                            this._notifyOnLocationChange.bind(this));
+                            this._notifyOnLocationChange.bind(this, browser));
       return;
     }
 
@@ -226,14 +223,14 @@ var FullZoom = {
     let value = undefined;
     let token = this._getBrowserToken(browser);
     this._cps2.getByDomainAndName(aURI.spec, this.name, ctxt, {
-      handleResult: function (resultPref) { value = resultPref.value; },
-      handleCompletion: function () {
+      handleResult: function(resultPref) { value = resultPref.value; },
+      handleCompletion: function() {
         if (!token.isCurrent) {
-          this._notifyOnLocationChange();
+          this._notifyOnLocationChange(browser);
           return;
         }
         this._applyPrefToZoom(value, browser,
-                              this._notifyOnLocationChange.bind(this));
+                              this._notifyOnLocationChange.bind(this, browser));
       }.bind(this)
     });
   },
@@ -246,7 +243,6 @@ var FullZoom = {
     menuItem.setAttribute("checked", !ZoomManager.useFullZoom);
   },
 
-  //**************************************************************************//
   // Setting & Pref Manipulation
 
   /**
@@ -273,7 +269,7 @@ var FullZoom = {
    * Sets the zoom level for the given browser to the given floating
    * point value, where 1 is the default zoom level.
    */
-  setZoom: function (value, browser = gBrowser.selectedBrowser) {
+  setZoom: function(value, browser = gBrowser.selectedBrowser) {
     ZoomManager.setZoomForBrowser(browser, value);
     this._ignorePendingZoomAccesses(browser);
     this._applyZoomToPref(browser);
@@ -291,7 +287,7 @@ var FullZoom = {
       if (token.isCurrent) {
         ZoomManager.setZoomForBrowser(browser, value === undefined ? 1 : value);
         this._ignorePendingZoomAccesses(browser);
-        Services.obs.notifyObservers(null, "browser-fullZoom:zoomReset", "");
+        Services.obs.notifyObservers(browser, "browser-fullZoom:zoomReset", "");
       }
     });
     this._removePref(browser);
@@ -359,7 +355,7 @@ var FullZoom = {
    * @param browser  The zoom of this browser will be saved.  Required.
    */
   _applyZoomToPref: function FullZoom__applyZoomToPref(browser) {
-    Services.obs.notifyObservers(null, "browser-fullZoom:zoomChange", "");
+    Services.obs.notifyObservers(browser, "browser-fullZoom:zoomChange", "");
     if (!this.siteSpecific ||
         gInPrintPreviewMode ||
         browser.isSyntheticDocument)
@@ -368,7 +364,7 @@ var FullZoom = {
     this._cps2.set(browser.currentURI.spec, this.name,
                    ZoomManager.getZoomForBrowser(browser),
                    this._loadContextFromBrowser(browser), {
-      handleCompletion: function () {
+      handleCompletion: function() {
         this._isNextContentPrefChangeInternal = true;
       }.bind(this),
     });
@@ -380,18 +376,17 @@ var FullZoom = {
    * @param browser  The zoom of this browser will be removed.  Required.
    */
   _removePref: function FullZoom__removePref(browser) {
-    Services.obs.notifyObservers(null, "browser-fullZoom:zoomReset", "");
+    Services.obs.notifyObservers(browser, "browser-fullZoom:zoomReset", "");
     if (browser.isSyntheticDocument)
       return;
     let ctxt = this._loadContextFromBrowser(browser);
     this._cps2.removeByDomainAndName(browser.currentURI.spec, this.name, ctxt, {
-      handleCompletion: function () {
+      handleCompletion: function() {
         this._isNextContentPrefChangeInternal = true;
       }.bind(this),
     });
   },
 
-  //**************************************************************************//
   // Utilities
 
   /**
@@ -492,7 +487,7 @@ var FullZoom = {
       }
       let value = undefined;
       this._cps2.getGlobal(this.name, this._loadContextFromBrowser(browser), {
-        handleResult: function (pref) { value = pref.value; },
+        handleResult: function(pref) { value = pref.value; },
         handleCompletion: (reason) => {
           this._globalValue = this._ensureValid(value);
           resolve(this._globalValue);
@@ -517,9 +512,9 @@ var FullZoom = {
    * The notification is always asynchronous so that observers are guaranteed a
    * consistent behavior.
    */
-  _notifyOnLocationChange: function FullZoom__notifyOnLocationChange() {
-    this._executeSoon(function () {
-      Services.obs.notifyObservers(null, "browser-fullZoom:location-change", "");
+  _notifyOnLocationChange: function FullZoom__notifyOnLocationChange(browser) {
+    this._executeSoon(function() {
+      Services.obs.notifyObservers(browser, "browser-fullZoom:location-change", "");
     });
   },
 

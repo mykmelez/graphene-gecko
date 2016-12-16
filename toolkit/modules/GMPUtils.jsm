@@ -42,22 +42,21 @@ this.GMPUtils = {
    *          The plugin to check.
    */
   isPluginHidden: function(aPlugin) {
+    if (this._is32bitModeMacOS()) {
+      // GMPs are hidden on MacOS when running in 32 bit mode.
+      // See bug 1291537.
+      return true;
+    }
     if (!aPlugin.isEME) {
       return false;
     }
 
     if (!this._isPluginSupported(aPlugin) ||
         !this._isPluginVisible(aPlugin)) {
-      this.maybeReportTelemetry(aPlugin.id,
-                                "VIDEO_EME_ADOBE_HIDDEN_REASON",
-                                GMPPluginHiddenReason.UNSUPPORTED);
       return true;
     }
 
     if (!GMPPrefs.get(GMPPrefs.KEY_EME_ENABLED, true)) {
-      this.maybeReportTelemetry(aPlugin.id,
-                                "VIDEO_EME_ADOBE_HIDDEN_REASON",
-                                GMPPluginHiddenReason.EME_DISABLED);
       return true;
     }
 
@@ -74,12 +73,6 @@ this.GMPUtils = {
       return true;
     }
     if (aPlugin.id == EME_ADOBE_ID) {
-      if (Services.appinfo.OS != "WINNT") {
-        // Non-Windows OSes currently unsupported by Adobe EME
-        this.maybeReportTelemetry(aPlugin.id,
-                                  "VIDEO_EME_ADOBE_UNSUPPORTED_REASON",
-                                  GMPPluginUnsupportedReason.NOT_WINDOWS);
-      }
       // Windows Vista and later only supported by Adobe EME.
       return AppConstants.isPlatformAndVersionAtLeast("win", "6");
     } else if (aPlugin.id == WIDEVINE_ID) {
@@ -91,6 +84,13 @@ this.GMPUtils = {
     }
 
     return true;
+  },
+
+  _is32bitModeMacOS: function() {
+    if (AppConstants.platform != "macosx") {
+      return false;
+    }
+    return Services.appinfo.XPCOMABI.split("-")[0] == "x86";
   },
 
   /**
@@ -114,31 +114,6 @@ this.GMPUtils = {
   _isPluginForceSupported: function(aPlugin) {
     return GMPPrefs.get(GMPPrefs.KEY_PLUGIN_FORCE_SUPPORTED, false, aPlugin.id);
   },
-
-  /**
-   * Report telemetry value, but only for Adobe CDM and only once per key
-   * per session.
-   */
-  maybeReportTelemetry: function(aPluginId, key, value) {
-    if (aPluginId != EME_ADOBE_ID) {
-      // Only report for Adobe CDM.
-      return;
-    }
-
-    if (!this.reportedKeys) {
-      this.reportedKeys = [];
-    }
-    if (this.reportedKeys.indexOf(key) >= 0) {
-      // Only report each key once per session.
-      return;
-    }
-    this.reportedKeys.push(key);
-
-    let hist = Services.telemetry.getHistogramById(key);
-    if (hist) {
-      hist.add(value);
-    }
-  },
 };
 
 /**
@@ -159,6 +134,7 @@ this.GMPPrefs = {
   KEY_CERT_REQUIREBUILTIN:      "media.gmp-manager.cert.requireBuiltIn",
   KEY_UPDATE_LAST_CHECK:        "media.gmp-manager.lastCheck",
   KEY_SECONDS_BETWEEN_CHECKS:   "media.gmp-manager.secondsBetweenChecks",
+  KEY_UPDATE_ENABLED:           "media.gmp-manager.updateEnabled",
   KEY_APP_DISTRIBUTION:         "distribution.id",
   KEY_APP_DISTRIBUTION_VERSION: "distribution.version",
   KEY_BUILDID:                  "media.gmp-manager.buildID",

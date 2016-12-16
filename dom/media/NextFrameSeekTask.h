@@ -38,9 +38,20 @@ public:
 
   RefPtr<SeekTaskPromise> Seek(const media::TimeUnit& aDuration) override;
 
-  bool NeedToResetMDSM() const override;
+  int64_t CalculateNewCurrentTime() const override;
 
-private:
+  void HandleAudioDecoded(MediaData* aAudio) override;
+
+  void HandleVideoDecoded(MediaData* aVideo, TimeStamp aDecodeStart) override;
+
+  void HandleNotDecoded(MediaData::Type aType, const MediaResult& aError) override;
+
+  void HandleAudioWaited(MediaData::Type aType) override;
+
+  void HandleVideoWaited(MediaData::Type aType) override;
+
+  void HandleNotWaited(const WaitForDataRejectValue& aRejection) override;
+
   ~NextFrameSeekTask();
 
   void RequestVideoData();
@@ -54,18 +65,6 @@ private:
   bool IsVideoSeekComplete() const;
 
   void MaybeFinishSeek();
-
-  void OnAudioDecoded(MediaData* aAudioSample);
-
-  void OnAudioNotDecoded(MediaDecoderReader::NotDecodedReason aReason);
-
-  void OnVideoDecoded(MediaData* aVideoSample);
-
-  void OnVideoNotDecoded(MediaDecoderReader::NotDecodedReason aReason);
-
-  void SetCallbacks();
-
-  void CancelCallbacks();
 
   // Update the seek target's time before resolving this seek task, the updated
   // time will be used in the MDSM::SeekCompleted() to update the MDSM's position.
@@ -82,11 +81,6 @@ private:
    */
   const int64_t mCurrentTime;
   media::TimeUnit mDuration;
-
-  MediaEventListener mAudioCallback;
-  MediaEventListener mVideoCallback;
-  MediaEventListener mAudioWaitCallback;
-  MediaEventListener mVideoWaitCallback;
 };
 
 } // namespace media

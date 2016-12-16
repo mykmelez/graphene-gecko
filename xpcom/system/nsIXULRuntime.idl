@@ -87,6 +87,17 @@ interface nsIXULRuntime : nsISupports
   readonly attribute unsigned long processID;
 
   /**
+   * A globally unique and non-recycled ID of the caller's process.
+   */
+  readonly attribute uint64_t uniqueProcessID;
+
+  /**
+   * The type of remote content process we're running in.
+   * null if we're in the parent/chrome process.
+   */
+  readonly attribute DOMString remoteType;
+
+  /**
    * If true, browser tabs may be opened by default in a different process
    * from the main browser UI.
    */
@@ -139,9 +150,9 @@ interface nsIXULRuntime : nsISupports
   readonly attribute DOMString lastRunCrashID;
 
   /**
-   * True if this is a RELEASE_BUILD.
+   * True if this is RELEASE_OR_BETA.
    */
-  readonly attribute boolean isReleaseBuild;
+  readonly attribute boolean isReleaseOrBeta;
 
   /**
    * True if this build uses official branding (MOZ_OFFICIAL_BRANDING).
@@ -162,4 +173,10 @@ interface nsIXULRuntime : nsISupports
    * True if this is an official build (MOZILLA_OFFICIAL).
    */
   readonly attribute boolean isOfficial;
+
+  /**
+   * True if Windows DLL blocklist initialized correctly. This is
+   * primarily for automated testing purposes.
+   */
+  readonly attribute boolean windowsDLLBlocklistStatus;
 };

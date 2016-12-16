@@ -7,7 +7,7 @@
 add_task(function* () {
   let baseURL = "https://example.org/browser/browser/base/content/test/urlbar/dummy_page.html";
   let url = baseURL + "#foo";
-  yield BrowserTestUtils.withNewTab({ gBrowser, url }, function(browser) {
+  yield BrowserTestUtils.withNewTab({ gBrowser, url }, function*(browser) {
     let identityBox = document.getElementById("identity-box");
     let expectedURL = url;
 
@@ -22,12 +22,12 @@ add_task(function* () {
 
     let locationChangePromise;
     let resolveLocationChangePromise;
-    let expectURL = url => {
-      expectedURL = url;
+    let expectURL = urlTemp => {
+      expectedURL = urlTemp;
       locationChangePromise = new Promise(r => resolveLocationChangePromise = r);
     };
     let wpl = {
-      onLocationChange(wpl, request, location, flags) {
+      onLocationChange(unused, unused2, location) {
         is(location.spec, expectedURL, "Got the expected URL");
         resolveLocationChangePromise();
       },

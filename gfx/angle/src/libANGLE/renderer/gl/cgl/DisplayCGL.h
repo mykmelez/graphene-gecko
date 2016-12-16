@@ -35,7 +35,8 @@ class DisplayCGL : public DisplayGL
                                       const egl::AttributeMap &attribs) override;
     SurfaceImpl *createPbufferFromClientBuffer(const egl::SurfaceState &state,
                                                const egl::Config *configuration,
-                                               EGLClientBuffer shareHandle,
+                                               EGLenum buftype,
+                                               EGLClientBuffer clientBuffer,
                                                const egl::AttributeMap &attribs) override;
     SurfaceImpl *createPixmapSurface(const egl::SurfaceState &state,
                                      const egl::Config *configuration,
@@ -44,7 +45,6 @@ class DisplayCGL : public DisplayGL
 
     egl::ConfigSet generateConfigs() override;
 
-    bool isDeviceLost() const override;
     bool testDeviceLost() override;
     egl::Error restoreLostDevice() override;
 

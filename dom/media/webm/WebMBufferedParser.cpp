@@ -9,11 +9,10 @@
 #include "nsThreadUtils.h"
 #include <algorithm>
 
-#define WEBM_DEBUG(arg, ...) MOZ_LOG(gWebMDemuxerLog, mozilla::LogLevel::Debug, ("WebMBufferedParser(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+extern mozilla::LazyLogModule gMediaDemuxerLog;
+#define WEBM_DEBUG(arg, ...) MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug, ("WebMBufferedParser(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
 
 namespace mozilla {
-
-extern LazyLogModule gWebMDemuxerLog;
 
 static uint32_t
 VIntLength(unsigned char aFirstByte, uint32_t* aMask)
@@ -34,7 +33,7 @@ VIntLength(unsigned char aFirstByte, uint32_t* aMask)
   return count;
 }
 
-void WebMBufferedParser::Append(const unsigned char* aBuffer, uint32_t aLength,
+bool WebMBufferedParser::Append(const unsigned char* aBuffer, uint32_t aLength,
                                 nsTArray<WebMTimeDataOffset>& aMapping,
                                 ReentrantMonitor& aReentrantMonitor)
 {
@@ -164,7 +163,9 @@ void WebMBufferedParser::Append(const unsigned char* aBuffer, uint32_t aLength,
       }
       break;
     case READ_TIMECODESCALE:
-      MOZ_ASSERT(mGotTimecodeScale);
+      if (!mGotTimecodeScale) {
+        return false;
+      }
       mTimecodeScale = mVInt.mValue;
       mState = READ_ELEMENT_ID;
       break;
@@ -188,7 +189,9 @@ void WebMBufferedParser::Append(const unsigned char* aBuffer, uint32_t aLength,
           if (idx == 0 || aMapping[idx - 1] != endOffset) {
             // Don't insert invalid negative timecodes.
             if (mBlockTimecode >= 0 || mClusterTimecode >= uint16_t(abs(mBlockTimecode))) {
-              MOZ_ASSERT(mGotTimecodeScale);
+              if (!mGotTimecodeScale) {
+                return false;
+              }
               uint64_t absTimecode = mClusterTimecode + mBlockTimecode;
               absTimecode *= mTimecodeScale;
               // Avoid creating an entry if the timecode is out of order
@@ -249,6 +252,8 @@ void WebMBufferedParser::Append(const unsigned char* aBuffer, uint32_t aLength,
 
   NS_ASSERTION(p == aBuffer + aLength, "Must have parsed to end of data.");
   mCurrentOffset += aLength;
+
+  return true;
 }
 
 int64_t

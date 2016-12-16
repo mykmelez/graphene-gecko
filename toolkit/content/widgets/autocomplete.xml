@@ -44,7 +44,6 @@
       <field name="mController">null</field>
       <field name="mSearchNames">null</field>
       <field name="mIgnoreInput">false</field>
-      <field name="mEnterEvent">null</field>
 
       <field name="_searchBeginHandler">null</field>
       <field name="_searchCompleteHandler">null</field>
@@ -70,14 +69,20 @@
 
       <!-- =================== nsIAutoCompleteInput =================== -->
 
-      <field name="popup"><![CDATA[
-        // Wrap in a block so that the let statements don't
-        // create properties on 'this' (bug 635252).
-        {
+      <field name="_popup">null</field>
+      <property name="popup" readonly="true">
+        <getter><![CDATA[
+          // Memoize the result in a field rather than replacing this property,
+          // so that it can be reset along with the binding.
+          if (this._popup) {
+            return this._popup;
+          }
+
           let popup = null;
           let popupId = this.getAttribute("autocompletepopup");
-          if (popupId)
+          if (popupId) {
             popup = document.getElementById(popupId);
+          }
           if (!popup) {
             popup = document.createElement("panel");
             popup.setAttribute("type", "autocomplete");
@@ -87,9 +92,10 @@
             popupset.appendChild(popup);
           }
           popup.mInput = this;
-          popup;
-        }
-      ]]></field>
+
+          return this._popup = popup;
+        ]]></getter>
+      </property>
 
       <property name="controller" onget="return this.mController;" readonly="true"/>
 
@@ -150,13 +156,19 @@
         parseInt(this.getAttribute("shrinkdelay")) || 0
       </field>
 
-      <field name="PrivateBrowsingUtils" readonly="true">
-        {
-          let utils = {};
-          Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm", utils);
-          utils.PrivateBrowsingUtils
-        }
-      </field>
+      <property name="PrivateBrowsingUtils" readonly="true">
+        <getter><![CDATA[
+          let module = {};
+          Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm", module);
+          Object.defineProperty(this, "PrivateBrowsingUtils", {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: module.PrivateBrowsingUtils
+          });
+          return module.PrivateBrowsingUtils;
+        ]]></getter>
+      </property>
 
       <property name="inPrivateContext" readonly="true"
                 onget="return this.PrivateBrowsingUtils.isWindowPrivate(window);"/>
@@ -176,23 +188,43 @@
         ]]></body>
       </method>
 
-      <property name="textValue"
-                onget="return this.value;">
-        <setter><![CDATA[
-          // Completing a result should simulate the user typing the result,
-          // so fire an input event.
-          // Trim popup selected values, but never trim results coming from
-          // autofill.
-          if (this.popup.selectedIndex == -1)
+      <method name="setTextValueWithReason">
+        <parameter name="aValue"/>
+        <parameter name="aReason"/>
+        <body><![CDATA[
+          if (aReason == Components.interfaces.nsIAutoCompleteInput
+                                   .TEXTVALUE_REASON_COMPLETEDEFAULT) {
             this._disableTrim = true;
-          this.value = val;
+          }
+          this.textValue = aValue;
           this._disableTrim = false;
+        ]]></body>
+      </method>
 
-          var evt = document.createEvent("UIEvents");
+      <property name="textValue">
+        <getter><![CDATA[
+          if (typeof this.onBeforeTextValueGet == "function") {
+            let result = this.onBeforeTextValueGet();
+            if (result) {
+              return result.value;
+            }
+          }
+          return this.value;
+        ]]></getter>
+        <setter><![CDATA[
+          if (typeof this.onBeforeTextValueSet == "function")
+            val = this.onBeforeTextValueSet(val);
+
+          this.value = val;
+
+          // Completing a result should simulate the user typing the result, so
+          // fire an input event.
+          let evt = document.createEvent("UIEvents");
           evt.initUIEvent("input", true, false, window, 0);
           this.mIgnoreInput = true;
           this.dispatchEvent(evt);
           this.mIgnoreInput = false;
+
           return this.value;
         ]]></setter>
       </property>
@@ -232,11 +264,12 @@
       </method>
 
       <method name="onTextEntered">
+        <parameter name="event"/>
         <body><![CDATA[
           let rv = false;
-          if (this._textEnteredHandler)
-            rv = this._textEnteredHandler(this.mEnterEvent);
-          this.mEnterEvent = null;
+          if (this._textEnteredHandler) {
+            rv = this._textEnteredHandler(event);
+          }
           return rv;
         ]]></body>
       </method>
@@ -404,7 +437,10 @@
 
       <method name="toggleHistoryPopup">
         <body><![CDATA[
-          if (!this.popup.popupOpen)
+          // If this method is called on the same event tick as the popup gets
+          // hidden, do nothing to avoid re-opening the popup when the drop
+          // marker is clicked while the popup is still open.
+          if (!this.popup.isPopupHidingTick && !this.popup.popupOpen)
             this.showHistoryPopup();
           else
             this.closePopup();
@@ -440,18 +476,16 @@
           if (aEvent.target.localName != "textbox")
             return true; // Let child buttons of autocomplete take input
 
-          //XXXpch this is so bogus...
+          // XXXpch this is so bogus...
           if (aEvent.defaultPrevented)
             return false;
 
           var cancel = false;
 
-          let { AppConstants } =
-              Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
           // Catch any keys that could potentially move the caret. Ctrl can be
           // used in combination with these keys on Windows and Linux; and Alt
           // can be used on OS X, so make sure the unused one isn't used.
-          let metaKey = AppConstants.platform == "macosx" ? aEvent.ctrlKey : aEvent.altKey;
+          let metaKey = /Mac/.test(navigator.platform) ? aEvent.ctrlKey : aEvent.altKey;
           if (!this.disableKeyNavigation && !metaKey) {
             switch (aEvent.keyCode) {
               case KeyEvent.DOM_VK_LEFT:
@@ -489,28 +523,27 @@
               cancel = this.mController.handleEscape();
               break;
             case KeyEvent.DOM_VK_RETURN:
-              if (AppConstants.platform == "macosx") {
+              if (/Mac/.test(navigator.platform)) {
                 // Prevent the default action, since it will beep on Mac
                 if (aEvent.metaKey)
                   aEvent.preventDefault();
               }
-              this.mEnterEvent = aEvent;
               if (this.mController.selection) {
                 this._selectionDetails = {
                   index: this.mController.selection.currentIndex,
                   kind: "key"
                 };
               }
-              cancel = this.handleEnter();
+              cancel = this.handleEnter(aEvent);
               break;
             case KeyEvent.DOM_VK_DELETE:
-              if (AppConstants.platform == "macosx" && !aEvent.shiftKey) {
+              if (/Mac/.test(navigator.platform) && !aEvent.shiftKey) {
                 break;
               }
               cancel = this.handleDelete();
               break;
             case KeyEvent.DOM_VK_BACK_SPACE:
-              if (AppConstants.platform == "macosx" && aEvent.shiftKey) {
+              if (/Mac/.test(navigator.platform) && aEvent.shiftKey) {
                 cancel = this.handleDelete();
               }
               break;
@@ -520,7 +553,7 @@
                 this.toggleHistoryPopup();
               break;
             case KeyEvent.DOM_VK_F4:
-              if (AppConstants.platform != "macosx") {
+              if (!/Mac/.test(navigator.platform)) {
                 this.toggleHistoryPopup();
               }
               break;
@@ -536,8 +569,9 @@
       </method>
 
       <method name="handleEnter">
+        <parameter name="event"/>
         <body><![CDATA[
-          return this.mController.handleEnter(false);
+          return this.mController.handleEnter(false, event || null);
         ]]></body>
       </method>
 
@@ -623,8 +657,14 @@
       <handler event="compositionend" phase="capturing"
                action="if (this.mController.input == this) this.mController.handleEndComposition();"/>
 
-      <handler event="focus" phase="capturing"
-               action="this.attachController();"/>
+      <handler event="focus" phase="capturing"><![CDATA[
+        this.attachController();
+        if (window.gBrowser && window.gBrowser.selectedBrowser.hasAttribute("usercontextid")) {
+          this.userContextId = parseInt(window.gBrowser.selectedBrowser.getAttribute("usercontextid"));
+        } else {
+          this.userContextId = 0;
+        }
+      ]]></handler>
 
       <handler event="blur" phase="capturing"><![CDATA[
         if (!this._dontBlur) {
@@ -832,7 +872,7 @@
         <body><![CDATA[
           try {
             var amount = aPage ? 5 : 1;
-            this.selectedIndex = this.getNextIndex(aReverse, amount, this.selectedIndex, this.tree.view.rowCount-1);
+            this.selectedIndex = this.getNextIndex(aReverse, amount, this.selectedIndex, this.tree.view.rowCount - 1);
             if (this.selectedIndex == -1) {
               this.input._focus();
             }
@@ -871,6 +911,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
     <implementation implements="nsIAutoCompletePopup">
       <field name="mInput">null</field>
       <field name="mPopupOpen">false</field>
+      <field name="mIsPopupHidingTick">false</field>
 
       <!-- =================== nsIAutoCompletePopup =================== -->
 
@@ -882,6 +923,9 @@ extends="chrome://global/content/bindings/popup.xml#popup">
 
       <property name="popupOpen" readonly="true"
                 onget="return this.mPopupOpen;"/>
+
+      <property name="isPopupHidingTick" readonly="true"
+                onget="return this.mIsPopupHidingTick;"/>
 
       <method name="closePopup">
         <body>
@@ -927,7 +971,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           if (aMaxRow < 0)
             return -1;
 
-          var newIdx = aIndex + (aReverse?-1:1)*aAmount;
+          var newIdx = aIndex + (aReverse ? -1 : 1) * aAmount;
           if (aReverse && aIndex == -1 || newIdx > aMaxRow && aIndex != aMaxRow)
             newIdx = aMaxRow;
           else if (!aReverse && aIndex == -1 || newIdx < 0 && aIndex != 0)
@@ -946,7 +990,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         <parameter name="aEvent"/>
         <body><![CDATA[
           var controller = this.view.QueryInterface(Components.interfaces.nsIAutoCompleteController);
-          controller.handleEnter(true);
+          controller.handleEnter(true, aEvent);
         ]]></body>
       </method>
     </implementation>
@@ -988,6 +1032,14 @@ extends="chrome://global/content/bindings/popup.xml#popup">
 
         this.removeAttribute("autocompleteinput");
         this.mPopupOpen = false;
+
+        // Prevent opening popup from historydropmarker mousedown handler
+        // on the same event tick the popup is hidden by the same mousedown
+        // event.
+        this.mIsPopupHidingTick = true;
+        setTimeout(() => {
+          this.mIsPopupHidingTick = false;
+        }, 0);
 
         // Reset the maxRows property to the cached "normal" value, and reset
         // _normalMaxRows so that we can detect whether it was set by the input
@@ -1048,6 +1100,10 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       <method name="onSearchBegin">
         <body><![CDATA[
           this.richlistbox.mouseSelectedIndex = -1;
+
+          if (typeof this._onSearchBegin == "function") {
+            this._onSearchBegin();
+          }
         ]]></body>
       </method>
 
@@ -1070,6 +1126,10 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         <body>
           <![CDATA[
           if (!this.mPopupOpen) {
+            // It's possible that the panel is hidden initially
+            // to avoid impacting startup / new window performance
+            aInput.popup.hidden = false;
+
             this.mInput = aInput;
             // clear any previous selection, see bugs 400671 and 488357
             this.selectedIndex = -1;
@@ -1112,7 +1172,13 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           if (this._shrinkTimeout) {
             clearTimeout(this._shrinkTimeout);
           }
-          this._adjustHeightTimeout = setTimeout(() => this.adjustHeight(), 0);
+
+          if (this.mPopupOpen) {
+            delete this._adjustHeightOnPopupShown;
+            this._adjustHeightTimeout = setTimeout(() => this.adjustHeight(), 0);
+          } else {
+            this._adjustHeightOnPopupShown = true;
+          }
 
           this._currentIndex = 0;
           if (this._appendResultTimeout) {
@@ -1253,15 +1319,24 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                   invalidateReason == iface.INVALIDATE_REASON_NEW_RESULT &&
                   (item.getAttribute("url") == url ||
                    this.richlistbox.mouseSelectedIndex === this._currentIndex)) {
-                item.collapsed = false;
-                // Call adjustSiteIconStart only after setting collapsed=false.
-                // The calculations it does may be wrong otherwise.
-                item.adjustSiteIconStart(this._siteIconStart);
-                // The popup may have changed size between now and the last time
-                // the item was shown, so always handle over/underflow.
-                item.handleOverUnderflow();
-                this._currentIndex++;
-                continue;
+                // Additionally, if the item is a searchengine action, then it
+                // should only be reused if the engine name is the same as the
+                // popup's override engine name, if any.
+                let action = item._parseActionUrl(url);
+                if (!action ||
+                    action.type != "searchengine" ||
+                    !this.overrideSearchEngineName ||
+                    action.params.engineName == this.overrideSearchEngineName) {
+                  item.collapsed = false;
+                  // Call adjustSiteIconStart only after setting collapsed=
+                  // false.  The calculations it does may be wrong otherwise.
+                  item.adjustSiteIconStart(this._siteIconStart);
+                  // The popup may have changed size between now and the last
+                  // time the item was shown, so always handle over/underflow.
+                  item.handleOverUnderflow();
+                  this._currentIndex++;
+                  continue;
+                }
               }
             }
             else {
@@ -1276,7 +1351,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             item.setAttribute("image", iconURI);
             item.setAttribute("url", url);
             item.setAttribute("title", controller.getCommentAt(this._currentIndex));
-            item.setAttribute("type", controller.getStyleAt(this._currentIndex));
+            item.setAttribute("originaltype", controller.getStyleAt(this._currentIndex));
             item.setAttribute("text", trimmedSearchString);
 
             if (this._currentIndex < existingItemsCount) {
@@ -1291,10 +1366,13 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               this.richlistbox.appendChild(item);
             }
 
-            let changed = item.adjustSiteIconStart(this._siteIconStart);
-            if (changed) {
-              item.handleOverUnderflow();
-            }
+            // The binding may have not been applied yet.
+            setTimeout(() => {
+              let changed = item.adjustSiteIconStart(this._siteIconStart);
+              if (changed) {
+                item.handleOverUnderflow();
+              }
+            }, 0);
 
             this._currentIndex++;
           }
@@ -1331,6 +1409,10 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         </setter>
       </property>
 
+      <property name="overflowPadding"
+                onget="return Number(this.getAttribute('overflowpadding'))"
+                readonly="true" />
+
       <method name="selectBy">
         <parameter name="aReverse"/>
         <parameter name="aPage"/>
@@ -1361,6 +1443,79 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                 onget="return this.mInput.controller;"
                 onset="return val;"/>
 
+    </implementation>
+    <handlers>
+      <handler event="popupshown">
+        <![CDATA[
+          if (this._adjustHeightOnPopupShown) {
+            delete this._adjustHeightOnPopupShown;
+            this.adjustHeight();
+          }
+      ]]>
+      </handler>
+    </handlers>
+  </binding>
+
+  <binding id="autocomplete-richlistitem-insecure-field" extends="chrome://global/content/bindings/autocomplete.xml#autocomplete-richlistitem">
+    <content align="center"
+             onoverflow="this._onOverflow();"
+             onunderflow="this._onUnderflow();">
+      <xul:image anonid="type-icon"
+                 class="ac-type-icon"
+                 xbl:inherits="selected,current,type"/>
+      <xul:image anonid="site-icon"
+                 class="ac-site-icon"
+                 xbl:inherits="src=image,selected,type"/>
+      <xul:vbox class="ac-title"
+                align="left"
+                xbl:inherits="">
+        <xul:description class="ac-text-overflow-container">
+          <xul:description anonid="title-text"
+                           class="ac-title-text"
+                           xbl:inherits="selected"/>
+        </xul:description>
+      </xul:vbox>
+      <xul:hbox anonid="tags"
+                class="ac-tags"
+                align="center"
+                xbl:inherits="selected">
+        <xul:description class="ac-text-overflow-container">
+          <xul:description anonid="tags-text"
+                           class="ac-tags-text"
+                           xbl:inherits="selected"/>
+        </xul:description>
+      </xul:hbox>
+      <xul:hbox anonid="separator"
+                class="ac-separator"
+                align="center"
+                xbl:inherits="selected,actiontype,type">
+        <xul:description class="ac-separator-text">—</xul:description>
+      </xul:hbox>
+      <xul:hbox class="ac-url"
+                align="center"
+                xbl:inherits="selected,actiontype">
+        <xul:description class="ac-text-overflow-container">
+          <xul:description anonid="url-text"
+                           class="ac-url-text"
+                           xbl:inherits="selected"/>
+        </xul:description>
+      </xul:hbox>
+      <xul:hbox class="ac-action"
+                align="center"
+                xbl:inherits="selected,actiontype">
+        <xul:description class="ac-text-overflow-container">
+          <xul:description anonid="action-text"
+                           class="ac-action-text"
+                           xbl:inherits="selected"/>
+        </xul:description>
+      </xul:hbox>
+    </content>
+    <implementation>
+      <constructor><![CDATA[
+        // Unlike other autocomplete items, the height of the insecure warning
+        // increases by wrapping.
+        this._handleOverflow();
+      ]]></constructor>
     </implementation>
   </binding>
 
@@ -1601,6 +1756,9 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         <body>
           <![CDATA[
           // Get rid of all previous text
+          if (!aDescriptionElement) {
+            return;
+          }
           while (aDescriptionElement.hasChildNodes())
             aDescriptionElement.removeChild(aDescriptionElement.firstChild);
 
@@ -1806,7 +1964,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               let span = aDescriptionElement.appendChild(
                 document.createElementNS("http://www.w3.org/1999/xhtml", "span"));
               span.textContent = text;
-              switch(emphasise) {
+              switch (emphasise) {
                 case "match":
                   this._setUpEmphasisSpan(span, aDescriptionElement);
                   break;
@@ -1846,12 +2004,13 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           }
 
           let title = this.getAttribute("title");
+          let titleLooksLikeUrl = false;
 
           let displayUrl;
           let originalUrl = this.getAttribute("url");
           let emphasiseUrl = true;
 
-          let type = this.getAttribute("type");
+          let type = this.getAttribute("originaltype");
           let types = new Set(type.split(/\s+/));
           let initialTypes = new Set(types);
           // Remove types that should ultimately not be in the `type` string.
@@ -1898,6 +2057,17 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               // changed the order while it was possible, so doesn't look like
               // there's a strong need for that.
               let {engineName, searchSuggestion, searchQuery} = action.params;
+
+              // Override the engine name if the popup defines an override.
+              let override = popup.overrideSearchEngineName;
+              if (override && override != engineName) {
+                engineName = override;
+                action.params.engineName = override;
+                let newURL =
+                  PlacesUtils.mozActionURI(action.type, action.params);
+                this.setAttribute("url", newURL);
+              }
+
               let engineStr =
                 this._stringBundle.formatStringFromName("searchWithEngine",
                                                         [engineName], 1);
@@ -1944,8 +2114,13 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               emphasiseUrl = false;
               displayUrl = this._unescapeUrl(action.params.url);
               title = displayUrl;
+              titleLooksLikeUrl = true;
               let visitStr = this._stringBundle.GetStringFromName("visit");
               this._setUpDescription(this._actionText, visitStr, true);
+            } else if (action.type == "extension") {
+              let content = action.params.content;
+              displayUrl = content;
+              this._setUpDescription(this._actionText, content, true);
             }
           }
 
@@ -1965,6 +2140,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           // Show the domain as the title if we don't have a title.
           if (!title) {
             title = displayUrl;
+            titleLooksLikeUrl = true;
             try {
               let uri = Services.io.newURI(originalUrl, null, null);
               // Not all valid URLs have a domain.
@@ -2015,6 +2191,12 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           }
 
           this.setAttribute("type", type);
+
+          if (titleLooksLikeUrl) {
+            this._titleText.setAttribute("lookslikeurl", "true");
+          } else {
+            this._titleText.removeAttribute("lookslikeurl");
+          }
 
           if (Array.isArray(title)) {
             // For performance reasons we may want to limit the title size.
@@ -2093,14 +2275,15 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             separatorRect.width + Math.max(urlRect.width, actionRect.width);
 
           // Total width for the title and URL/action is the width of the item
-          // minus the start of the title text minus a little extra padding.
+          // minus the start of the title text minus a little optional extra padding.
           // This extra padding amount is basically arbitrary but keeps the text
           // from getting too close to the popup's edge.
-          let extraPadding = 30;
           let dir = this.getAttribute("dir");
           let titleStart = dir == "rtl" ? itemRect.right - titleRect.right
                                         : titleRect.left - itemRect.left;
-          let itemWidth = itemRect.width - titleStart - extraPadding;
+
+          let popup = this.parentNode.parentNode;
+          let itemWidth = itemRect.width - titleStart - popup.overflowPadding;
 
           if (this._tags.hasAttribute("empty")) {
             // The tags box is not displayed in this case.
@@ -2281,18 +2464,9 @@ extends="chrome://global/content/bindings/popup.xml#popup">
   </binding>
 
   <binding id="history-dropmarker" extends="chrome://global/content/bindings/general.xml#dropmarker">
-    <implementation>
-      <method name="showPopup">
-        <body><![CDATA[
-          var textbox = document.getBindingParent(this);
-          textbox.showHistoryPopup();
-        ]]></body>
-      </method>
-    </implementation>
-
     <handlers>
       <handler event="mousedown" button="0"><![CDATA[
-        this.showPopup();
+        document.getBindingParent(this).toggleHistoryPopup();
       ]]></handler>
     </handlers>
   </binding>

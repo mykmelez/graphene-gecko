@@ -16,14 +16,12 @@ const gHttpsTestRoot2 = "https://test2.example.com/browser/browser/base/content/
 var gTestBrowser = null;
 add_task(function *() {
   let url = gHttpTestRoot1 + "file_mixedContentFromOnunload.html";
-  yield BrowserTestUtils.withNewTab({gBrowser, url}, function*(){
-    yield new Promise(resolve => {
-      SpecialPowers.pushPrefEnv({
-        "set": [
-          ["security.mixed_content.block_active_content", true],
-          ["security.mixed_content.block_display_content", false]
-        ]
-      }, resolve);
+  yield BrowserTestUtils.withNewTab({gBrowser, url}, function*() {
+    yield SpecialPowers.pushPrefEnv({
+      "set": [
+        ["security.mixed_content.block_active_content", true],
+        ["security.mixed_content.block_display_content", false]
+      ]
     });
   gTestBrowser = gBrowser.selectedBrowser;
   // Navigation from an http page to a https page with no mixed content

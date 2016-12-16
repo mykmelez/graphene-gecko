@@ -48,10 +48,10 @@ struct TableCellReflowInput : public ReflowInput
 void TableCellReflowInput::FixUp(const LogicalSize& aAvailSpace)
 {
   // fix the mComputed values during a pass 2 reflow since the cell can be a percentage base
-  NS_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aAvailSpace.ISize(mWritingMode),
-                   "have unconstrained inline-size; this should only result from "
-                   "very large sizes, not attempts at intrinsic inline size "
-                   "calculation");
+  NS_WARNING_ASSERTION(
+    NS_UNCONSTRAINEDSIZE != aAvailSpace.ISize(mWritingMode),
+    "have unconstrained inline-size; this should only result from very large "
+    "sizes, not attempts at intrinsic inline size calculation");
   if (NS_UNCONSTRAINEDSIZE != ComputedISize()) {
     nscoord computedISize = aAvailSpace.ISize(mWritingMode) -
       ComputedLogicalBorderPadding().IStartEnd(mWritingMode);
@@ -131,8 +131,21 @@ NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 nsTableRowFrame::nsTableRowFrame(nsStyleContext* aContext)
   : nsContainerFrame(aContext)
+  , mContentBSize(0)
+  , mStylePctBSize(0)
+  , mStyleFixedBSize(0)
+  , mMaxCellAscent(0)
+  , mMaxCellDescent(0)
+  , mBStartBorderWidth(0)
+  , mBEndBorderWidth(0)
+  , mIEndContBorderWidth(0)
+  , mBStartContBorderWidth(0)
+  , mIStartContBorderWidth(0)
 {
-  mBits.mRowIndex = mBits.mFirstInserted = 0;
+  mBits.mRowIndex = 0;
+  mBits.mHasFixedBSize = 0;
+  mBits.mHasPctBSize = 0;
+  mBits.mFirstInserted = 0;
   ResetBSize(0);
 }
 
@@ -148,7 +161,7 @@ nsTableRowFrame::Init(nsIContent*       aContent,
   // Let the base class do its initialization
   nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
 
-  NS_ASSERTION(NS_STYLE_DISPLAY_TABLE_ROW == StyleDisplay()->mDisplay,
+  NS_ASSERTION(mozilla::StyleDisplay::TableRow == StyleDisplay()->mDisplay,
                "wrong display on table row frame");
 
   if (aPrevInFlow) {
@@ -626,7 +639,7 @@ nsIFrame::LogicalSides
 nsTableRowFrame::GetLogicalSkipSides(const ReflowInput* aReflowInput) const
 {
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
-                     NS_STYLE_BOX_DECORATION_BREAK_CLONE)) {
+                     StyleBoxDecorationBreak::Clone)) {
     return LogicalSides();
   }
 
@@ -1401,7 +1414,8 @@ nsTableRowFrame::GetNextRow() const
   while (childFrame) {
     nsTableRowFrame *rowFrame = do_QueryFrame(childFrame);
     if (rowFrame) {
-	  NS_ASSERTION(NS_STYLE_DISPLAY_TABLE_ROW == childFrame->StyleDisplay()->mDisplay, "wrong display type on rowframe");
+	  NS_ASSERTION(mozilla::StyleDisplay::TableRow == childFrame->StyleDisplay()->mDisplay,
+                 "wrong display type on rowframe");
       return rowFrame;
     }
     childFrame = childFrame->GetNextSibling();

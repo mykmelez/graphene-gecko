@@ -132,7 +132,7 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
    * The observer is passed the connection identifier of the database
    * connection that is being finalized.
    */
-  let finalizationObserver = function (subject, topic, identifier) {
+  let finalizationObserver = function(subject, topic, identifier) {
     let connectionData = ConnectionData.byId.get(identifier);
 
     if (connectionData === undefined) {
@@ -207,7 +207,7 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
  * OpenedConnection needs to use the methods in this object, it will
  * dispatch its method calls here.
  */
-function ConnectionData(connection, identifier, options={}) {
+function ConnectionData(connection, identifier, options = {}) {
   this._log = Log.repository.getLoggerWithMessagePrefix("Sqlite.Connection",
                                                         identifier + ": ");
   this._log.info("Opened");
@@ -389,7 +389,7 @@ ConnectionData.prototype = Object.freeze({
       }
     }.bind(this));
   },
-  close: function () {
+  close: function() {
     this._closeRequested = true;
 
     if (!this._dbConn) {
@@ -407,7 +407,7 @@ ConnectionData.prototype = Object.freeze({
     });
   },
 
-  clone: function (readOnly=false) {
+  clone: function(readOnly = false) {
     this.ensureOpen();
 
     this._log.debug("Request to clone connection.");
@@ -424,10 +424,10 @@ ConnectionData.prototype = Object.freeze({
   _getOperationId: function() {
     return this._operationsCounter++;
   },
-  _finalize: function () {
+  _finalize: function() {
     this._log.debug("Finalizing connection.");
     // Cancel any pending statements.
-    for (let [k, statement] of this._pendingStatements) {
+    for (let [/* k */, statement] of this._pendingStatements) {
       statement.cancel();
     }
     this._pendingStatements.clear();
@@ -436,12 +436,12 @@ ConnectionData.prototype = Object.freeze({
     this._statementCounter = 0;
 
     // Next we finalize all active statements.
-    for (let [k, statement] of this._anonymousStatements) {
+    for (let [/* k */, statement] of this._anonymousStatements) {
       statement.finalize();
     }
     this._anonymousStatements.clear();
 
-    for (let [k, statement] of this._cachedStatements) {
+    for (let [/* k */, statement] of this._cachedStatements) {
       statement.finalize();
     }
     this._cachedStatements.clear();
@@ -471,7 +471,7 @@ ConnectionData.prototype = Object.freeze({
     return this._deferredClose.promise;
   },
 
-  executeCached: function (sql, params=null, onRow=null) {
+  executeCached: function(sql, params = null, onRow = null) {
     this.ensureOpen();
 
     if (!sql) {
@@ -505,7 +505,7 @@ ConnectionData.prototype = Object.freeze({
     });
   },
 
-  execute: function (sql, params=null, onRow=null) {
+  execute: function(sql, params = null, onRow = null) {
     if (typeof(sql) != "string") {
       throw new Error("Must define SQL to execute as a string: " + sql);
     }
@@ -547,7 +547,7 @@ ConnectionData.prototype = Object.freeze({
     return this._open && this._hasInProgressTransaction;
   },
 
-  executeTransaction: function (func, type) {
+  executeTransaction: function(func, type) {
     if (typeof type == "undefined") {
       throw new Error("Internal error: expected a type");
     }
@@ -653,15 +653,15 @@ ConnectionData.prototype = Object.freeze({
     return promise;
   },
 
-  shrinkMemory: function () {
+  shrinkMemory: function() {
     this._log.info("Shrinking memory usage.");
     let onShrunk = this._clearIdleShrinkTimer.bind(this);
     return this.execute("PRAGMA shrink_memory").then(onShrunk, onShrunk);
   },
 
-  discardCachedStatements: function () {
+  discardCachedStatements: function() {
     let count = 0;
-    for (let [k, statement] of this._cachedStatements) {
+    for (let [/* k */, statement] of this._cachedStatements) {
       ++count;
       statement.finalize();
     }
@@ -674,7 +674,7 @@ ConnectionData.prototype = Object.freeze({
    * Helper method to bind parameters of various kinds through
    * reflection.
    */
-  _bindParameters: function (statement, params) {
+  _bindParameters: function(statement, params) {
     if (!params) {
       return;
     }
@@ -685,7 +685,7 @@ ConnectionData.prototype = Object.freeze({
         let paramsArray = statement.newBindingParamsArray();
         for (let p of params) {
           let bindings = paramsArray.newBindingParams();
-          for (let [key, value] of Iterator(p)) {
+          for (let [key, value] of Object.entries(p)) {
             bindings.bindByName(key, value);
           }
           paramsArray.addParams(bindings);
@@ -714,7 +714,7 @@ ConnectionData.prototype = Object.freeze({
                     "object. Got: " + params);
   },
 
-  _executeStatement: function (sql, statement, params, onRow) {
+  _executeStatement: function(sql, statement, params, onRow) {
     if (statement.state != statement.MOZ_STORAGE_STATEMENT_READY) {
       throw new Error("Statement is not ready for execution.");
     }
@@ -748,7 +748,7 @@ ConnectionData.prototype = Object.freeze({
 
     let self = this;
     let pending = statement.executeAsync({
-      handleResult: function (resultSet) {
+      handleResult: function(resultSet) {
         // .cancel() may not be immediate and handleResult() could be called
         // after a .cancel().
         for (let row = resultSet.getNextRow(); row && !userCancelled; row = resultSet.getNextRow()) {
@@ -773,13 +773,13 @@ ConnectionData.prototype = Object.freeze({
         }
       },
 
-      handleError: function (error) {
+      handleError: function(error) {
         self._log.info("Error when executing SQL (" +
                        error.result + "): " + error.message);
         errors.push(error);
       },
 
-      handleCompletion: function (reason) {
+      handleCompletion: function(reason) {
         self._log.debug("Stmt #" + index + " finished.");
         self._pendingStatements.delete(index);
 
@@ -821,13 +821,13 @@ ConnectionData.prototype = Object.freeze({
     return deferred.promise;
   },
 
-  ensureOpen: function () {
+  ensureOpen: function() {
     if (!this._open) {
       throw new Error("Connection is not open.");
     }
   },
 
-  _clearIdleShrinkTimer: function () {
+  _clearIdleShrinkTimer: function() {
     if (!this._idleShrinkTimer) {
       return;
     }
@@ -835,7 +835,7 @@ ConnectionData.prototype = Object.freeze({
     this._idleShrinkTimer.cancel();
   },
 
-  _startIdleShrinkTimer: function () {
+  _startIdleShrinkTimer: function() {
     if (!this._idleShrinkTimer) {
       return;
     }
@@ -867,6 +867,15 @@ ConnectionData.prototype = Object.freeze({
  *       automatic memory minimization will occur. Please note that this is
  *       *not* a timer on the idle service and this could fire while the
  *       application is active.
+ *
+ *   readOnly -- (bool) Whether to open the database with SQLITE_OPEN_READONLY
+ *       set. If used, writing to the database will fail. Defaults to false.
+ *
+ *   ignoreLockingMode -- (bool) Whether to ignore locks on the database held
+ *       by other connections. If used, implies readOnly. Defaults to false.
+ *       USE WITH EXTREME CAUTION. This mode WILL produce incorrect results or
+ *       return "false positive" corruption errors if other connections write
+ *       to the DB at the same time.
  *
  * FUTURE options to control:
  *
@@ -915,12 +924,21 @@ function openConnection(options) {
   log.info("Opening database: " + path + " (" + identifier + ")");
 
   return new Promise((resolve, reject) => {
-    let dbOptions = null;
+    let dbOptions = Cc["@mozilla.org/hash-property-bag;1"].
+                    createInstance(Ci.nsIWritablePropertyBag);
     if (!sharedMemoryCache) {
-      dbOptions = Cc["@mozilla.org/hash-property-bag;1"].
-        createInstance(Ci.nsIWritablePropertyBag);
       dbOptions.setProperty("shared", false);
     }
+    if (options.readOnly) {
+      dbOptions.setProperty("readOnly", true);
+    }
+    if (options.ignoreLockingMode) {
+      dbOptions.setProperty("ignoreLockingMode", true);
+      dbOptions.setProperty("readOnly", true);
+    }
+
+    dbOptions = dbOptions.enumerator.hasMoreElements() ? dbOptions : null;
+
     Services.storage.openAsyncDatabase(file, dbOptions, (status, connection) => {
       if (!connection) {
         log.warn(`Could not open connection to ${path}: ${status}`);
@@ -977,7 +995,7 @@ function cloneStorageConnection(options) {
   if (!source) {
     throw new TypeError("connection not specified in clone options.");
   }
-  if (!source instanceof Ci.mozIStorageAsyncConnection) {
+  if (!(source instanceof Ci.mozIStorageAsyncConnection)) {
     throw new TypeError("Connection must be a valid Storage connection.");
   }
 
@@ -1115,7 +1133,7 @@ function wrapStorageConnection(options) {
  *        (object) Options to control behavior of connection. See
  *        `openConnection`.
  */
-function OpenedConnection(connection, identifier, options={}) {
+function OpenedConnection(connection, identifier, options = {}) {
   // Store all connection data in a field distinct from the
   // witness. This enables us to store an additional reference to this
   // field without preventing garbage collection of
@@ -1152,7 +1170,6 @@ OpenedConnection.prototype = Object.freeze({
    * @return Promise<int>
    */
   getSchemaVersion: function() {
-    let self = this;
     return this.execute("PRAGMA user_version").then(
       function onSuccess(result) {
         if (result == null) {
@@ -1190,7 +1207,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<>
    */
-  close: function () {
+  close: function() {
     // Unless cleanup has already been done by a previous call to
     // `close`, delete the database entry from map and tell the
     // finalization witness to forget.
@@ -1215,7 +1232,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<OpenedConnection>
    */
-  clone: function (readOnly=false) {
+  clone: function(readOnly = false) {
     return this._connectionData.clone(readOnly);
   },
 
@@ -1281,7 +1298,7 @@ OpenedConnection.prototype = Object.freeze({
    * @param onRow optional
    *        (function) Callback to receive each row from result.
    */
-  executeCached: function (sql, params=null, onRow=null) {
+  executeCached: function(sql, params = null, onRow = null) {
     if (isInvalidBoundLikeQuery(sql)) {
       throw new Error("Please enter a LIKE clause with bindings");
     }
@@ -1303,7 +1320,7 @@ OpenedConnection.prototype = Object.freeze({
    * @param onRow optional
    *        (function) Callback to receive result of a single row.
    */
-  execute: function (sql, params=null, onRow=null) {
+  execute: function(sql, params = null, onRow = null) {
     if (isInvalidBoundLikeQuery(sql)) {
       throw new Error("Please enter a LIKE clause with bindings");
     }
@@ -1355,7 +1372,7 @@ OpenedConnection.prototype = Object.freeze({
    * @param type optional
    *        One of the TRANSACTION_* constants attached to this type.
    */
-  executeTransaction: function (func, type=this.TRANSACTION_DEFERRED) {
+  executeTransaction: function(func, type = this.TRANSACTION_DEFERRED) {
     if (this.TRANSACTION_TYPES.indexOf(type) == -1) {
       throw new Error("Unknown transaction type: " + type);
     }
@@ -1371,7 +1388,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<bool>
    */
-  tableExists: function (name) {
+  tableExists: function(name) {
     return this.execute(
       "SELECT name FROM (SELECT * FROM sqlite_master UNION ALL " +
                         "SELECT * FROM sqlite_temp_master) " +
@@ -1391,7 +1408,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<bool>
    */
-  indexExists: function (name) {
+  indexExists: function(name) {
     return this.execute(
       "SELECT name FROM (SELECT * FROM sqlite_master UNION ALL " +
                         "SELECT * FROM sqlite_temp_master) " +
@@ -1408,7 +1425,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return Promise<>
    */
-  shrinkMemory: function () {
+  shrinkMemory: function() {
     return this._connectionData.shrinkMemory();
   },
 
@@ -1422,7 +1439,7 @@ OpenedConnection.prototype = Object.freeze({
    *
    * @return (integer) the number of statements discarded.
    */
-  discardCachedStatements: function () {
+  discardCachedStatements: function() {
     return this._connectionData.discardCachedStatements();
   },
 });

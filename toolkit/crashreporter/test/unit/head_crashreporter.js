@@ -53,7 +53,7 @@ function do_crash(setup, callback, canReturnZero)
   if (setup) {
     if (typeof(setup) == "function")
       // funky, but convenient
-      setup = "("+setup.toSource()+")();";
+      setup = "(" + setup.toSource() + ")();";
     args.push('-e', setup);
   }
   args.push('-f', tailfile.path);
@@ -72,7 +72,7 @@ function do_crash(setup, callback, canReturnZero)
   try {
       process.run(true, args, args.length);
   }
-  catch(ex) {} // on Windows we exit with a -1 status when crashing.
+  catch (ex) {} // on Windows we exit with a -1 status when crashing.
   finally {
     env.set("CRASHES_EVENTS_DIR", "");
   }
@@ -147,7 +147,7 @@ function do_content_crash(setup, callback)
   if (setup) {
     if (typeof(setup) == "function")
       // funky, but convenient
-      setup = "("+setup.toSource()+")();";
+      setup = "(" + setup.toSource() + ")();";
   }
 
   let handleCrash = function() {

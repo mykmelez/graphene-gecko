@@ -7,7 +7,9 @@
 #ifndef gc_Statistics_h
 #define gc_Statistics_h
 
+#include "mozilla/EnumeratedArray.h"
 #include "mozilla/IntegerRange.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/PodOperations.h"
 
 #include "jsalloc.h"
@@ -16,6 +18,8 @@
 
 #include "js/GCAPI.h"
 #include "js/Vector.h"
+
+using mozilla::Maybe;
 
 namespace js {
 
@@ -62,6 +66,7 @@ enum Phase : uint8_t {
     PHASE_SWEEP_OBJECT,
     PHASE_SWEEP_STRING,
     PHASE_SWEEP_SCRIPT,
+    PHASE_SWEEP_SCOPE,
     PHASE_SWEEP_SHAPE,
     PHASE_SWEEP_JITCODE,
     PHASE_FINALIZE_END,
@@ -79,10 +84,11 @@ enum Phase : uint8_t {
     PHASE_MARK_ROOTS,
     PHASE_BUFFER_GRAY_ROOTS,
     PHASE_MARK_CCWS,
-    PHASE_MARK_ROOTERS,
+    PHASE_MARK_STACK,
     PHASE_MARK_RUNTIME_DATA,
     PHASE_MARK_EMBEDDING,
     PHASE_MARK_COMPARTMENTS,
+    PHASE_PURGE_SHAPE_TABLES,
 
     PHASE_LIMIT,
     PHASE_NONE = PHASE_LIMIT,
@@ -133,6 +139,22 @@ struct ZoneGCStats
         collectedCompartmentCount(0), compartmentCount(0), sweptCompartmentCount(0)
     {}
 };
+
+#define FOR_EACH_GC_PROFILE_TIME(_)                                           \
+    _(BeginCallback, "bgnCB",  PHASE_GC_BEGIN)                                \
+    _(WaitBgThread,  "waitBG", PHASE_WAIT_BACKGROUND_THREAD)                  \
+    _(DiscardCode,   "discrd", PHASE_MARK_DISCARD_CODE)                       \
+    _(RelazifyFunc,  "relzfy", PHASE_RELAZIFY_FUNCTIONS)                      \
+    _(PurgeTables,   "prgTbl", PHASE_PURGE_SHAPE_TABLES)                      \
+    _(Purge,         "purge",  PHASE_PURGE)                                   \
+    _(Mark,          "mark",   PHASE_MARK)                                    \
+    _(Sweep,         "sweep",  PHASE_SWEEP)                                   \
+    _(Compact,       "cmpct",  PHASE_COMPACT)                                 \
+    _(EndCallback,   "endCB",  PHASE_GC_END)                                  \
+    _(Barriers,      "brrier", PHASE_BARRIER)
+
+const char* ExplainAbortReason(gc::AbortReason reason);
+const char* ExplainInvocationKind(JSGCInvocationKind gckind);
 
 /*
  * Struct for collecting timing statistics on a "phase tree". The tree is
@@ -205,14 +227,24 @@ struct Statistics
     void sweptZone() { ++zoneStats.sweptZoneCount; }
     void sweptCompartment() { ++zoneStats.sweptCompartmentCount; }
 
-    void reset(const char* reason) {
+    void reset(gc::AbortReason reason) {
+        MOZ_ASSERT(reason != gc::AbortReason::None);
         if (!aborted)
             slices.back().resetReason = reason;
     }
 
-    void nonincremental(const char* reason) { nonincrementalReason_ = reason; }
+    void nonincremental(gc::AbortReason reason) {
+        MOZ_ASSERT(reason != gc::AbortReason::None);
+        nonincrementalReason_ = reason;
+    }
 
-    const char* nonincrementalReason() const { return nonincrementalReason_; }
+    bool nonincremental() const {
+        return nonincrementalReason_ != gc::AbortReason::None;
+    }
+
+    const char* nonincrementalReason() const {
+        return ExplainAbortReason(nonincrementalReason_);
+    }
 
     void count(Stat s) {
         MOZ_ASSERT(s < STAT_LIMIT);
@@ -253,8 +285,8 @@ struct Statistics
                   double startTimestamp, size_t startFaults, gc::State initialState)
           : budget(budget), reason(reason),
             initialState(initialState),
-            finalState(gc::NO_INCREMENTAL),
-            resetReason(nullptr),
+            finalState(gc::State::NotActive),
+            resetReason(gc::AbortReason::None),
             start(start), startTimestamp(startTimestamp),
             startFaults(startFaults)
         {
@@ -265,13 +297,14 @@ struct Statistics
         SliceBudget budget;
         JS::gcreason::Reason reason;
         gc::State initialState, finalState;
-        const char* resetReason;
+        gc::AbortReason resetReason;
         int64_t start, end;
         double startTimestamp, endTimestamp;
         size_t startFaults, endFaults;
         PhaseTimeTable phaseTimes;
 
         int64_t duration() const { return end - start; }
+        bool wasReset() const { return resetReason != gc::AbortReason::None; }
     };
 
     typedef Vector<SliceData, 8, SystemAllocPolicy> SliceDataVector;
@@ -279,6 +312,15 @@ struct Statistics
 
     SliceRange sliceRange() const { return slices.all(); }
     size_t slicesLength() const { return slices.length(); }
+
+    /* Occasionally print header lines for profiling information. */
+    void maybePrintProfileHeaders();
+
+    /* Print header line for profile times. */
+    void printProfileHeader();
+
+    /* Print total profile times on shutdown. */
+    void printTotalProfileTimes();
 
   private:
     JSRuntime* runtime;
@@ -298,7 +340,7 @@ struct Statistics
 
     JSGCInvocationKind gckind;
 
-    const char* nonincrementalReason_;
+    gc::AbortReason nonincrementalReason_;
 
     SliceDataVector slices;
 
@@ -351,6 +393,25 @@ struct Statistics
      */
     bool aborted;
 
+    /* Profiling data. */
+
+    enum class ProfileKey
+    {
+        Total,
+#define DEFINE_TIME_KEY(name, text, phase)                                    \
+        name,
+FOR_EACH_GC_PROFILE_TIME(DEFINE_TIME_KEY)
+#undef DEFINE_TIME_KEY
+        KeyCount
+    };
+
+    using ProfileTimes = mozilla::EnumeratedArray<ProfileKey, ProfileKey::KeyCount, int64_t>;
+
+    int64_t profileThreshold_;
+    bool enableProfiling_;
+    ProfileTimes totalTimes_;
+    uint64_t sliceCount_;
+
     void beginGC(JSGCInvocationKind kind);
     void endGC();
 
@@ -372,6 +433,9 @@ struct Statistics
     UniqueChars formatJsonPhaseTimes(const PhaseTimeTable phaseTimes);
 
     double computeMMU(int64_t resolution) const;
+
+    void printSliceProfile();
+    static void printProfileTimes(const ProfileTimes& times);
 };
 
 struct MOZ_RAII AutoGCSlice
@@ -411,10 +475,11 @@ struct MOZ_RAII AutoPhase
 
     ~AutoPhase() {
         if (enabled) {
-            if (task)
-                stats.endParallelPhase(phase, task);
-            else
-                stats.endPhase(phase);
+            // Bug 1309651 - we only record mainthread time (including time
+            // spent waiting to join with helper threads), but should start
+            // recording total work on helper threads sometime by calling
+            // endParallelPhase here if task is nonnull.
+            stats.endPhase(phase);
         }
     }
 
@@ -439,8 +504,6 @@ struct MOZ_RAII AutoSCC
     unsigned scc;
     int64_t start;
 };
-
-const char* ExplainInvocationKind(JSGCInvocationKind gckind);
 
 } /* namespace gcstats */
 } /* namespace js */

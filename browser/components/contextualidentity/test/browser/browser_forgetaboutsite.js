@@ -15,7 +15,6 @@ let css = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
 const USER_CONTEXTS = [
   "default",
   "personal",
-  "work",
 ];
 const TEST_HOST = "example.com";
 const TEST_URL = "http://" + TEST_HOST + "/browser/browser/components/contextualidentity/test/browser/";
@@ -99,7 +98,7 @@ function OpenCacheEntry(key, where, flags, lci)
     CacheListener.prototype = {
       _appCache: null,
 
-      QueryInterface: function (iid) {
+      QueryInterface: function(iid) {
         if (iid.equals(Components.interfaces.nsICacheEntryOpenCallback) ||
             iid.equals(Components.interfaces.nsISupports))
           return this;
@@ -110,11 +109,11 @@ function OpenCacheEntry(key, where, flags, lci)
         return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
       },
 
-      onCacheEntryAvailable: function (entry, isnew, appCache, status) {
+      onCacheEntryAvailable: function(entry, isnew, appCache, status) {
         resolve();
       },
 
-      run: function () {
+      run: function() {
         let storage = getCacheStorage(where, lci, this._appCache);
         storage.asyncOpenURI(key, "", flags, this);
       }
@@ -133,12 +132,12 @@ function* test_cookie_cleared() {
   let tabs = [];
 
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    // Load the page in 3 different contexts and set a cookie
+    // Load the page in 2 different contexts and set a cookie
     // which should only be visible in that context.
     let value = USER_CONTEXTS[userContextId];
 
     // Open our tab in the given user context.
-    tabs[userContextId] = yield* openTabInUserContext(TEST_URL+ "file_reflect_cookie_into_title.html?" + value, userContextId);
+    tabs[userContextId] = yield* openTabInUserContext(TEST_URL + "file_reflect_cookie_into_title.html?" + value, userContextId);
 
     // Close this tab.
     yield BrowserTestUtils.removeTab(tabs[userContextId].tab);
@@ -170,19 +169,19 @@ function* test_cache_cleared() {
     yield OpenCacheEntry("http://" + TEST_HOST + "/",
                          "disk",
                          Ci.nsICacheStorage.OPEN_NORMALLY,
-                         LoadContextInfo.custom(false, false, {userContextId}));
+                         LoadContextInfo.custom(false, {userContextId}));
 
     yield OpenCacheEntry("http://" + TEST_HOST + "/",
                          "memory",
                          Ci.nsICacheStorage.OPEN_NORMALLY,
-                         LoadContextInfo.custom(false, false, {userContextId}));
+                         LoadContextInfo.custom(false, {userContextId}));
   }
 
 
   // Check that caches have been set correctly.
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    let mem = getCacheStorage("memory");
-    let disk = getCacheStorage("disk");
+    let mem = getCacheStorage("memory", LoadContextInfo.custom(false, {userContextId}));
+    let disk = getCacheStorage("disk", LoadContextInfo.custom(false, {userContextId}));
 
     Assert.ok(mem.exists(createURI("http://" + TEST_HOST + "/"), ""), "The memory cache has been set correctly");
     Assert.ok(disk.exists(createURI("http://" + TEST_HOST + "/"), ""), "The disk cache has been set correctly");
@@ -193,8 +192,8 @@ function* test_cache_cleared() {
 
   // Check that do caches be removed or not?
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    let mem = getCacheStorage("memory");
-    let disk = getCacheStorage("disk");
+    let mem = getCacheStorage("memory", LoadContextInfo.custom(false, {userContextId}));
+    let disk = getCacheStorage("disk", LoadContextInfo.custom(false, {userContextId}));
 
     Assert.ok(!mem.exists(createURI("http://" + TEST_HOST + "/"), ""), "The memory cache is cleared");
     Assert.ok(!disk.exists(createURI("http://" + TEST_HOST + "/"), ""), "The disk cache is cleared");
@@ -212,8 +211,10 @@ function* test_image_cache_cleared() {
     yield BrowserTestUtils.removeTab(tabs[userContextId].tab);
   }
 
+  let expectedHits = USER_CONTEXTS.length;
+
   // Check that image cache works with the userContextId.
-  todo_is(gHits, 3, "The image should be loaded three times. This test should be enabled after the bug 1270680 landed");
+  is(gHits, expectedHits, "The image should be loaded" + expectedHits + "times.");
 
   // Reset the cache count.
   gHits = 0;
@@ -229,19 +230,19 @@ function* test_image_cache_cleared() {
     yield BrowserTestUtils.removeTab(tabs[userContextId].tab);
   }
 
-  // Check that image cache was cleared and the server gets another three hits.
-  todo_is(gHits, 3, "The image should be loaded three times. This test should be enabled after the bug 1270680 landed");
+  // Check that image cache was cleared and the server gets another two hits.
+  is(gHits, expectedHits, "The image should be loaded" + expectedHits + "times.");
 }
 
 // Offline Storage
 function* test_storage_cleared() {
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
-    // Load the page in 3 different contexts and set the local storage
+    // Load the page in 2 different contexts and set the local storage
     // which should only be visible in that context.
     let value = USER_CONTEXTS[userContextId];
 
     // Open our tab in the given user context.
-    let tabInfo = yield* openTabInUserContext(TEST_URL+ "file_set_storages.html?" + value, userContextId);
+    let tabInfo = yield* openTabInUserContext(TEST_URL + "file_set_storages.html?" + value, userContextId);
 
     // Check that the storages has been set correctly.
     yield ContentTask.spawn(tabInfo.browser, { userContext: USER_CONTEXTS[userContextId] }, function* (arg) {
@@ -284,7 +285,7 @@ function* test_storage_cleared() {
   // local storage has been cleared or not.
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
     // Open our tab in the given user context without setting local storage.
-    let tabInfo = yield* openTabInUserContext(TEST_URL+ "file_set_storages.html", userContextId);
+    let tabInfo = yield* openTabInUserContext(TEST_URL + "file_set_storages.html", userContextId);
 
     // Check that do storages be cleared or not.
     yield ContentTask.spawn(tabInfo.browser, null, function* () {
@@ -303,7 +304,7 @@ function* test_storage_cleared() {
         };
       });
       try {
-        let transaction = db.transaction(["obj"], "readonly");
+        db.transaction(["obj"], "readonly");
         Assert.ok(false, "The indexedDB should not exist");
       } catch (e) {
         Assert.equal(e.name, "NotFoundError", "The indexedDB does not exist as expected");
@@ -317,11 +318,9 @@ function* test_storage_cleared() {
 
 add_task(function* setup() {
   // Make sure userContext is enabled.
-  yield new Promise(resolve => {
-    SpecialPowers.pushPrefEnv({"set": [
-      ["privacy.userContext.enabled", true]
-    ]}, resolve);
-  });
+  yield SpecialPowers.pushPrefEnv({"set": [
+    ["privacy.userContext.enabled", true]
+  ]});
 
   // Create a http server for the image cache test.
   if (!gHttpServer) {

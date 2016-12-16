@@ -82,7 +82,7 @@ class ToolLauncher(object):
             env[e] = extra_env[e]
 
         # For VC12+, make sure we can find the right bitness of pgort1x0.dll
-        if not buildconfig.substs['HAVE_64BIT_BUILD']:
+        if not buildconfig.substs.get('HAVE_64BIT_BUILD'):
             for e in ('VS140COMNTOOLS', 'VS120COMNTOOLS'):
                 if e not in env:
                     continue
@@ -325,7 +325,7 @@ def main():
         # native architecture.
         args.source, args.unify = sorted([args.source, args.unify],
                                          key=is_native, reverse=True)
-        if is_native(args.source):
+        if is_native(args.source) and not buildconfig.substs['CROSS_COMPILE']:
             launcher.tooldir = args.source
     elif not buildconfig.substs['CROSS_COMPILE']:
         launcher.tooldir = mozpath.join(buildconfig.topobjdir, 'dist')

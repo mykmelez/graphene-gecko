@@ -716,6 +716,8 @@ Math64.h
 math.h
 mbstring.h
 #ifdef ANDROID
+android/native_window.h
+android/native_window_jni.h
 media/AudioEffect.h
 media/AudioSystem.h
 media/ICrypto.h
@@ -998,6 +1000,7 @@ sys/elf.h
 sys/endian.h
 sys/epoll.h
 sys/errno.h
+sys/eventfd.h
 sys/fault.h
 sys/fcntl.h
 sys/file.h
@@ -1329,3 +1332,4 @@ unicode/utypes.h
 #endif
 libutil.h
 unwind.h
+fenv.h

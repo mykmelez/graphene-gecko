@@ -2,7 +2,7 @@ try {
   // We might be running without privileges, in which case it's up to the
   // harness to give us the 'ctypes' object.
   Components.utils.import("resource://gre/modules/ctypes.jsm");
-} catch(e) {
+} catch (e) {
 }
 
 function open_ctypes_test_lib()
@@ -95,7 +95,7 @@ function structural_check_eq_aux(a, b) {
     ak = Object.keys(a);
   } catch (x) {
     if (a != b) {
-      throw new Error("Distinct values "+a, b);
+      throw new Error("Distinct values " + a, b);
     }
     return;
   }

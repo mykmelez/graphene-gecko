@@ -93,12 +93,14 @@ StateManagerGL::StateManagerGL(const FunctionsGL *functions, const gl::Caps &ren
       mDepthMask(true),
       mStencilTestEnabled(false),
       mStencilFrontFunc(GL_ALWAYS),
+      mStencilFrontRef(0),
       mStencilFrontValueMask(static_cast<GLuint>(-1)),
       mStencilFrontStencilFailOp(GL_KEEP),
       mStencilFrontStencilPassDepthFailOp(GL_KEEP),
       mStencilFrontStencilPassDepthPassOp(GL_KEEP),
       mStencilFrontWritemask(static_cast<GLuint>(-1)),
       mStencilBackFunc(GL_ALWAYS),
+      mStencilBackRef(0),
       mStencilBackValueMask(static_cast<GLuint>(-1)),
       mStencilBackStencilFailOp(GL_KEEP),
       mStencilBackStencilPassDepthFailOp(GL_KEEP),
@@ -117,6 +119,7 @@ StateManagerGL::StateManagerGL(const FunctionsGL *functions, const gl::Caps &ren
       mClearDepth(1.0f),
       mClearStencil(0),
       mFramebufferSRGBEnabled(false),
+      mDitherEnabled(true),
       mTextureCubemapSeamlessEnabled(false),
       mMultisamplingEnabled(true),
       mSampleAlphaToOneEnabled(false),
@@ -658,18 +661,26 @@ gl::Error StateManagerGL::setDrawElementsState(const gl::ContextState &data,
     return setGenericDrawState(data);
 }
 
-gl::Error StateManagerGL::onMakeCurrent(const gl::ContextState &data)
+gl::Error StateManagerGL::pauseTransformFeedback(const gl::ContextState &data)
 {
-    const gl::State &state = data.getState();
-
-    // If the context has changed, pause the previous context's transform feedback and queries
+    // If the context is going to be changed, pause the previous context's transform feedback
     if (data.getContext() != mPrevDrawContext)
     {
         if (mPrevDrawTransformFeedback != nullptr)
         {
             mPrevDrawTransformFeedback->syncPausedState(true);
         }
+    }
+    return gl::Error(GL_NO_ERROR);
+}
 
+gl::Error StateManagerGL::onMakeCurrent(const gl::ContextState &data)
+{
+    const gl::State &state = data.getState();
+
+    // If the context has changed, pause the previous context's queries
+    if (data.getContext() != mPrevDrawContext)
+    {
         for (QueryGL *prevQuery : mCurrentQueries)
         {
             prevQuery->pause();
@@ -732,18 +743,21 @@ gl::Error StateManagerGL::setGenericDrawState(const gl::ContextState &data)
         GLenum textureType = samplerUniform.textureType;
         for (GLuint textureUnitIndex : samplerUniform.boundTextureUnits)
         {
-            const gl::Texture *texture = state.getSamplerTexture(textureUnitIndex, textureType);
+            gl::Texture *texture = state.getSamplerTexture(textureUnitIndex, textureType);
             if (texture != nullptr)
             {
                 const TextureGL *textureGL = GetImplAs<TextureGL>(texture);
 
-                if (mTextures[textureType][textureUnitIndex] != textureGL->getTextureID())
+                if (mTextures[textureType][textureUnitIndex] != textureGL->getTextureID() ||
+                    texture->hasAnyDirtyBit() || textureGL->hasAnyDirtyBit())
                 {
                     activeTexture(textureUnitIndex);
                     bindTexture(textureType, textureGL->getTextureID());
-                }
 
-                textureGL->syncState(textureUnitIndex);
+                    // TODO: Call this from the gl:: layer once other backends use dirty bits for
+                    // texture state.
+                    texture->syncImplState();
+                }
             }
             else
             {
@@ -771,10 +785,9 @@ gl::Error StateManagerGL::setGenericDrawState(const gl::ContextState &data)
     const gl::Framebuffer *framebuffer = state.getDrawFramebuffer();
     const FramebufferGL *framebufferGL = GetImplAs<FramebufferGL>(framebuffer);
     bindFramebuffer(GL_DRAW_FRAMEBUFFER, framebufferGL->getFramebufferID());
-    framebufferGL->syncDrawState();
 
     // Seamless cubemaps are required for ES3 and higher contexts.
-    setTextureCubemapSeamlessEnabled(data.getClientVersion() >= 3);
+    setTextureCubemapSeamlessEnabled(data.getClientMajorVersion() >= 3);
 
     // Set the current transform feedback state
     gl::TransformFeedback *transformFeedback = state.getCurrentTransformFeedback();
@@ -1306,6 +1319,13 @@ void StateManagerGL::setClearStencil(GLint clearStencil)
 
 void StateManagerGL::syncState(const gl::State &state, const gl::State::DirtyBits &glDirtyBits)
 {
+    // The the current framebuffer binding sometimes requires resetting the srgb blending
+    if (glDirtyBits[gl::State::DIRTY_BIT_DRAW_FRAMEBUFFER_BINDING] &&
+        mFunctions->standard == STANDARD_GL_DESKTOP)
+    {
+        mLocalDirtyBits.set(gl::State::DIRTY_BIT_FRAMEBUFFER_SRGB);
+    }
+
     const auto &glAndLocalDirtyBits = (glDirtyBits | mLocalDirtyBits);
 
     if (!glAndLocalDirtyBits.any())
@@ -1503,7 +1523,7 @@ void StateManagerGL::syncState(const gl::State &state, const gl::State::DirtyBit
                 setPixelPackState(state.getPackState());
                 break;
             case gl::State::DIRTY_BIT_DITHER_ENABLED:
-                // TODO(jmadill): implement this
+                setDitherEnabled(state.isDitherEnabled());
                 break;
             case gl::State::DIRTY_BIT_GENERATE_MIPMAP_HINT:
                 // TODO(jmadill): implement this
@@ -1546,6 +1566,11 @@ void StateManagerGL::syncState(const gl::State &state, const gl::State::DirtyBit
                 setPathRenderingStencilState(state.getPathStencilFunc(), state.getPathStencilRef(),
                                              state.getPathStencilMask());
                 break;
+            case gl::State::DIRTY_BIT_FRAMEBUFFER_SRGB:
+                setFramebufferSRGBEnabledForFramebuffer(
+                    state.getFramebufferSRGB(),
+                    GetImplAs<FramebufferGL>(state.getDrawFramebuffer()));
+                break;
             default:
             {
                 ASSERT(dirtyBit >= gl::State::DIRTY_BIT_CURRENT_VALUE_0 &&
@@ -1574,6 +1599,41 @@ void StateManagerGL::setFramebufferSRGBEnabled(bool enabled)
         else
         {
             mFunctions->disable(GL_FRAMEBUFFER_SRGB);
+        }
+        mLocalDirtyBits.set(gl::State::DIRTY_BIT_FRAMEBUFFER_SRGB);
+    }
+}
+
+void StateManagerGL::setFramebufferSRGBEnabledForFramebuffer(bool enabled,
+                                                             const FramebufferGL *framebuffer)
+{
+    if (mFunctions->standard == STANDARD_GL_DESKTOP && framebuffer->isDefault())
+    {
+        // Obey the framebuffer sRGB state for blending on all framebuffers except the default
+        // framebuffer on Desktop OpenGL.
+        // When SRGB blending is enabled, only SRGB capable formats will use it but the default
+        // framebuffer will always use it if it is enabled.
+        // TODO(geofflang): Update this when the framebuffer binding dirty changes, when it exists.
+        setFramebufferSRGBEnabled(false);
+    }
+    else
+    {
+        setFramebufferSRGBEnabled(enabled);
+    }
+}
+
+void StateManagerGL::setDitherEnabled(bool enabled)
+{
+    if (mDitherEnabled != enabled)
+    {
+        mDitherEnabled = enabled;
+        if (mDitherEnabled)
+        {
+            mFunctions->enable(GL_DITHER);
+        }
+        else
+        {
+            mFunctions->disable(GL_DITHER);
         }
     }
 }

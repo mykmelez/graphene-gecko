@@ -54,13 +54,11 @@ pref("browser.viewport.desktopWidth", 980);
 // the value is divided by 1000 and clamped to hard-coded min/max scale values.
 pref("browser.viewport.defaultZoom", -1);
 
-#ifdef MOZ_ANDROID_APZ
 // Show/Hide scrollbars when active/inactive
 pref("ui.showHideScrollbars", 1);
 pref("ui.useOverlayScrollbars", 1);
 pref("ui.scrollbarFadeBeginDelay", 450);
 pref("ui.scrollbarFadeDuration", 0);
-#endif
 
 /* turn off the caret blink after 10 cycles */
 pref("ui.caretBlinkCount", 10);
@@ -112,6 +110,7 @@ pref("network.http.max-persistent-connections-per-proxy", 20);
 
 // spdy
 pref("network.http.spdy.push-allowance", 32768);
+pref("network.http.spdy.default-hpack-buffer", 4096); // 4k
 
 // See bug 545869 for details on why these are set the way they are
 pref("network.buffer.cache.count", 24);
@@ -141,6 +140,7 @@ pref("browser.sessionhistory.bfcacheIgnoreMemoryPressure", false);
 pref("browser.sessionstore.resume_session_once", false);
 pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.interval", 10000); // milliseconds
+pref("browser.sessionstore.backupInterval", 120000); // milliseconds -> 2 minutes
 pref("browser.sessionstore.max_tabs_undo", 10);
 pref("browser.sessionstore.max_resumed_crashes", 1);
 pref("browser.sessionstore.privacy_level", 0); // saving data: 0 = all, 1 = unencrypted sites, 2 = never
@@ -195,7 +195,7 @@ pref("dom.forms.number", true);
 /* extension manager and xpinstall */
 pref("xpinstall.whitelist.directRequest", false);
 pref("xpinstall.whitelist.fileRequest", false);
-pref("xpinstall.whitelist.add", "https://addons.mozilla.org");
+pref("xpinstall.whitelist.add", "https://addons.mozilla.org,https://testpilot.firefox.com");
 
 pref("xpinstall.signatures.required", true);
 
@@ -300,7 +300,7 @@ pref("browser.search.noCurrentEngine", true);
 
 // Control media casting & mirroring features
 pref("browser.casting.enabled", true);
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 // Chromecast mirroring is broken (bug 1131084)
 pref("browser.mirroring.enabled", false);
 #else
@@ -400,7 +400,6 @@ pref("javascript.options.mem.gc_high_frequency_low_limit_mb", 10);
 pref("javascript.options.mem.gc_low_frequency_heap_growth", 120);
 pref("javascript.options.mem.high_water_mark", 16);
 pref("javascript.options.mem.gc_allocation_threshold_mb", 3);
-pref("javascript.options.mem.gc_decommit_threshold_mb", 1);
 pref("javascript.options.mem.gc_min_empty_chunk_count", 1);
 pref("javascript.options.mem.gc_max_empty_chunk_count", 2);
 #else
@@ -470,7 +469,10 @@ pref("plugin.default.state", 1);
 // product URLs
 // The breakpad report server to link to in about:crashes
 pref("breakpad.reportURL", "https://crash-stats.mozilla.com/report/index/");
+
 pref("app.support.baseURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/");
+pref("app.supportURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/mobile-help");
+pref("app.faqURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/faq");
 
 // URL for feedback page
 // This should be kept in sync with the "feedback_link" string defined in strings.xml.in
@@ -486,8 +488,6 @@ pref("app.releaseNotesURL", "https://www.mozilla.com/%LOCALE%/mobile/%VERSION%be
 #else
 pref("app.releaseNotesURL", "https://www.mozilla.com/%LOCALE%/mobile/%VERSION%/releasenotes/");
 #endif
-
-pref("app.faqURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/faq");
 
 // Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
 pref("security.alternate_certificate_error_page", "certerror");
@@ -560,10 +560,6 @@ pref("ui.dragThresholdY", 25);
 pref("layers.acceleration.disabled", false);
 pref("layers.async-video.enabled", true);
 
-#ifndef MOZ_ANDROID_APZ
-pref("layers.async-pan-zoom.enabled", false);
-#endif
-
 pref("apz.content_response_timeout", 600);
 pref("apz.allow_immediate_handoff", false);
 pref("apz.touch_start_tolerance", "0.06");
@@ -618,13 +614,26 @@ pref("media.cache_readahead_limit", 30);
 // chronically starved of video frames. All decoders seen so far have a value
 // of at least 4.
 pref("media.video-queue.default-size", 3);
+// The maximum number of queued frames to send to the compositor.
+// On Android, it needs to be throttled because SurfaceTexture contains only one
+// (the most recent) image data.
+pref("media.video-queue.send-to-compositor-size", 1);
+
+#ifdef NIGHTLY_BUILD
+// Allow to check if the decoder supports recycling only on Fennec nightly build.
+pref("media.decoder.recycle.enabled", true);
+#endif
 
 // Enable the MediaCodec PlatformDecoderModule by default.
 pref("media.android-media-codec.enabled", true);
 pref("media.android-media-codec.preferred", true);
+// Run decoder in seperate process.
+pref("media.android-remote-codec.enabled", false);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
+
+pref("media.mediadrm-widevinecdm.visible", true);
 
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
@@ -646,9 +655,6 @@ pref("browser.firstrun.show.localepicker", false);
 // $ adb shell setprop log.redirect-stdio true
 // $ adb shell start
 pref("browser.dom.window.dump.enabled", true);
-
-// SimplePush
-pref("services.push.enabled", false);
 
 // controls if we want camera support
 pref("device.camera.enabled", true);
@@ -842,9 +848,6 @@ pref("reader.toolbar.vertical", false);
 // Whether to use the unified telemetry behavior, requires a restart.
 pref("toolkit.telemetry.unified", false);
 
-// Unified AccessibleCarets (touch-caret and selection-carets).
-pref("layout.accessiblecaret.enabled", true);
-
 // AccessibleCaret CSS for the Android L style assets.
 pref("layout.accessiblecaret.width", "22.0");
 pref("layout.accessiblecaret.height", "22.0");
@@ -852,9 +855,6 @@ pref("layout.accessiblecaret.margin-left", "-11.5");
 
 // Android needs to show the caret when long tapping on an empty content.
 pref("layout.accessiblecaret.caret_shown_when_long_tapping_on_empty_content", true);
-
-// Android generates long tap (mouse) events.
-pref("layout.accessiblecaret.use_long_tap_injector", false);
 
 // Androids carets are always tilt to match the text selection guideline.
 pref("layout.accessiblecaret.always_tilt", true);
@@ -871,16 +871,13 @@ pref("layout.accessiblecaret.hapticfeedback", true);
 pref("layout.accessiblecaret.extend_selection_for_phone_number", true);
 
 // Disable sending console to logcat on release builds.
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 pref("consoleservice.logcat", false);
 #else
 pref("consoleservice.logcat", true);
 #endif
 
-// Enable Cardboard VR on mobile, assuming VR at all is enabled
-pref("dom.vr.cardboard.enabled", true);
-
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
 // Enable VR on mobile, making it enable by default.
 pref("dom.vr.enabled", true);
 #endif
@@ -913,14 +910,18 @@ pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com
 // Token server used by Firefox Account-authenticated Sync.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
 
-// Enable Presentation API
+#ifndef RELEASE_OR_BETA
+// Enable Presentation API on Nightly
 pref("dom.presentation.enabled", true);
-pref("dom.presentation.discovery.enabled", true);
-pref("dom.presentation.discovery.legacy.enabled", true); // for TV 2.5 backward capability
+pref("dom.presentation.controller.enabled", true); // enable 1-UA mode
+pref("dom.presentation.receiver.enabled", true); // enable 1-UA mode
+#endif
 
 pref("dom.audiochannel.audioCompeting", true);
 pref("dom.audiochannel.mediaControl", true);
 
 // Space separated list of URLS that are allowed to send objects (instead of
 // only strings) through webchannels. This list is duplicated in browser/app/profile/firefox.js
-pref("webchannel.allowObject.urlWhitelist", "https://accounts.firefox.com https://content.cdn.mozilla.net https://hello.firefox.com https://input.mozilla.org https://support.mozilla.org https://install.mozilla.org");
+pref("webchannel.allowObject.urlWhitelist", "https://accounts.firefox.com https://content.cdn.mozilla.net https://input.mozilla.org https://support.mozilla.org https://install.mozilla.org");
+
+pref("media.openUnsupportedTypeWithExternalApp", true);

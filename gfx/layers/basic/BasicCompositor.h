@@ -106,7 +106,6 @@ public:
                           gfx::IntRect *aClipRectOut = nullptr,
                           gfx::IntRect *aRenderBoundsOut = nullptr) override;
   virtual void EndFrame() override;
-  virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) override;
 
   virtual bool SupportsPartialTextureUpdate() override { return true; }
   virtual bool CanUseCanvasLayerForSize(const gfx::IntSize &aSize) override { return true; }
@@ -128,7 +127,18 @@ public:
 
   gfx::DrawTarget *GetDrawTarget() { return mDrawTarget; }
 
+  virtual bool IsPendingComposite() override
+  {
+    return mIsPendingEndRemoteDrawing;
+  }
+
+  virtual void FinishPendingComposite() override;
+
 private:
+
+  void TryToEndRemoteDrawing(bool aForceToEnd = false);
+
+  bool NeedsToDeferEndRemoteDrawing();
 
   // The final destination surface
   RefPtr<gfx::DrawTarget> mDrawTarget;
@@ -137,9 +147,9 @@ private:
 
   LayoutDeviceIntRect mInvalidRect;
   LayoutDeviceIntRegion mInvalidRegion;
-  bool mDidExternalComposition;
 
   uint32_t mMaxTextureSize;
+  bool mIsPendingEndRemoteDrawing;
 };
 
 BasicCompositor* AssertBasicCompositor(Compositor* aCompositor);

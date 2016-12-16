@@ -9,43 +9,49 @@
 // React & Redux
 const {
   createFactory,
-  DOM: dom,
   PropTypes
 } = require("devtools/client/shared/vendor/react");
-const { ConsoleCommand: ConsoleCommandType } = require("devtools/client/webconsole/new-console-output/types");
-const MessageIcon = createFactory(require("devtools/client/webconsole/new-console-output/components/message-icon").MessageIcon);
+const Message = createFactory(require("devtools/client/webconsole/new-console-output/components/message"));
 
 ConsoleCommand.displayName = "ConsoleCommand";
 
 ConsoleCommand.propTypes = {
-  message: PropTypes.instanceOf(ConsoleCommandType).isRequired,
+  message: PropTypes.object.isRequired,
+  autoscroll: PropTypes.bool.isRequired,
+  indent: PropTypes.number.isRequired,
+};
+
+ConsoleCommand.defaultProps = {
+  indent: 0,
 };
 
 /**
  * Displays input from the console.
  */
 function ConsoleCommand(props) {
-  const { message } = props;
+  const { autoscroll, indent, message } = props;
+  const {
+    source,
+    type,
+    level,
+    messageText: messageBody,
+  } = message;
 
-  const icon = MessageIcon({severity: message.severity});
+  const {
+    serviceContainer,
+  } = props;
 
-  // @TODO Use of "is" is a temporary hack to get the category and severity
-  // attributes to be applied. There are targeted in webconsole's CSS rules,
-  // so if we remove this hack, we have to modify the CSS rules accordingly.
-  return dom.div({
-    class: "message",
-    ariaLive: "off",
-    is: "fdt-message",
-    category: message.category,
-    severity: message.severity
-  },
-    // @TODO add timestamp
-    // @TODO add indent if necessary
-    icon,
-    dom.span({className: "message-body-wrapper message-body devtools-monospace"},
-      dom.span({}, message.messageText)
-    )
-  );
+  const childProps = {
+    source,
+    type,
+    level,
+    topLevelClasses: [],
+    messageBody,
+    scrollToMessage: autoscroll,
+    serviceContainer,
+    indent: indent,
+  };
+  return Message(childProps);
 }
 
-module.exports.ConsoleCommand = ConsoleCommand;
+module.exports = ConsoleCommand;

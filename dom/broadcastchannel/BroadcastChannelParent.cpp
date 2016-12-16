@@ -9,7 +9,7 @@
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/ipc/BlobParent.h"
 #include "mozilla/ipc/BackgroundParent.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsIScriptSecurityManager.h"
 
 namespace mozilla {
@@ -31,26 +31,26 @@ BroadcastChannelParent::~BroadcastChannelParent()
   AssertIsOnBackgroundThread();
 }
 
-bool
+mozilla::ipc::IPCResult
 BroadcastChannelParent::RecvPostMessage(const ClonedMessageData& aData)
 {
   AssertIsOnBackgroundThread();
 
   if (NS_WARN_IF(!mService)) {
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   mService->PostMessage(this, aData, mOriginChannelKey);
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 BroadcastChannelParent::RecvClose()
 {
   AssertIsOnBackgroundThread();
 
   if (NS_WARN_IF(!mService)) {
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   mService->UnregisterActor(this, mOriginChannelKey);
@@ -58,7 +58,7 @@ BroadcastChannelParent::RecvClose()
 
   Unused << Send__delete__(this);
 
-  return true;
+  return IPC_OK();
 }
 
 void

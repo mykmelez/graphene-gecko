@@ -16,6 +16,7 @@ Cu.import("resource://testing-common/services/sync/utils.js");
 var prefs = new Preferences();
 prefs.set("extensions.getAddons.get.url",
           "http://localhost:8888/search/guid:%IDS%");
+prefs.set("extensions.install.requireSecureOrigin", false);
 
 loadAddonTestFunctions();
 startupManager();
@@ -34,8 +35,6 @@ function advance_test() {
   let cb = Async.makeSpinningCallback();
   reconciler.saveState(null, cb);
   cb.wait();
-
-  Svc.Prefs.reset("addons.ignoreRepositoryChecking");
 
   run_next_test();
 }
@@ -104,7 +103,6 @@ add_test(function test_get_changed_ids() {
   tracker.clearChangedIDs();
 
   _("Ensure reconciler changes are populated.");
-  Svc.Prefs.set("addons.ignoreRepositoryChecking", true);
   let addon = installAddon("test_bootstrap1_1");
   tracker.clearChangedIDs(); // Just in case.
   changes = engine.getChangedIDs();
@@ -145,23 +143,19 @@ add_test(function test_get_changed_ids() {
   advance_test();
 });
 
-add_test(function test_disabled_install_semantics() {
+add_task(async function test_disabled_install_semantics() {
   _("Ensure that syncing a disabled add-on preserves proper state.");
 
   // This is essentially a test for bug 712542, which snuck into the original
   // add-on sync drop. It ensures that when an add-on is installed that the
   // disabled state and incoming syncGUID is preserved, even on the next sync.
-
-  Svc.Prefs.set("addons.ignoreRepositoryChecking", true);
-
   const USER       = "foo";
   const PASSWORD   = "password";
-  const PASSPHRASE = "abcdeabcdeabcdeabcdeabcdea";
   const ADDON_ID   = "addon1@tests.mozilla.org";
 
   let server = new SyncServer();
   server.start();
-  new SyncTestingInfrastructure(server.server, USER, PASSWORD, PASSPHRASE);
+  await SyncTestingInfrastructure(server, USER, PASSWORD);
 
   generateNewKeys(Service.collectionKeys);
 
@@ -204,9 +198,7 @@ add_test(function test_disabled_install_semantics() {
   // At this point the non-restartless extension should be staged for install.
 
   // Don't need this server any more.
-  let cb = Async.makeSpinningCallback();
-  amoServer.stop(cb);
-  cb.wait();
+  await promiseStopServer(amoServer);
 
   // We ensure the reconciler has recorded the proper ID and enabled state.
   let addon = reconciler.getAddonStateFromSyncGUID(id);
@@ -229,7 +221,7 @@ add_test(function test_disabled_install_semantics() {
   do_check_eq(ADDON_ID, payload.addonID);
   do_check_false(payload.enabled);
 
-  server.stop(advance_test);
+  promiseStopServer(server);
 });
 
 add_test(function cleanup() {

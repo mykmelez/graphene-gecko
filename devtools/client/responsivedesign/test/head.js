@@ -12,9 +12,12 @@ Services.scriptloader.loadSubScript(sharedHeadURI, this);
 let gcliHelpersURI = testDir + "../../../commandline/test/helpers.js";
 Services.scriptloader.loadSubScript(gcliHelpersURI, this);
 
-DevToolsUtils.testing = true;
+flags.testing = true;
+Services.prefs.setBoolPref("devtools.responsive.html.enabled", false);
+
 registerCleanupFunction(() => {
-  DevToolsUtils.testing = false;
+  flags.testing = false;
+  Services.prefs.clearUserPref("devtools.responsive.html.enabled");
   Services.prefs.clearUserPref("devtools.responsiveUI.currentPreset");
   Services.prefs.clearUserPref("devtools.responsiveUI.customHeight");
   Services.prefs.clearUserPref("devtools.responsiveUI.customWidth");
@@ -37,7 +40,7 @@ var openRDM = Task.async(function* (tab = gBrowser.selectedTab,
   let manager = ResponsiveUIManager;
 
   let opened = once(manager, "on");
-  let resized = once(manager, "contentResize");
+  let resized = once(manager, "content-resize");
   if (method == "menu") {
     document.getElementById("menu_responsiveUI").doCommand();
   } else {
@@ -68,7 +71,7 @@ var closeRDM = Task.async(function* (rdm) {
     rdm = manager.getResponsiveUIForTab(gBrowser.selectedTab);
   }
   let closed = once(manager, "off");
-  let resized = once(manager, "contentResize");
+  let resized = once(manager, "content-resize");
   rdm.close();
   yield resized;
   yield closed;
@@ -195,17 +198,11 @@ var addTab = Task.async(function* (url) {
   let tab = gBrowser.selectedTab = gBrowser.addTab(url);
   let browser = tab.linkedBrowser;
 
-  yield once(browser, "load", true);
+  yield BrowserTestUtils.browserLoaded(browser);
   info("URL '" + url + "' loading complete");
 
   return tab;
 });
-
-function wait(ms) {
-  let def = promise.defer();
-  setTimeout(def.resolve, ms);
-  return def.promise;
-}
 
 /**
  * Waits for the next load to complete in the current browser.
@@ -275,19 +272,19 @@ function waitForResizeTo(manager, width, height) {
       if (data.width != width || data.height != height) {
         return;
       }
-      manager.off("contentResize", onResize);
-      info(`Got contentResize to ${width} x ${height}`);
+      manager.off("content-resize", onResize);
+      info(`Got content-resize to ${width} x ${height}`);
       resolve();
     };
-    info(`Waiting for contentResize to ${width} x ${height}`);
-    manager.on("contentResize", onResize);
+    info(`Waiting for content-resize to ${width} x ${height}`);
+    manager.on("content-resize", onResize);
   });
 }
 
 var setPresetIndex = Task.async(function* (rdm, manager, index) {
   info(`Current preset: ${rdm.menulist.selectedIndex}, change to: ${index}`);
   if (rdm.menulist.selectedIndex != index) {
-    let resized = once(manager, "contentResize");
+    let resized = once(manager, "content-resize");
     rdm.menulist.selectedIndex = index;
     yield resized;
   }
@@ -299,7 +296,7 @@ var setSize = Task.async(function* (rdm, manager, width, height) {
        `set to: ${width} x ${height}`);
   if (size.width != width || size.height != height) {
     let resized = waitForResizeTo(manager, width, height);
-    rdm.setSize(width, height);
+    rdm.setViewportSize({ width, height });
     yield resized;
   }
 });

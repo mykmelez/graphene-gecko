@@ -19,27 +19,51 @@
 namespace mozilla {
 namespace layers {
 
+// We want to shrink to our maximum size of N unused tiles
+// after a timeout to allow for short-term budget requirements
+static void
+ShrinkCallback(nsITimer *aTimer, void *aClosure)
+{
+  static_cast<TextureClientPool*>(aClosure)->ShrinkToMaximumSize();
+}
+
+// After a certain amount of inactivity, let's clear the pool so that
+// we don't hold onto tiles needlessly. In general, allocations are
+// cheap enough that re-allocating isn't an issue unless we're allocating
+// at an inopportune time (e.g. mid-animation).
+static void
+ClearCallback(nsITimer *aTimer, void *aClosure)
+{
+  static_cast<TextureClientPool*>(aClosure)->Clear();
+}
 
 TextureClientPool::TextureClientPool(LayersBackend aLayersBackend,
+                                     int32_t aMaxTextureSize,
                                      gfx::SurfaceFormat aFormat,
                                      gfx::IntSize aSize,
                                      TextureFlags aFlags,
+                                     uint32_t aShrinkTimeoutMsec,
+                                     uint32_t aClearTimeoutMsec,
                                      uint32_t aInitialPoolSize,
-                                     uint32_t aPoolIncrementSize,
+                                     uint32_t aPoolUnusedSize,
                                      TextureForwarder* aAllocator)
   : mBackend(aLayersBackend)
+  , mMaxTextureSize(aMaxTextureSize)
   , mFormat(aFormat)
   , mSize(aSize)
   , mFlags(aFlags)
+  , mShrinkTimeoutMsec(aShrinkTimeoutMsec)
+  , mClearTimeoutMsec(aClearTimeoutMsec)
   , mInitialPoolSize(aInitialPoolSize)
-  , mPoolIncrementSize(aPoolIncrementSize)
+  , mPoolUnusedSize(aPoolUnusedSize)
   , mOutstandingClients(0)
   , mSurfaceAllocator(aAllocator)
   , mDestroyed(false)
 {
   TCP_LOG("TexturePool %p created with maximum unused texture clients %u\n",
       this, mInitialPoolSize);
-  mTimer = do_CreateInstance("@mozilla.org/timer;1");
+  mShrinkTimer = do_CreateInstance("@mozilla.org/timer;1");
+  mClearTimer = do_CreateInstance("@mozilla.org/timer;1");
   if (aFormat == gfx::SurfaceFormat::UNKNOWN) {
     gfxWarning() << "Creating texture pool for SurfaceFormat::UNKNOWN format";
   }
@@ -47,7 +71,8 @@ TextureClientPool::TextureClientPool(LayersBackend aLayersBackend,
 
 TextureClientPool::~TextureClientPool()
 {
-  mTimer->Cancel();
+  mShrinkTimer->Cancel();
+  mClearTimer->Cancel();
 }
 
 #ifdef GFX_DEBUG_TRACK_CLIENTS_IN_POOL
@@ -91,10 +116,9 @@ TextureClientPool::GetTextureClient()
 
   // We initially allocate mInitialPoolSize for our pool. If we run
   // out of TextureClients, we allocate additional TextureClients to try and keep around
-  // mPoolIncrementSize
+  // mPoolUnusedSize
   if (!mTextureClients.size()) {
-    size_t size = mOutstandingClients ? mPoolIncrementSize : mInitialPoolSize;
-    AllocateTextureClients(size);
+    AllocateTextureClient();
   }
 
   if (!mTextureClients.size()) {
@@ -119,31 +143,51 @@ TextureClientPool::GetTextureClient()
 }
 
 void
-TextureClientPool::AllocateTextureClients(size_t aSize)
+TextureClientPool::AllocateTextureClient()
 {
-  TCP_LOG("TexturePool %p allocating %u clients, outstanding %u\n",
-      this, aSize, mOutstandingClients);
+  TCP_LOG("TexturePool %p allocating TextureClient, outstanding %u\n",
+      this, mOutstandingClients);
 
   RefPtr<TextureClient> newClient;
-  while (mTextureClients.size() < aSize) {
-    if (gfxPrefs::ForceShmemTiles()) {
-      // gfx::BackendType::NONE means use the content backend
-      newClient =
-        TextureClient::CreateForRawBufferAccess(mSurfaceAllocator,
-                                                mFormat, mSize,
-                                                gfx::BackendType::NONE,
-                                                mFlags, ALLOC_DEFAULT);
-    } else {
-      newClient =
-        TextureClient::CreateForDrawing(mSurfaceAllocator,
-                                        mFormat, mSize,
-                                        mBackend,
-                                        BackendSelector::Content,
-                                        mFlags);
-    }
-    if (newClient) {
-      mTextureClients.push(newClient);
-    }
+  if (gfxPrefs::ForceShmemTiles()) {
+    // gfx::BackendType::NONE means use the content backend
+    newClient =
+      TextureClient::CreateForRawBufferAccess(mSurfaceAllocator,
+                                              mFormat, mSize,
+                                              gfx::BackendType::NONE,
+                                              mBackend,
+                                              mFlags, ALLOC_DEFAULT);
+  } else {
+    newClient =
+      TextureClient::CreateForDrawing(mSurfaceAllocator,
+                                      mFormat, mSize,
+                                      mBackend,
+                                      mMaxTextureSize,
+                                      BackendSelector::Content,
+                                      mFlags);
+  }
+
+  if (newClient) {
+    mTextureClients.push(newClient);
+  }
+}
+
+void
+TextureClientPool::ResetTimers()
+{
+  // Shrink down if we're beyond our maximum size
+  if (mShrinkTimeoutMsec &&
+      mTextureClients.size() + mTextureClientsDeferred.size() > mPoolUnusedSize) {
+    TCP_LOG("TexturePool %p scheduling a shrink-to-max-size\n", this);
+    mShrinkTimer->InitWithFuncCallback(ShrinkCallback, this, mShrinkTimeoutMsec,
+                                       nsITimer::TYPE_ONE_SHOT);
+  }
+
+  // Clear pool after a period of inactivity to reduce memory consumption
+  if (mClearTimeoutMsec) {
+    TCP_LOG("TexturePool %p scheduling a clear\n", this);
+    mClearTimer->InitWithFuncCallback(ClearCallback, this, mClearTimeoutMsec,
+                                      nsITimer::TYPE_ONE_SHOT);
   }
 }
 
@@ -164,8 +208,7 @@ TextureClientPool::ReturnTextureClient(TextureClient *aClient)
   TCP_LOG("TexturePool %p had client %p returned; size %u outstanding %u\n",
       this, aClient, mTextureClients.size(), mOutstandingClients);
 
-  // Shrink down if we're beyond our maximum size
-  ShrinkToMaximumSize();
+  ResetTimers();
 }
 
 void
@@ -182,7 +225,8 @@ TextureClientPool::ReturnTextureClientDeferred(TextureClient* aClient)
   mTextureClientsDeferred.push_back(aClient);
   TCP_LOG("TexturePool %p had client %p defer-returned, size %u outstanding %u\n",
       this, aClient, mTextureClientsDeferred.size(), mOutstandingClients);
-  ShrinkToMaximumSize();
+
+  ResetTimers();
 }
 
 void
@@ -196,17 +240,17 @@ TextureClientPool::ShrinkToMaximumSize()
   uint32_t totalUnusedTextureClients = mTextureClients.size() + mTextureClientsDeferred.size();
 
   // If we have > mInitialPoolSize outstanding, then we want to keep around
-  // mPoolIncrementSize at a maximum. If we have fewer than mInitialPoolSize
+  // mPoolUnusedSize at a maximum. If we have fewer than mInitialPoolSize
   // outstanding, then keep around the entire initial pool size.
   uint32_t targetUnusedClients;
   if (mOutstandingClients > mInitialPoolSize) {
-    targetUnusedClients = mPoolIncrementSize;
+    targetUnusedClients = mPoolUnusedSize;
   } else {
     targetUnusedClients = mInitialPoolSize;
   }
 
-  TCP_LOG("TexturePool %p shrinking to maximum unused size %u; total outstanding %u\n",
-      this, targetUnusedClients, mOutstandingClients);
+  TCP_LOG("TexturePool %p shrinking to maximum unused size %u; current pool size %u; total outstanding %u\n",
+      this, targetUnusedClients, totalUnusedTextureClients, mOutstandingClients);
 
   while (totalUnusedTextureClients > targetUnusedClients) {
     if (mTextureClientsDeferred.size()) {
@@ -288,7 +332,7 @@ void TextureClientPool::Destroy()
   Clear();
   mDestroyed = true;
   mInitialPoolSize = 0;
-  mPoolIncrementSize = 0;
+  mPoolUnusedSize = 0;
 }
 
 } // namespace layers

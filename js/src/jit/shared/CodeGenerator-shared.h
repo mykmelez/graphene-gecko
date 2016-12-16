@@ -343,7 +343,7 @@ class CodeGeneratorShared : public LElementVisitor
     void emitTruncateDouble(FloatRegister src, Register dest, MInstruction* mir);
     void emitTruncateFloat32(FloatRegister src, Register dest, MInstruction* mir);
 
-    void emitAsmJSCall(LAsmJSCall* ins);
+    void emitWasmCallBase(LWasmCallBase* ins);
 
     void emitPreBarrier(Register base, const LAllocation* index, int32_t offsetAdjustment);
     void emitPreBarrier(Address address);
@@ -468,7 +468,7 @@ class CodeGeneratorShared : public LElementVisitor
     void addOutOfLineCode(OutOfLineCode* code, const BytecodeSite* site);
     bool generateOutOfLineCode();
 
-    Label* labelForBackedgeWithImplicitCheck(MBasicBlock* mir);
+    Label* getJumpLabelForBranch(MBasicBlock* block);
 
     // Generate a jump to the start of the specified block, adding information
     // if this is a loop backedge. Use this in place of jumping directly to
@@ -476,10 +476,19 @@ class CodeGeneratorShared : public LElementVisitor
     // directly is needed.
     void jumpToBlock(MBasicBlock* mir);
 
+    // Get a label for the start of block which can be used for jumping, in
+    // place of jumpToBlock.
+    Label* labelForBackedgeWithImplicitCheck(MBasicBlock* mir);
+
 // This function is not used for MIPS. MIPS has branchToBlock.
 #if !defined(JS_CODEGEN_MIPS32) && !defined(JS_CODEGEN_MIPS64)
     void jumpToBlock(MBasicBlock* mir, Assembler::Condition cond);
 #endif
+
+    template <class T>
+    wasm::TrapDesc trap(T* mir, wasm::Trap trap) {
+        return wasm::TrapDesc(mir->trapOffset(), trap, masm.framePushed());
+    }
 
   private:
     void generateInvalidateEpilogue();
@@ -542,15 +551,14 @@ class CodeGeneratorShared : public LElementVisitor
     }
 
   protected:
-    inline void verifyHeapAccessDisassembly(uint32_t begin, uint32_t end, bool isLoad, bool isInt64,
-                                            Scalar::Type type, unsigned numElems,
-                                            const Operand& mem, LAllocation alloc);
+    inline void verifyHeapAccessDisassembly(uint32_t begin, uint32_t end, bool isLoad,
+                                            Scalar::Type type, Operand mem, LAllocation alloc);
 
   public:
-    inline void verifyLoadDisassembly(uint32_t begin, uint32_t end, bool isInt64, Scalar::Type type,
-                                      unsigned numElems, const Operand& mem, LAllocation alloc);
-    inline void verifyStoreDisassembly(uint32_t begin, uint32_t end, bool isInt64, Scalar::Type type,
-                                       unsigned numElems, const Operand& mem, LAllocation alloc);
+    inline void verifyLoadDisassembly(uint32_t begin, uint32_t end, Scalar::Type type,
+                                      Operand mem, LAllocation alloc);
+    inline void verifyStoreDisassembly(uint32_t begin, uint32_t end, Scalar::Type type,
+                                       Operand mem, LAllocation alloc);
 
     bool isGlobalObject(JSObject* object);
 };
@@ -646,12 +654,14 @@ template <typename HeadType, typename... TailTypes>
 class ArgSeq<HeadType, TailTypes...> : public ArgSeq<TailTypes...>
 {
   private:
-    HeadType head_;
+    using RawHeadType = typename mozilla::RemoveReference<HeadType>::Type;
+    RawHeadType head_;
 
   public:
-    explicit ArgSeq(HeadType&& head, TailTypes&&... tail)
-      : ArgSeq<TailTypes...>(mozilla::Move(tail)...),
-        head_(mozilla::Move(head))
+    template <typename ProvidedHead, typename... ProvidedTail>
+    explicit ArgSeq(ProvidedHead&& head, ProvidedTail&&... tail)
+      : ArgSeq<TailTypes...>(mozilla::Forward<ProvidedTail>(tail)...),
+        head_(mozilla::Forward<ProvidedHead>(head))
     { }
 
     // Arguments are pushed in reverse order, from last argument to first
@@ -664,9 +674,9 @@ class ArgSeq<HeadType, TailTypes...> : public ArgSeq<TailTypes...>
 
 template <typename... ArgTypes>
 inline ArgSeq<ArgTypes...>
-ArgList(ArgTypes... args)
+ArgList(ArgTypes&&... args)
 {
-    return ArgSeq<ArgTypes...>(mozilla::Move(args)...);
+    return ArgSeq<ArgTypes...>(mozilla::Forward<ArgTypes>(args)...);
 }
 
 // Store wrappers, to generate the right move of data after the VM call.
@@ -808,16 +818,17 @@ class OutOfLineWasmTruncateCheck : public OutOfLineCodeBase<CodeGeneratorShared>
     MIRType toType_;
     FloatRegister input_;
     bool isUnsigned_;
+    wasm::TrapOffset trapOffset_;
 
   public:
     OutOfLineWasmTruncateCheck(MWasmTruncateToInt32* mir, FloatRegister input)
       : fromType_(mir->input()->type()), toType_(MIRType::Int32), input_(input),
-        isUnsigned_(mir->isUnsigned())
+        isUnsigned_(mir->isUnsigned()), trapOffset_(mir->trapOffset())
     { }
 
     OutOfLineWasmTruncateCheck(MWasmTruncateToInt64* mir, FloatRegister input)
       : fromType_(mir->input()->type()), toType_(MIRType::Int64), input_(input),
-        isUnsigned_(mir->isUnsigned())
+        isUnsigned_(mir->isUnsigned()), trapOffset_(mir->trapOffset())
     { }
 
     void accept(CodeGeneratorShared* codegen) {
@@ -828,6 +839,7 @@ class OutOfLineWasmTruncateCheck : public OutOfLineCodeBase<CodeGeneratorShared>
     MIRType toType() const { return toType_; }
     MIRType fromType() const { return fromType_; }
     bool isUnsigned() const { return isUnsigned_; }
+    wasm::TrapOffset trapOffset() const { return trapOffset_; }
 };
 
 } // namespace jit

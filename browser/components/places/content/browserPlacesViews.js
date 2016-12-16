@@ -481,10 +481,9 @@ PlacesViewBase.prototype = {
       if (aPopup._startMarker.nextSibling != statusMenuitem)
         aPopup.insertBefore(statusMenuitem, aPopup._startMarker.nextSibling);
     }
-    else {
+    else if (aPopup._statusMenuitem.parentNode == aPopup) {
       // The livemark has finished loading.
-      if (aPopup._statusMenuitem.parentNode == aPopup)
-        aPopup.removeChild(aPopup._statusMenuitem);
+      aPopup.removeChild(aPopup._statusMenuitem);
     }
   },
 
@@ -953,9 +952,9 @@ function PlacesToolbar(aPlace) {
     ["_dropIndicator",        "PlacesToolbarDropIndicator"],
     ["_chevron",              "PlacesChevron"],
     ["_chevronPopup",         "PlacesChevronPopup"]
-  ].forEach(function (elementGlobal) {
+  ].forEach(function(elementGlobal) {
     let [name, id] = elementGlobal;
-    thisView.__defineGetter__(name, function () {
+    thisView.__defineGetter__(name, function() {
       let element = document.getElementById(id);
       if (!element)
         return null;
@@ -1403,7 +1402,6 @@ PlacesToolbar.prototype = {
    * - folderElt: the folder to drop into, if applicable.
    */
   _getDropPoint: function PT__getDropPoint(aEvent) {
-    let result = this.result;
     if (!PlacesUtils.nodeIsFolder(this._resultNode))
       return null;
 
@@ -1571,7 +1569,7 @@ PlacesToolbar.prototype = {
       // of dragging.
       let translateY = this._cachedMouseMoveEvent.clientY - aEvent.clientY;
       let translateX = this._cachedMouseMoveEvent.clientX - aEvent.clientX;
-      if ((translateY) >= Math.abs(translateX/2)) {
+      if ((translateY) >= Math.abs(translateX / 2)) {
         // Don't start the drag.
         aEvent.preventDefault();
         // Open the menu.

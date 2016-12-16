@@ -35,7 +35,7 @@
 #include "nsTextNode.h"
 
 #include "PLDHashTable.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Sprintf.h"
 #include "nsWrapperCacheInlines.h"
 
 using namespace mozilla;
@@ -91,8 +91,8 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGenericDOMDataNode)
   if (MOZ_UNLIKELY(cb.WantDebugInfo())) {
     char name[40];
-    snprintf_literal(name, "nsGenericDOMDataNode (len=%d)",
-                     tmp->mText.GetLength());
+    SprintfLiteral(name, "nsGenericDOMDataNode (len=%d)",
+                   tmp->mText.GetLength());
     cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
   } else {
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(nsGenericDOMDataNode, tmp->mRefCnt.get())
@@ -233,13 +233,6 @@ nsGenericDOMDataNode::SubstringData(uint32_t aStart, uint32_t aCount,
     const char *data = mText.Get1b() + aStart;
     CopyASCIItoUTF16(Substring(data, data + amount), aReturn);
   }
-}
-
-NS_IMETHODIMP
-nsGenericDOMDataNode::MozRemove()
-{
-  Remove();
-  return NS_OK;
 }
 
 //----------------------------------------------------------------------
@@ -430,7 +423,7 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
         aBuf.AppendLiteral("&gt;");
       } else if ((ch < ' ') || (ch >= 127)) {
         char buf[10];
-        snprintf_literal(buf, "\\u%04x", ch);
+        SprintfLiteral(buf, "\\u%04x", ch);
         AppendASCIItoUTF16(buf, aBuf);
       } else {
         aBuf.Append(ch);
@@ -450,7 +443,7 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
         aBuf.AppendLiteral("&gt;");
       } else if ((ch < ' ') || (ch >= 127)) {
         char buf[10];
-        snprintf_literal(buf, "\\u%04x", ch);
+        SprintfLiteral(buf, "\\u%04x", ch);
         AppendASCIItoUTF16(buf, aBuf);
       } else {
         aBuf.Append(ch);
@@ -647,6 +640,12 @@ nsGenericDOMDataNode::GetAttrNameAt(uint32_t aIndex) const
   return nullptr;
 }
 
+BorrowedAttrInfo
+nsGenericDOMDataNode::GetAttrInfoAt(uint32_t aIndex) const
+{
+  return BorrowedAttrInfo(nullptr, nullptr);
+}
+
 uint32_t
 nsGenericDOMDataNode::GetAttrCount() const
 {
@@ -695,12 +694,6 @@ nsGenericDOMDataNode::GetBindingParent() const
 {
   nsDataSlots *slots = GetExistingDataSlots();
   return slots ? slots->mBindingParent : nullptr;
-}
-
-ShadowRoot *
-nsGenericDOMDataNode::GetShadowRoot() const
-{
-  return nullptr;
 }
 
 ShadowRoot *
@@ -948,9 +941,9 @@ nsGenericDOMDataNode::GetWholeText(nsAString& aWholeText)
     return GetData(aWholeText);
 
   int32_t index = parent->IndexOf(this);
-  NS_WARN_IF_FALSE(index >= 0,
-                   "Trying to use .wholeText with an anonymous"
-                    "text node child of a binding parent?");
+  NS_WARNING_ASSERTION(index >= 0,
+                       "Trying to use .wholeText with an anonymous"
+                       "text node child of a binding parent?");
   NS_ENSURE_TRUE(index >= 0, NS_ERROR_DOM_NOT_SUPPORTED_ERR);
   int32_t first =
     FirstLogicallyAdjacentTextNode(parent, index);

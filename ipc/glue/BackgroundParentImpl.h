@@ -32,7 +32,7 @@ protected:
   virtual PBackgroundTestParent*
   AllocPBackgroundTestParent(const nsCString& aTestArg) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPBackgroundTestConstructor(PBackgroundTestParent* aActor,
                                  const nsCString& aTestArg) override;
 
@@ -43,7 +43,7 @@ protected:
   AllocPBackgroundIDBFactoryParent(const LoggingInfo& aLoggingInfo)
                                    override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPBackgroundIDBFactoryConstructor(PBackgroundIDBFactoryParent* aActor,
                                        const LoggingInfo& aLoggingInfo)
                                        override;
@@ -60,7 +60,7 @@ protected:
                                         PBackgroundIndexedDBUtilsParent* aActor)
                                         override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvFlushPendingFileDeletions() override;
 
   virtual PBlobParent*
@@ -69,7 +69,7 @@ protected:
   virtual bool
   DeallocPBlobParent(PBlobParent* aActor) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPBlobConstructor(PBlobParent* aActor,
                        const BlobConstructorParams& params) override;
 
@@ -92,7 +92,7 @@ protected:
                                const nsCString& aOrigin,
                                const nsString& aChannel) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPBroadcastChannelConstructor(PBroadcastChannelParent* actor,
                                    const PrincipalInfo& aPrincipalInfo,
                                    const nsCString& origin,
@@ -100,15 +100,6 @@ protected:
 
   virtual bool
   DeallocPBroadcastChannelParent(PBroadcastChannelParent* aActor) override;
-
-  virtual PNuwaParent*
-  AllocPNuwaParent() override;
-
-  virtual bool
-  RecvPNuwaConstructor(PNuwaParent* aActor) override;
-
-  virtual bool
-  DeallocPNuwaParent(PNuwaParent* aActor) override;
 
   virtual PSendStreamParent*
   AllocPSendStreamParent() override;
@@ -128,7 +119,7 @@ protected:
   virtual bool
   DeallocPCamerasParent(PCamerasParent* aActor) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvShutdownServiceWorkerRegistrar() override;
 
   virtual dom::cache::PCacheStorageParent*
@@ -153,7 +144,7 @@ protected:
   virtual PUDPSocketParent*
   AllocPUDPSocketParent(const OptionalPrincipalInfo& pInfo,
                         const nsCString& aFilter) override;
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPUDPSocketConstructor(PUDPSocketParent*,
                             const OptionalPrincipalInfo& aPrincipalInfo,
                             const nsCString& aFilter) override;
@@ -165,7 +156,7 @@ protected:
                           const nsID& aDestinationUUID,
                           const uint32_t& aSequenceID) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPMessagePortConstructor(PMessagePortParent* aActor,
                               const nsID& aUUID,
                               const nsID& aDestinationUUID,
@@ -174,7 +165,7 @@ protected:
   virtual bool
   DeallocPMessagePortParent(PMessagePortParent* aActor) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvMessagePortForceClose(const nsID& aUUID,
                             const nsID& aDestinationUUID,
                             const uint32_t& aSequenceID) override;
@@ -196,7 +187,7 @@ protected:
   virtual PFileSystemRequestParent*
   AllocPFileSystemRequestParent(const FileSystemParams&) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPFileSystemRequestConstructor(PFileSystemRequestParent* aActor,
                                     const FileSystemParams& aParams) override;
 

@@ -12,7 +12,6 @@
 #include "nsIDOMNodeList.h"
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
-#include "nsIDOMElementCSSInlineStyle.h"
 #include "nsIDOMCSSStyleDeclaration.h"
 
 #include "nsPresContext.h"
@@ -27,6 +26,8 @@
 #include "nsIScreenManager.h"
 #include "mozilla/dom/Element.h"
 #include "nsError.h"
+#include "nsICSSDeclaration.h"
+#include "nsStyledElement.h"
 #include <algorithm>
 
 using namespace mozilla;
@@ -172,8 +173,8 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
       if (window || menuPopupFrame) {
         if (menuPopupFrame) {
           menuPopupFrame->CanAdjustEdges(
-            (direction.mHorizontal == -1) ? NS_SIDE_LEFT : NS_SIDE_RIGHT,
-            (direction.mVertical == -1) ? NS_SIDE_TOP : NS_SIDE_BOTTOM, mouseMove);
+            (direction.mHorizontal == -1) ? eSideLeft : eSideRight,
+            (direction.mVertical == -1) ? eSideTop : eSideBottom, mouseMove);
         }
       }
       else if (!contentToResize) {
@@ -250,7 +251,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
         if (menuPopupFrame) {
           nsCOMPtr<nsIWidget> widget = menuPopupFrame->GetWidget();
           if (widget)
-            widget->GetScreenBounds(oldRect);
+            oldRect = widget->GetScreenBounds();
 
           // convert the new rectangle into outer window coordinates
           LayoutDeviceIntPoint clientOffset = widget->GetClientOffset();
@@ -421,11 +422,10 @@ nsResizerFrame::ResizeContent(nsIContent* aContent, const Direction& aDirection,
     }
   }
   else {
-    nsCOMPtr<nsIDOMElementCSSInlineStyle> inlineStyleContent =
+    nsCOMPtr<nsStyledElement> inlineStyleContent =
       do_QueryInterface(aContent);
     if (inlineStyleContent) {
-      nsCOMPtr<nsIDOMCSSStyleDeclaration> decl;
-      inlineStyleContent->GetStyle(getter_AddRefs(decl));
+      nsICSSDeclaration* decl = inlineStyleContent->Style();
 
       if (aOriginalSizeInfo) {
         decl->GetPropertyValue(NS_LITERAL_STRING("width"),

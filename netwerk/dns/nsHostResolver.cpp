@@ -64,7 +64,8 @@ static const unsigned int NEGATIVE_RECORD_LIFETIME = 60;
 #define LongIdleTimeoutSeconds  300           // for threads 1 -> HighThreadThreshold
 #define ShortIdleTimeoutSeconds 60            // for threads HighThreadThreshold+1 -> MAX_RESOLVER_THREADS
 
-PR_STATIC_ASSERT (HighThreadThreshold <= MAX_RESOLVER_THREADS);
+static_assert(HighThreadThreshold <= MAX_RESOLVER_THREADS,
+              "High Thread Threshold should be less equal Maximum allowed thread");
 
 //----------------------------------------------------------------------------
 
@@ -541,9 +542,7 @@ nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
     mShortIdleTimeout = PR_SecondsToInterval(ShortIdleTimeoutSeconds);
 }
 
-nsHostResolver::~nsHostResolver()
-{
-}
+nsHostResolver::~nsHostResolver() = default;
 
 nsresult
 nsHostResolver::Init()
@@ -562,8 +561,8 @@ nsHostResolver::Init()
     {
         DebugOnly<nsresult> rv = Preferences::RegisterCallbackAndCall(
             &DnsPrefChanged, kPrefGetTtl, this);
-        NS_WARN_IF_FALSE(NS_SUCCEEDED(rv),
-                         "Could not register DNS TTL pref callback.");
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                             "Could not register DNS TTL pref callback.");
     }
 #endif
 
@@ -645,8 +644,8 @@ nsHostResolver::Shutdown()
     {
         DebugOnly<nsresult> rv = Preferences::UnregisterCallback(
             &DnsPrefChanged, kPrefGetTtl, this);
-        NS_WARN_IF_FALSE(NS_SUCCEEDED(rv),
-                         "Could not unregister DNS TTL pref callback.");
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                             "Could not unregister DNS TTL pref callback.");
     }
 #endif
 
@@ -705,7 +704,8 @@ nsHostResolver::Shutdown()
 
     {
         mozilla::DebugOnly<nsresult> rv = GetAddrInfoShutdown();
-        NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to shutdown GetAddrInfo");
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                             "Failed to shutdown GetAddrInfo");
     }
 }
 
@@ -1343,8 +1343,9 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
                 rec->flags =
                   (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW;
                 DebugOnly<nsresult> rv = IssueLookup(rec);
-                NS_WARN_IF_FALSE(NS_SUCCEEDED(rv),
-                                 "Could not issue second async lookup for TTL.");
+                NS_WARNING_ASSERTION(
+                    NS_SUCCEEDED(rv),
+                    "Could not issue second async lookup for TTL.");
             }
 #endif
         }
@@ -1516,7 +1517,7 @@ nsHostResolver::Create(uint32_t maxCacheEntries,
                        uint32_t defaultGracePeriod,
                        nsHostResolver **result)
 {
-    nsHostResolver *res = new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
+    auto *res = new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
                                              defaultGracePeriod);
     NS_ADDREF(res);
 

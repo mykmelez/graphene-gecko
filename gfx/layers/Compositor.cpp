@@ -14,13 +14,6 @@
 #include "gfx2DGlue.h"
 #include "nsAppRunner.h"
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-#include "libdisplay/GonkDisplay.h"     // for GonkDisplay
-#include <ui/Fence.h>
-#include "nsWindow.h"
-#include "nsScreenManagerGonk.h"
-#endif
-
 namespace mozilla {
 
 namespace layers {
@@ -35,6 +28,15 @@ Compositor::Compositor(widget::CompositorWidget* aWidget,
   , mScreenRotation(ROTATION_0)
   , mWidget(aWidget)
   , mIsDestroyed(false)
+#if defined(MOZ_WIDGET_ANDROID)
+  // If the default color isn't white for Fennec, there is a black
+  // flash before the first page of a tab is loaded.
+  , mClearColor(1.0, 1.0, 1.0, 1.0)
+  , mDefaultClearColor(1.0, 1.0, 1.0, 1.0)
+#else
+  , mClearColor(0.0, 0.0, 0.0, 0.0)
+  , mDefaultClearColor(0.0, 0.0, 0.0, 0.0)
+#endif
 {
 }
 
@@ -85,7 +87,7 @@ Compositor::NotifyNotUsedAfterComposition(TextureHost* aTextureHost)
   const int thresholdCount = 5;
   const double thresholdSec = 2.0f;
   if (mNotifyNotUsedAfterComposition.Length() > thresholdCount) {
-    TimeDuration duration = TimeStamp::Now() - mLastCompositionEndTime;
+    TimeDuration duration = mLastCompositionEndTime ? TimeStamp::Now() - mLastCompositionEndTime : TimeDuration();
     // Check if we could flush
     if (duration.ToSeconds() > thresholdSec) {
       FlushPendingNotifyNotUsed();
@@ -171,9 +173,7 @@ Compositor::DrawDiagnosticsInternal(DiagnosticFlags aFlags,
                                     const gfx::Matrix4x4& aTransform,
                                     uint32_t aFlashCounter)
 {
-#ifdef MOZ_B2G
-  int lWidth = 4;
-#elif defined(ANDROID)
+#ifdef ANDROID
   int lWidth = 10;
 #else
   int lWidth = 2;
@@ -221,6 +221,99 @@ Compositor::DrawDiagnosticsInternal(DiagnosticFlags aFlags,
   }
 
   SlowDrawRect(aVisibleRect, color, aClipRect, aTransform, lWidth);
+}
+
+static void
+UpdateTextureCoordinates(gfx::TexturedTriangle& aTriangle,
+                         const gfx::Rect& aRect,
+                         const gfx::Rect& aIntersection,
+                         const gfx::Rect& aTextureCoords)
+{
+  // Calculate the relative offset of the intersection within the layer.
+  float dx = (aIntersection.x - aRect.x) / aRect.width;
+  float dy = (aIntersection.y - aRect.y) / aRect.height;
+
+  // Update the texture offset.
+  float x = aTextureCoords.x + dx * aTextureCoords.width;
+  float y = aTextureCoords.y + dy * aTextureCoords.height;
+
+  // Scale the texture width and height.
+  float w = aTextureCoords.width * aIntersection.width / aRect.width;
+  float h = aTextureCoords.height * aIntersection.height / aRect.height;
+
+  static const auto Clamp = [](float& f)
+  {
+    if (f >= 1.0f) f = 1.0f;
+    if (f <= 0.0f) f = 0.0f;
+  };
+
+  auto UpdatePoint = [&](const gfx::Point& p, gfx::Point& t)
+  {
+    t.x = x + (p.x - aIntersection.x) / aIntersection.width * w;
+    t.y = y + (p.y - aIntersection.y) / aIntersection.height * h;
+
+    Clamp(t.x);
+    Clamp(t.y);
+  };
+
+  UpdatePoint(aTriangle.p1, aTriangle.textureCoords.p1);
+  UpdatePoint(aTriangle.p2, aTriangle.textureCoords.p2);
+  UpdatePoint(aTriangle.p3, aTriangle.textureCoords.p3);
+}
+
+void
+Compositor::DrawGeometry(const gfx::Rect& aRect,
+                         const gfx::IntRect& aClipRect,
+                         const EffectChain& aEffectChain,
+                         gfx::Float aOpacity,
+                         const gfx::Matrix4x4& aTransform,
+                         const gfx::Rect& aVisibleRect,
+                         const Maybe<gfx::Polygon>& aGeometry)
+{
+  if (!aGeometry || !SupportsLayerGeometry()) {
+    DrawQuad(aRect, aClipRect, aEffectChain,
+             aOpacity, aTransform, aVisibleRect);
+    return;
+  }
+
+  // Cull invisible polygons.
+  if (aRect.Intersect(aGeometry->BoundingBox()).IsEmpty()) {
+    return;
+  }
+
+  const gfx::Polygon clipped = aGeometry->ClipPolygon(aRect);
+
+  for (gfx::Triangle& triangle : clipped.ToTriangles()) {
+    const gfx::Rect intersection = aRect.Intersect(triangle.BoundingBox());
+
+    // Cull invisible triangles.
+    if (intersection.IsEmpty()) {
+      continue;
+    }
+
+    MOZ_ASSERT(aRect.width > 0.0f && aRect.height > 0.0f);
+    MOZ_ASSERT(intersection.width > 0.0f && intersection.height > 0.0f);
+
+    gfx::TexturedTriangle texturedTriangle(Move(triangle));
+    texturedTriangle.width = aRect.width;
+    texturedTriangle.height = aRect.height;
+
+    // Since the texture was created for non-split geometry, we need to
+    // update the texture coordinates to account for the split.
+    const EffectTypes type = aEffectChain.mPrimaryEffect->mType;
+
+    if (type == EffectTypes::RGB || type == EffectTypes::YCBCR ||
+        type == EffectTypes::NV12 || type == EffectTypes::RENDER_TARGET) {
+      TexturedEffect* texturedEffect =
+        static_cast<TexturedEffect*>(aEffectChain.mPrimaryEffect.get());
+
+      UpdateTextureCoordinates(texturedTriangle, aRect, intersection,
+                               texturedEffect->mTextureCoords);
+    }
+
+    DrawTriangle(texturedTriangle, aClipRect, aEffectChain,
+                 aOpacity, aTransform, aVisibleRect);
+  }
 }
 
 void
@@ -380,15 +473,18 @@ DecomposeIntoNoRepeatRects(const gfx::Rect& aRect,
   GLfloat xmid = aRect.x + (1.0f - tl.x) / texCoordRect.width * aRect.width;
   GLfloat ymid = aRect.y + (1.0f - tl.y) / texCoordRect.height * aRect.height;
 
+  // Due to floating-point inaccuracy, we have to use XMost()-x and YMost()-y
+  // to calculate width and height, respectively, to ensure that size will
+  // remain consistent going from absolute to relative and back again.
   NS_ASSERTION(!xwrap ||
-               (xmid > aRect.x &&
-                xmid < aRect.XMost() &&
-                FuzzyEqual((xmid - aRect.x) + (aRect.XMost() - xmid), aRect.width)),
+               (xmid >= aRect.x &&
+                xmid <= aRect.XMost() &&
+                FuzzyEqual((xmid - aRect.x) + (aRect.XMost() - xmid), aRect.XMost() - aRect.x)),
                "xmid should be within [x,XMost()] and the wrapped rect should have the same width");
   NS_ASSERTION(!ywrap ||
-               (ymid > aRect.y &&
-                ymid < aRect.YMost() &&
-                FuzzyEqual((ymid - aRect.y) + (aRect.YMost() - ymid), aRect.height)),
+               (ymid >= aRect.y &&
+                ymid <= aRect.YMost() &&
+                FuzzyEqual((ymid - aRect.y) + (aRect.YMost() - ymid), aRect.YMost() - aRect.y)),
                "ymid should be within [y,YMost()] and the wrapped rect should have the same height");
 
   if (!xwrap && ywrap) {
@@ -478,6 +574,18 @@ Compositor::ComputeBackdropCopyRect(const gfx::Rect& aRect,
   return result;
 }
 
+gfx::IntRect
+Compositor::ComputeBackdropCopyRect(const gfx::Triangle& aTriangle,
+                                    const gfx::IntRect& aClipRect,
+                                    const gfx::Matrix4x4& aTransform,
+                                    gfx::Matrix4x4* aOutTransform,
+                                    gfx::Rect* aOutLayerQuad)
+{
+  gfx::Rect boundingBox = aTriangle.BoundingBox();
+  return ComputeBackdropCopyRect(boundingBox, aClipRect, aTransform,
+                                 aOutTransform, aOutLayerQuad);
+}
+
 void
 Compositor::SetInvalid()
 {
@@ -487,51 +595,13 @@ Compositor::SetInvalid()
 bool
 Compositor::IsValid() const
 {
-  return !mParent;
+  return !!mParent;
 }
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-void
-Compositor::SetDispAcquireFence(Layer* aLayer)
-{
-  // OpenGL does not provide ReleaseFence for rendering.
-  // Instead use DispAcquireFence as layer buffer's ReleaseFence
-  // to prevent flickering and tearing.
-  // DispAcquireFence is DisplaySurface's AcquireFence.
-  // AcquireFence will be signaled when a buffer's content is available.
-  // See Bug 974152.
-  if (!aLayer || !mWidget) {
-    return;
-  }
-  nsWindow* window = static_cast<nsWindow*>(mWidget->RealWidget());
-  RefPtr<FenceHandle::FdObj> fence = new FenceHandle::FdObj(
-      window->GetScreen()->GetPrevDispAcquireFd());
-  mReleaseFenceHandle.Merge(FenceHandle(fence));
-}
-
-FenceHandle
-Compositor::GetReleaseFence()
-{
-  if (!mReleaseFenceHandle.IsValid()) {
-    return FenceHandle();
-  }
-
-  RefPtr<FenceHandle::FdObj> fdObj = mReleaseFenceHandle.GetDupFdObj();
-  return FenceHandle(fdObj);
-}
-
-#else
 void
 Compositor::SetDispAcquireFence(Layer* aLayer)
 {
 }
-
-FenceHandle
-Compositor::GetReleaseFence()
-{
-  return FenceHandle();
-}
-#endif
 
 } // namespace layers
 } // namespace mozilla

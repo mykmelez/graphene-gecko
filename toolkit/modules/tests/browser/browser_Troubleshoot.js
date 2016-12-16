@@ -6,6 +6,7 @@
 // that aren't initialized outside of a XUL app environment like AddonManager
 // and the "@mozilla.org/xre/app-info;1" component.
 
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/Troubleshoot.jsm");
 
@@ -21,7 +22,7 @@ function test() {
   doNextTest();
 }
 
-registerCleanupFunction(function () {
+registerCleanupFunction(function() {
   // Troubleshoot.jsm is imported into the global scope -- the window -- above.
   // If it's not deleted, it outlives the test and is reported as a leak.
   delete window.Troubleshoot;
@@ -30,7 +31,7 @@ registerCleanupFunction(function () {
 var tests = [
 
   function snapshotSchema(done) {
-    Troubleshoot.snapshot(function (snapshot) {
+    Troubleshoot.snapshot(function(snapshot) {
       try {
         validateObject(snapshot, SNAPSHOT_SCHEMA);
         ok(true, "The snapshot should conform to the schema.");
@@ -49,11 +50,11 @@ var tests = [
       "javascript.print_to_filename",
       "network.proxy.troubleshoot",
     ];
-    prefs.forEach(function (p) {
+    prefs.forEach(function(p) {
       Services.prefs.setBoolPref(p, true);
       is(Services.prefs.getBoolPref(p), true, "The pref should be set: " + p);
     });
-    Troubleshoot.snapshot(function (snapshot) {
+    Troubleshoot.snapshot(function(snapshot) {
       let p = snapshot.modifiedPreferences;
       is(p["javascript.troubleshoot"], true,
          "The pref should be present because it's whitelisted " +
@@ -77,7 +78,7 @@ var tests = [
     // set/getCharPref work with 8bit strings (utf8)
     Services.prefs.setCharPref(name, utf8Value);
 
-    Troubleshoot.snapshot(function (snapshot) {
+    Troubleshoot.snapshot(function(snapshot) {
       let p = snapshot.modifiedPreferences;
       is(p[name], unicodeValue, "The pref should have correct Unicode value.");
       Services.prefs.deleteBranch(name);
@@ -312,6 +313,12 @@ const SNAPSHOT_SCHEMA = {
             type: "string",
           },
         },
+        indices: {
+          type: "array",
+          items: {
+            type: "number",
+          },
+        },
         featureLog: {
           type: "object",
         },
@@ -439,19 +446,19 @@ const SNAPSHOT_SCHEMA = {
       type: "object",
       properties: {
         hasSeccompBPF: {
-          required: true,
+          required: AppConstants.platform == "linux",
           type: "boolean"
         },
         hasSeccompTSync: {
-          required: true,
+          required: AppConstants.platform == "linux",
           type: "boolean"
         },
         hasUserNamespaces: {
-          required: true,
+          required: AppConstants.platform == "linux",
           type: "boolean"
         },
         hasPrivilegedUserNamespaces: {
-          required: true,
+          required: AppConstants.platform == "linux",
           type: "boolean"
         },
         canSandboxContent: {
@@ -461,6 +468,10 @@ const SNAPSHOT_SCHEMA = {
         canSandboxMedia: {
           required: false,
           type: "boolean"
+        },
+        contentSandboxLevel: {
+          required: AppConstants.MOZ_CONTENT_SANDBOX,
+          type: "number"
         },
       },
     },
@@ -499,7 +510,7 @@ function validateObject_object(obj, schema) {
   // Now check that the object doesn't have any properties not in the schema.
   for (let prop in obj)
     if (!(prop in schema.properties))
-      throw validationErr("Object has property not in schema", obj, schema);
+      throw validationErr("Object has property " + prop + " not in schema", obj, schema);
 }
 
 function validateObject_array(array, schema) {

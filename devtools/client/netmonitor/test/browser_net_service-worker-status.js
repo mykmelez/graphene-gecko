@@ -1,6 +1,6 @@
-/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+
 "use strict";
 
 /**
@@ -12,8 +12,8 @@ const URL = EXAMPLE_URL.replace("http:", "https:");
 
 const TEST_URL = URL + "service-workers/status-codes.html";
 
-var test = Task.async(function* () {
-  let [, debuggee, monitor] = yield initNetMonitor(TEST_URL, null, true);
+add_task(function* () {
+  let { tab, monitor } = yield initNetMonitor(TEST_URL, null, true);
   info("Starting test... ");
 
   let { NetMonitorView } = monitor.panelWin;
@@ -35,20 +35,26 @@ var test = Task.async(function* () {
   ];
 
   info("Registering the service worker...");
-  yield debuggee.registerServiceWorker();
+  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+    yield content.wrappedJSObject.registerServiceWorker();
+  });
 
   info("Performing requests...");
-  debuggee.performRequests();
-  yield waitForNetworkEvents(monitor, REQUEST_DATA.length);
+  let wait = waitForNetworkEvents(monitor, REQUEST_DATA.length);
+  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+    content.wrappedJSObject.performRequests();
+  });
+  yield wait;
 
   let index = 0;
   for (let request of REQUEST_DATA) {
     let item = RequestsMenu.getItemAtIndex(index);
 
     info(`Verifying request #${index}`);
-    yield verifyRequestItemTarget(item, request.method, request.uri, request.details);
+    yield verifyRequestItemTarget(RequestsMenu, item,
+      request.method, request.uri, request.details);
 
-    let { stacktrace } = item.attachment.cause;
+    let { stacktrace } = item.cause;
     let stackLen = stacktrace ? stacktrace.length : 0;
 
     ok(stacktrace, `Request #${index} has a stacktrace`);
@@ -64,8 +70,9 @@ var test = Task.async(function* () {
   }
 
   info("Unregistering the service worker...");
-  yield debuggee.unregisterServiceWorker();
+  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+    yield content.wrappedJSObject.unregisterServiceWorker();
+  });
 
   yield teardown(monitor);
-  finish();
 });

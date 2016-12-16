@@ -55,7 +55,13 @@ class BufferPointer
         return (T*)p;
     }
 
-    T& operator*() const { return *get(); }
+    void set(const T& value) {
+        *get() = value;
+    }
+
+    // Note: we return a copy instead of a reference, to avoid potential memory
+    // safety hazards when the underlying buffer gets resized.
+    const T operator*() const { return *get(); }
     T* operator->() const { return get(); }
 };
 
@@ -111,7 +117,7 @@ struct BaselineStackBuilder
         js_free(buffer_);
     }
 
-    bool init() {
+    MOZ_MUST_USE bool init() {
         MOZ_ASSERT(!buffer_);
         MOZ_ASSERT(bufferUsed_ == 0);
         buffer_ = reinterpret_cast<uint8_t*>(js_calloc(bufferTotal_));
@@ -133,10 +139,11 @@ struct BaselineStackBuilder
         header_->resumePC = nullptr;
         header_->monitorStub = nullptr;
         header_->numFrames = 0;
+        header_->checkGlobalDeclarationConflicts = false;
         return true;
     }
 
-    bool enlarge() {
+    MOZ_MUST_USE bool enlarge() {
         MOZ_ASSERT(buffer_ != nullptr);
         if (bufferTotal_ & mozilla::tl::MulOverflowMask<2>::value)
             return false;
@@ -176,7 +183,7 @@ struct BaselineStackBuilder
         return framePushed_;
     }
 
-    bool subtract(size_t size, const char* info = nullptr) {
+    MOZ_MUST_USE bool subtract(size_t size, const char* info = nullptr) {
         // enlarge the buffer if need be.
         while (size > bufferAvail_) {
             if (!enlarge())
@@ -197,7 +204,10 @@ struct BaselineStackBuilder
     }
 
     template <typename T>
-    bool write(const T& t) {
+    MOZ_MUST_USE bool write(const T& t) {
+        MOZ_ASSERT(!(uintptr_t(&t) >= uintptr_t(header_->copyStackBottom) &&
+                     uintptr_t(&t) < uintptr_t(header_->copyStackTop)),
+                   "Should not reference memory that can be freed");
         if (!subtract(sizeof(T)))
             return false;
         memcpy(header_->copyStackBottom, &t, sizeof(T));
@@ -205,7 +215,7 @@ struct BaselineStackBuilder
     }
 
     template <typename T>
-    bool writePtr(T* t, const char* info) {
+    MOZ_MUST_USE bool writePtr(T* t, const char* info) {
         if (!write<T*>(t))
             return false;
         if (info)
@@ -215,36 +225,36 @@ struct BaselineStackBuilder
         return true;
     }
 
-    bool writeWord(size_t w, const char* info) {
+    MOZ_MUST_USE bool writeWord(size_t w, const char* info) {
         if (!write<size_t>(w))
             return false;
         if (info) {
             if (sizeof(size_t) == 4) {
                 JitSpew(JitSpew_BaselineBailouts,
-                        "      WRITE_WRD %p/%p %-15s %08x",
+                        "      WRITE_WRD %p/%p %-15s %08" PRIxSIZE,
                         header_->copyStackBottom, virtualPointerAtStackOffset(0), info, w);
             } else {
                 JitSpew(JitSpew_BaselineBailouts,
-                        "      WRITE_WRD %p/%p %-15s %016llx",
+                        "      WRITE_WRD %p/%p %-15s %016" PRIxSIZE,
                         header_->copyStackBottom, virtualPointerAtStackOffset(0), info, w);
             }
         }
         return true;
     }
 
-    bool writeValue(Value val, const char* info) {
+    MOZ_MUST_USE bool writeValue(const Value& val, const char* info) {
         if (!write<Value>(val))
             return false;
         if (info) {
             JitSpew(JitSpew_BaselineBailouts,
-                    "      WRITE_VAL %p/%p %-15s %016llx",
+                    "      WRITE_VAL %p/%p %-15s %016" PRIx64,
                     header_->copyStackBottom, virtualPointerAtStackOffset(0), info,
                     *((uint64_t*) &val));
         }
         return true;
     }
 
-    bool maybeWritePadding(size_t alignment, size_t after, const char* info) {
+    MOZ_MUST_USE bool maybeWritePadding(size_t alignment, size_t after, const char* info) {
         MOZ_ASSERT(framePushed_ % sizeof(Value) == 0);
         MOZ_ASSERT(after % sizeof(Value) == 0);
         size_t offset = ComputeByteAlignment(after, alignment);
@@ -403,6 +413,10 @@ struct BaselineStackBuilder
 #  error "Bad architecture!"
 #endif
     }
+
+    void setCheckGlobalDeclarationConflicts() {
+        header_->checkGlobalDeclarationConflicts = true;
+    }
 };
 
 // Ensure that all value locations are readable from the SnapshotIterator.
@@ -430,7 +444,7 @@ class SnapshotIteratorForBailout : public SnapshotIterator
 
     // Take previously computed result out of the activation, or compute the
     // results of all recover instructions contained in the snapshot.
-    bool init(JSContext* cx) {
+    MOZ_MUST_USE bool init(JSContext* cx) {
 
         // Under a bailout, there is no need to invalidate the frame after
         // evaluating the recover instruction, as the invalidation is only
@@ -498,6 +512,16 @@ HasLiveIteratorAtStackDepth(JSScript* script, jsbytecode* pc, uint32_t stackDept
     }
 
     return false;
+}
+
+static bool
+IsPrologueBailout(const SnapshotIterator& iter, const ExceptionBailoutInfo* excInfo)
+{
+    // If we are propagating an exception for debug mode, we will not resume
+    // into baseline code, but instead into HandleExceptionBaseline (i.e.,
+    // never before the prologue).
+    return iter.pcOffset() == 0 && !iter.resumeAfter() &&
+           (!excInfo || !excInfo->propagatingIonExceptionForDebugMode());
 }
 
 // For every inline frame, we write out the following data:
@@ -628,7 +652,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     // |  ReturnAddr   | <-- return into main jitcode after IC
     // +===============+
 
-    JitSpew(JitSpew_BaselineBailouts, "      Unpacking %s:%d", script->filename(), script->lineno());
+    JitSpew(JitSpew_BaselineBailouts, "      Unpacking %s:%" PRIuSIZE, script->filename(), script->lineno());
     JitSpew(JitSpew_BaselineBailouts, "      [BASELINE-JS FRAME]");
 
     // Calculate and write the previous frame pointer value.
@@ -653,17 +677,18 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     if (script->isDebuggee())
         flags |= BaselineFrame::DEBUGGEE;
 
-    // Initialize BaselineFrame's scopeChain and argsObj
-    JSObject* scopeChain = nullptr;
+    // Initialize BaselineFrame's envChain and argsObj
+    JSObject* envChain = nullptr;
     Value returnValue;
     ArgumentsObject* argsObj = nullptr;
     BailoutKind bailoutKind = iter.bailoutKind();
     if (bailoutKind == Bailout_ArgumentCheck) {
-        // Temporary hack -- skip the (unused) scopeChain, because it could be
-        // bogus (we can fail before the scope chain slot is set). Strip the
-        // hasScopeChain flag and this will be fixed up later in |FinishBailoutToBaseline|,
-        // which calls |EnsureHasScopeObjects|.
-        JitSpew(JitSpew_BaselineBailouts, "      Bailout_ArgumentCheck! (no valid scopeChain)");
+        // Temporary hack -- skip the (unused) envChain, because it could be
+        // bogus (we can fail before the env chain slot is set). Strip the
+        // hasEnvironmentChain flag and this will be fixed up later in
+        // |FinishBailoutToBaseline|, which calls
+        // |EnsureHasEnvironmentObjects|.
+        JitSpew(JitSpew_BaselineBailouts, "      Bailout_ArgumentCheck! (no valid envChain)");
         iter.skip();
 
         // skip |return value|
@@ -680,38 +705,47 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     } else {
         Value v = iter.read();
         if (v.isObject()) {
-            scopeChain = &v.toObject();
-            if (fun && fun->needsCallObject())
-                flags |= BaselineFrame::HAS_CALL_OBJ;
+            envChain = &v.toObject();
+            if (fun &&
+                ((fun->needsCallObject() && envChain->is<CallObject>()) ||
+                 (fun->needsNamedLambdaEnvironment() &&
+                  !fun->needsCallObject() &&
+                  envChain->is<LexicalEnvironmentObject>() &&
+                  &envChain->as<LexicalEnvironmentObject>().scope() ==
+                  script->maybeNamedLambdaScope())))
+            {
+                MOZ_ASSERT(!fun->needsExtraBodyVarEnvironment());
+                flags |= BaselineFrame::HAS_INITIAL_ENV;
+            }
         } else {
             MOZ_ASSERT(v.isUndefined() || v.isMagic(JS_OPTIMIZED_OUT));
 
-            // Get scope chain from function or script.
+            // Get env chain from function or script.
             if (fun) {
                 // If pcOffset == 0, we may have to push a new call object, so
-                // we leave scopeChain nullptr and enter baseline code before
+                // we leave envChain nullptr and enter baseline code before
                 // the prologue.
-                //
-                // If we are propagating an exception for debug mode, we will
-                // not resume into baseline code, but instead into
-                // HandleExceptionBaseline, so *do* set the scope chain here.
-                if (iter.pcOffset() != 0 || iter.resumeAfter() ||
-                    (excInfo && excInfo->propagatingIonExceptionForDebugMode()))
-                {
-                    scopeChain = fun->environment();
-                }
+                if (!IsPrologueBailout(iter, excInfo))
+                    envChain = fun->environment();
             } else if (script->module()) {
-                scopeChain = script->module()->environment();
+                envChain = script->module()->environment();
             } else {
-                // For global scripts without a non-syntactic scope the scope
-                // chain is the script's global lexical scope (Ion does not
-                // compile scripts with a non-syntactic global scope). Also
-                // note that it's invalid to resume into the prologue in this
-                // case because the prologue expects the scope chain in R1 for
-                // eval and global scripts.
+                // For global scripts without a non-syntactic env the env
+                // chain is the script's global lexical environment (Ion does
+                // not compile scripts with a non-syntactic global scope).
+                // Also note that it's invalid to resume into the prologue in
+                // this case because the prologue expects the env chain in R1
+                // for eval and global scripts.
                 MOZ_ASSERT(!script->isForEval());
                 MOZ_ASSERT(!script->hasNonSyntacticScope());
-                scopeChain = &(script->global().lexicalScope());
+                envChain = &(script->global().lexicalEnvironment());
+
+                // We have possibly bailed out before Ion could do the global
+                // declaration conflicts check. Since it's invalid to resume
+                // into the prologue, set a flag so FinishBailoutToBaseline
+                // can do the conflict check.
+                if (IsPrologueBailout(iter, excInfo))
+                    builder.setCheckGlobalDeclarationConflicts();
             }
         }
 
@@ -728,9 +762,9 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
                 argsObj = &v.toObject().as<ArgumentsObject>();
         }
     }
-    JitSpew(JitSpew_BaselineBailouts, "      ScopeChain=%p", scopeChain);
-    blFrame->setScopeChain(scopeChain);
-    JitSpew(JitSpew_BaselineBailouts, "      ReturnValue=%016llx", *((uint64_t*) &returnValue));
+    JitSpew(JitSpew_BaselineBailouts, "      EnvChain=%p", envChain);
+    blFrame->setEnvironmentChain(envChain);
+    JitSpew(JitSpew_BaselineBailouts, "      ReturnValue=%016" PRIx64, *((uint64_t*) &returnValue));
     blFrame->setReturnValue(returnValue);
 
     // Do not need to initialize scratchValue field in BaselineFrame.
@@ -745,13 +779,13 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         // in the calling frame.
         Value thisv = iter.read();
         JitSpew(JitSpew_BaselineBailouts, "      Is function!");
-        JitSpew(JitSpew_BaselineBailouts, "      thisv=%016llx", *((uint64_t*) &thisv));
+        JitSpew(JitSpew_BaselineBailouts, "      thisv=%016" PRIx64, *((uint64_t*) &thisv));
 
         size_t thisvOffset = builder.framePushed() + JitFrameLayout::offsetOfThis();
-        *builder.valuePointerAtStackOffset(thisvOffset) = thisv;
+        builder.valuePointerAtStackOffset(thisvOffset).set(thisv);
 
         MOZ_ASSERT(iter.numAllocations() >= CountArgSlots(script, fun));
-        JitSpew(JitSpew_BaselineBailouts, "      frame slots %u, nargs %u, nfixed %u",
+        JitSpew(JitSpew_BaselineBailouts, "      frame slots %u, nargs %" PRIuSIZE ", nfixed %" PRIuSIZE,
                 iter.numAllocations(), fun->nargs(), script->nfixed());
 
         if (!callerPC) {
@@ -767,11 +801,11 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
 
         for (uint32_t i = 0; i < fun->nargs(); i++) {
             Value arg = iter.read();
-            JitSpew(JitSpew_BaselineBailouts, "      arg %d = %016llx",
+            JitSpew(JitSpew_BaselineBailouts, "      arg %d = %016" PRIx64,
                         (int) i, *((uint64_t*) &arg));
             if (callerPC) {
                 size_t argOffset = builder.framePushed() + JitFrameLayout::offsetOfActualArg(i);
-                *builder.valuePointerAtStackOffset(argOffset) = arg;
+                builder.valuePointerAtStackOffset(argOffset).set(arg);
             } else {
                 startFrameFormals[i].set(arg);
             }
@@ -1013,7 +1047,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             // Not every monitored op has a monitored fallback stub, e.g.
             // JSOP_NEWOBJECT, which always returns the same type for a
             // particular script/pc location.
-            ICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
+            BaselineICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
             ICFallbackStub* fallbackStub = icEntry.firstStub()->getChainFallback();
             if (fallbackStub->isMonitoredFallback())
                 enterMonitorChain = true;
@@ -1028,7 +1062,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         builder.setResumeFramePtr(prevFramePtr);
 
         if (enterMonitorChain) {
-            ICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
+            BaselineICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
             ICFallbackStub* fallbackStub = icEntry.firstStub()->getChainFallback();
             MOZ_ASSERT(fallbackStub->isMonitoredFallback());
             JitSpew(JitSpew_BaselineBailouts, "      [TYPE-MONITOR CHAIN]");
@@ -1051,12 +1085,18 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             // Push undefs onto the stack in anticipation of the popping of the
             // callee, thisv, and actual arguments passed from the caller's frame.
             if (isCall) {
-                builder.writeValue(UndefinedValue(), "CallOp FillerCallee");
-                builder.writeValue(UndefinedValue(), "CallOp FillerThis");
-                for (uint32_t i = 0; i < numCallArgs; i++)
-                    builder.writeValue(UndefinedValue(), "CallOp FillerArg");
-                if (pushedNewTarget)
-                    builder.writeValue(UndefinedValue(), "CallOp FillerNewTarget");
+                if (!builder.writeValue(UndefinedValue(), "CallOp FillerCallee"))
+                    return false;
+                if (!builder.writeValue(UndefinedValue(), "CallOp FillerThis"))
+                    return false;
+                for (uint32_t i = 0; i < numCallArgs; i++) {
+                    if (!builder.writeValue(UndefinedValue(), "CallOp FillerArg"))
+                        return false;
+                }
+                if (pushedNewTarget) {
+                    if (!builder.writeValue(UndefinedValue(), "CallOp FillerNewTarget"))
+                        return false;
+                }
 
                 frameSize += (numCallArgs + 2 + pushedNewTarget) * sizeof(Value);
                 blFrame->setFrameSize(frameSize);
@@ -1123,11 +1163,11 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             JitSpew(JitSpew_BaselineBailouts, "      Adjusted framesize -= %d: %d",
                     int(sizeof(Value) * numUnsynced), int(frameSize));
 
-            // If scopeChain is nullptr, then bailout is occurring during argument check.
+            // If envChain is nullptr, then bailout is occurring during argument check.
             // In this case, resume into the prologue.
             uint8_t* opReturnAddr;
-            if (scopeChain == nullptr) {
-                // Global and eval scripts expect the scope chain in R1, so only
+            if (envChain == nullptr) {
+                // Global and eval scripts expect the env chain in R1, so only
                 // resume into the prologue for function scripts.
                 MOZ_ASSERT(fun);
                 MOZ_ASSERT(numUnsynced == 0);
@@ -1152,13 +1192,13 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
                 ReportOutOfMemory(cx);
                 return false;
             }
-            JS_snprintf(buf, len, "%s %s %s on line %u of %s:%" PRIuSIZE,
-                                  BailoutKindString(bailoutKind),
-                                  resumeAfter ? "after" : "at",
-                                  CodeName[op],
-                                  PCToLineNumber(script, pc),
-                                  filename,
-                                  script->lineno());
+            snprintf(buf, len, "%s %s %s on line %u of %s:%" PRIuSIZE,
+                     BailoutKindString(bailoutKind),
+                     resumeAfter ? "after" : "at",
+                     CodeName[op],
+                     PCToLineNumber(script, pc),
+                     filename,
+                     script->lineno());
             cx->runtime()->spsProfiler.markEvent(buf);
             js_free(buf);
         }
@@ -1177,7 +1217,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
 
     // Calculate and write out return address.
     // The icEntry in question MUST have an inlinable fallback stub.
-    ICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
+    BaselineICEntry& icEntry = baselineScript->icEntryFromPCOffset(pcOff);
     MOZ_ASSERT(IsInlinableFallback(icEntry.firstStub()->getChainFallback()));
     if (!builder.writePtr(baselineScript->returnAddressForIC(icEntry), "ReturnAddr"))
         return false;
@@ -1266,7 +1306,8 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         size_t calleeSlot = valueSlot - actualArgc - 1 - pushedNewTarget;
 
         for (size_t i = valueSlot; i > calleeSlot; i--) {
-            if (!builder.writeValue(*blFrame->valueSlot(i), "ArgVal"))
+            Value v = *blFrame->valueSlot(i);
+            if (!builder.writeValue(v, "ArgVal"))
                 return false;
         }
 
@@ -1288,7 +1329,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         return false;
 
     // Push callee token (must be a JS Function)
-    JitSpew(JitSpew_BaselineBailouts, "      Callee = %016llx", callee.asRawBits());
+    JitSpew(JitSpew_BaselineBailouts, "      Callee = %016" PRIx64, callee.asRawBits());
 
     JSFunction* calleeFun = &callee.toObject().as<JSFunction>();
     if (!builder.writePtr(CalleeToToken(calleeFun, JSOp(*pc) == JSOP_NEW), "CalleeToken"))
@@ -1362,7 +1403,9 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     if (pushedNewTarget) {
         size_t newTargetOffset = (builder.framePushed() - endOfBaselineStubArgs) +
                                  (actualArgc + 1) * sizeof(Value);
-        builder.writeValue(*builder.valuePointerAtStackOffset(newTargetOffset), "CopiedNewTarget");
+        Value newTargetValue = *builder.valuePointerAtStackOffset(newTargetOffset);
+        if (!builder.writeValue(newTargetValue, "CopiedNewTarget"))
+            return false;
     }
 
     // Push undefined for missing arguments.
@@ -1466,7 +1509,7 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
     //      |    |||||      |
     //      +---------------+
 
-    JitSpew(JitSpew_BaselineBailouts, "Bailing to baseline %s:%u (IonScript=%p) (FrameType=%d)",
+    JitSpew(JitSpew_BaselineBailouts, "Bailing to baseline %s:%" PRIuSIZE " (IonScript=%p) (FrameType=%d)",
             iter.script()->filename(), iter.script()->lineno(), (void*) iter.ionScript(),
             (int) prevFrameType);
 
@@ -1486,7 +1529,7 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
         propagatingExceptionForDebugMode = false;
     }
 
-    JitSpew(JitSpew_BaselineBailouts, "  Reading from snapshot offset %u size %u",
+    JitSpew(JitSpew_BaselineBailouts, "  Reading from snapshot offset %u size %" PRIuSIZE,
             iter.snapshotOffset(), iter.ionScript()->snapshotsListSize());
 
     if (!excInfo)
@@ -1512,7 +1555,7 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
     RootedFunction callee(cx, iter.maybeCallee());
     RootedScript scr(cx, iter.script());
     if (callee) {
-        JitSpew(JitSpew_BaselineBailouts, "  Callee function (%s:%u)",
+        JitSpew(JitSpew_BaselineBailouts, "  Callee function (%s:%" PRIuSIZE ")",
                 scr->filename(), scr->lineno());
     } else {
         JitSpew(JitSpew_BaselineBailouts, "  No callee!");
@@ -1547,7 +1590,7 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
             TraceLogStartEvent(logger, TraceLogger_Baseline);
         }
 
-        JitSpew(JitSpew_BaselineBailouts, "    FrameNo %d", frameNo);
+        JitSpew(JitSpew_BaselineBailouts, "    FrameNo %" PRIuSIZE, frameNo);
 
         // If we are bailing out to a catch or finally block in this frame,
         // pass excInfo to InitFromBailout and don't unpack any other frames.
@@ -1579,7 +1622,7 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
         caller = scr;
         callerPC = callPC;
         fun = nextCallee;
-        scr = fun->existingScriptForInlinedFunction();
+        scr = fun->existingScript();
 
         frameNo++;
 
@@ -1643,7 +1686,7 @@ InvalidateAfterBailout(JSContext* cx, HandleScript outerScript, const char* reas
 static void
 HandleBoundsCheckFailure(JSContext* cx, HandleScript outerScript, HandleScript innerScript)
 {
-    JitSpew(JitSpew_IonBailouts, "Bounds check failure %s:%d, inlined into %s:%d",
+    JitSpew(JitSpew_IonBailouts, "Bounds check failure %s:%" PRIuSIZE ", inlined into %s:%" PRIuSIZE,
             innerScript->filename(), innerScript->lineno(),
             outerScript->filename(), outerScript->lineno());
 
@@ -1658,7 +1701,7 @@ HandleBoundsCheckFailure(JSContext* cx, HandleScript outerScript, HandleScript i
 static void
 HandleShapeGuardFailure(JSContext* cx, HandleScript outerScript, HandleScript innerScript)
 {
-    JitSpew(JitSpew_IonBailouts, "Shape guard failure %s:%d, inlined into %s:%d",
+    JitSpew(JitSpew_IonBailouts, "Shape guard failure %s:%" PRIuSIZE ", inlined into %s:%" PRIuSIZE,
             innerScript->filename(), innerScript->lineno(),
             outerScript->filename(), outerScript->lineno());
 
@@ -1673,7 +1716,7 @@ HandleShapeGuardFailure(JSContext* cx, HandleScript outerScript, HandleScript in
 static void
 HandleBaselineInfoBailout(JSContext* cx, HandleScript outerScript, HandleScript innerScript)
 {
-    JitSpew(JitSpew_IonBailouts, "Baseline info failure %s:%d, inlined into %s:%d",
+    JitSpew(JitSpew_IonBailouts, "Baseline info failure %s:%" PRIuSIZE ", inlined into %s:%" PRIuSIZE,
             innerScript->filename(), innerScript->lineno(),
             outerScript->filename(), outerScript->lineno());
 
@@ -1683,7 +1726,7 @@ HandleBaselineInfoBailout(JSContext* cx, HandleScript outerScript, HandleScript 
 static void
 HandleLexicalCheckFailure(JSContext* cx, HandleScript outerScript, HandleScript innerScript)
 {
-    JitSpew(JitSpew_IonBailouts, "Lexical check failure %s:%d, inlined into %s:%d",
+    JitSpew(JitSpew_IonBailouts, "Lexical check failure %s:%" PRIuSIZE ", inlined into %s:%" PRIuSIZE,
             innerScript->filename(), innerScript->lineno(),
             outerScript->filename(), outerScript->lineno());
 
@@ -1709,7 +1752,7 @@ CopyFromRematerializedFrame(JSContext* cx, JitActivation* act, uint8_t* fp, size
     MOZ_ASSERT(rematFrame->script() == frame->script());
     MOZ_ASSERT(rematFrame->numActualArgs() == frame->numActualArgs());
 
-    frame->setScopeChain(rematFrame->scopeChain());
+    frame->setEnvironmentChain(rematFrame->environmentChain());
 
     if (frame->isFunctionFrame())
         frame->thisArgument() = rematFrame->thisArgument();
@@ -1720,11 +1763,13 @@ CopyFromRematerializedFrame(JSContext* cx, JitActivation* act, uint8_t* fp, size
     for (size_t i = 0; i < frame->script()->nfixed(); i++)
         *frame->valueSlot(i) = rematFrame->locals()[i];
 
+    frame->setReturnValue(rematFrame->returnValue());
+
     if (rematFrame->hasCachedSavedFrame())
         frame->setHasCachedSavedFrame();
 
     JitSpew(JitSpew_BaselineBailouts,
-            "  Copied from rematerialized frame at (%p,%u)",
+            "  Copied from rematerialized frame at (%p,%" PRIuSIZE ")",
             fp, inlineDepth);
 
     // Propagate the debuggee frame flag. For the case where the Debugger did
@@ -1759,16 +1804,29 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfo)
     uint32_t numFrames = bailoutInfo->numFrames;
     MOZ_ASSERT(numFrames > 0);
     BailoutKind bailoutKind = bailoutInfo->bailoutKind;
+    bool checkGlobalDeclarationConflicts = bailoutInfo->checkGlobalDeclarationConflicts;
 
     // Free the bailout buffer.
     js_free(bailoutInfo);
     bailoutInfo = nullptr;
 
-    // Ensure the frame has a call object if it needs one. If the scope chain
-    // is nullptr, we will enter baseline code at the prologue so no need to do
-    // anything in that case.
-    if (topFrame->scopeChain() && !EnsureHasScopeObjects(cx, topFrame))
-        return false;
+    if (topFrame->environmentChain()) {
+        // Ensure the frame has a call object if it needs one. If the env chain
+        // is nullptr, we will enter baseline code at the prologue so no need to do
+        // anything in that case.
+        if (!EnsureHasEnvironmentObjects(cx, topFrame))
+            return false;
+
+        // If we bailed out before Ion could do the global declaration
+        // conflicts check, because we resume in the body instead of the
+        // prologue for global frames.
+        if (checkGlobalDeclarationConflicts) {
+            Rooted<LexicalEnvironmentObject*> lexicalEnv(cx, &cx->global()->lexicalEnvironment());
+            RootedScript script(cx, topFrame->script());
+            if (!CheckGlobalDeclarationConflicts(cx, script, lexicalEnv, cx->global()))
+                return false;
+        }
+    }
 
     // Create arguments objects for bailed out frames, to maintain the invariant
     // that script->needsArgsObj() implies frame->hasArgsObj().
@@ -1793,10 +1851,10 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfo)
             BaselineFrame* frame = iter.baselineFrame();
             MOZ_ASSERT(frame->script()->hasBaselineScript());
 
-            // If the frame doesn't even have a scope chain set yet, then it's resuming
-            // into the the prologue before the scope chain is initialized.  Any
+            // If the frame doesn't even have a env chain set yet, then it's resuming
+            // into the the prologue before the env chain is initialized.  Any
             // necessary args object will also be initialized there.
-            if (frame->scopeChain() && frame->script()->needsArgsObj()) {
+            if (frame->environmentChain() && frame->script()->needsArgsObj()) {
                 ArgumentsObject* argsObj;
                 if (frame->hasArgsObj()) {
                     argsObj = &frame->argsObj();
@@ -1861,7 +1919,7 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfo)
     }
 
     JitSpew(JitSpew_BaselineBailouts,
-            "  Restored outerScript=(%s:%u,%u) innerScript=(%s:%u,%u) (bailoutKind=%u)",
+            "  Restored outerScript=(%s:%" PRIuSIZE ",%u) innerScript=(%s:%" PRIuSIZE ",%u) (bailoutKind=%u)",
             outerScript->filename(), outerScript->lineno(), outerScript->getWarmUpCount(),
             innerScript->filename(), innerScript->lineno(), innerScript->getWarmUpCount(),
             (unsigned) bailoutKind);

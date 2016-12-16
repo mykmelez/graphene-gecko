@@ -100,10 +100,6 @@
 #include "nsWrapperCacheInlines.h"
 #include "mozilla/dom/HTMLCollectionBinding.h"
 
-#ifdef MOZ_B2G_FM
-#include "FMRadio.h"
-#endif
-
 #include "nsDebug.h"
 
 #include "mozilla/dom/BindingUtils.h"
@@ -598,7 +594,6 @@ nsDOMClassInfo::Init()
   DOM_CLASSINFO_MAP_END
 
   DOM_CLASSINFO_MAP_BEGIN_NO_CLASS_IF(ChromeMessageSender, nsISupports)
-    DOM_CLASSINFO_MAP_ENTRY(nsIProcessChecker)
     DOM_CLASSINFO_MAP_ENTRY(nsIFrameScriptLoader)
     DOM_CLASSINFO_MAP_ENTRY(nsIProcessScriptLoader)
     DOM_CLASSINFO_MAP_ENTRY(nsIMessageListenerManager)
@@ -794,16 +789,6 @@ nsDOMClassInfo::PreCreate(nsISupports *nativeObj, JSContext *cx,
 {
   *parentObj = globalObj;
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                            JSObject *obj, jsid id, JS::Handle<JS::Value> val,
-                            bool *_retval)
-{
-  NS_WARNING("nsDOMClassInfo::AddProperty Don't call me!");
-
-  return NS_ERROR_UNEXPECTED;
 }
 
 NS_IMETHODIMP
@@ -1701,7 +1686,7 @@ nsWindowSH::NameStructEnabled(JSContext* aCx, nsGlobalWindow *aWin,
          OldBindingConstructorEnabled(nameStruct, aWin, aCx);
 }
 
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 #define USE_CONTROLLERS_SHIM
 #endif
 
@@ -1717,7 +1702,7 @@ nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
                           JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
                           JS::MutableHandle<JS::PropertyDescriptor> desc)
 {
-  if (id == XPCJSRuntime::Get()->GetStringID(XPCJSRuntime::IDX_COMPONENTS)) {
+  if (id == XPCJSContext::Get()->GetStringID(XPCJSContext::IDX_COMPONENTS)) {
     return LookupComponentsShim(cx, obj, aWin->AsInner(), desc);
   }
 
@@ -1725,7 +1710,7 @@ nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
   // Note: We use |obj| rather than |aWin| to get the principal here, because
   // this is called during Window setup when the Document isn't necessarily
   // hooked up yet.
-  if (id == XPCJSRuntime::Get()->GetStringID(XPCJSRuntime::IDX_CONTROLLERS) &&
+  if (id == XPCJSContext::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS) &&
       !xpc::IsXrayWrapper(obj) &&
       !nsContentUtils::IsSystemPrincipal(nsContentUtils::ObjectPrincipal(obj)))
   {
@@ -1889,7 +1874,6 @@ const InterfaceShimEntry kInterfaceShimMap[] =
   { "nsIDOMSimpleGestureEvent", "SimpleGestureEvent" },
   { "nsIDOMUIEvent", "UIEvent" },
   { "nsIDOMHTMLMediaElement", "HTMLMediaElement" },
-  { "nsIDOMMediaError", "MediaError" },
   { "nsIDOMOfflineResourceList", "OfflineResourceList" },
   { "nsIDOMRange", "Range" },
   { "nsIDOMSVGLength", "SVGLength" },
@@ -1968,16 +1952,6 @@ nsEventTargetSH::PreCreate(nsISupports *nativeObj, JSContext *cx,
   *parentObj = native_parent ? native_parent->GetGlobalJSObject() : globalObj;
 
   return *parentObj ? NS_OK : NS_ERROR_FAILURE;
-}
-
-NS_IMETHODIMP
-nsEventTargetSH::AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                             JSObject *obj, jsid id, JS::Handle<JS::Value> val,
-                             bool *_retval)
-{
-  nsEventTargetSH::PreserveWrapper(GetNative(wrapper, obj));
-
-  return NS_OK;
 }
 
 void

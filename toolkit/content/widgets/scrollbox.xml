@@ -147,6 +147,23 @@
                  this._scrollbox.scrollWidth;
         ]]></getter>
       </property>
+
+      <property name="lineScrollAmount" readonly="true">
+        <getter><![CDATA[
+          // If inherited element wants to customize line scroll amount by
+          // wheel events, it should override this.
+          var px = document.defaultView
+                           .getComputedStyle(this._scrollbox, "")
+                           .getPropertyValue("font-size");
+          if (px.endsWith("px")) {
+            return parseInt(px);
+          }
+          // XXX Is this possible case?  For the last resote, let's return
+          //     default font-size of web contents.
+          return 16;
+        ]]></getter>
+      </property>
+
       <property name="scrollPaddingRect" readonly="true">
         <getter><![CDATA[
           // This assumes that this._scrollbox doesn't have any border.
@@ -501,6 +518,8 @@
       <field name="_isScrolling">0</field>
       <field name="_prevMouseScrolls">[null, null]</field>
 
+      <field name="_touchStart">-1</field>
+
       <method name="_stopSmoothScroll">
         <body><![CDATA[
           if (this._isScrolling) {
@@ -556,9 +575,9 @@
           if (event.deltaMode == event.DOM_DELTA_PIXEL)
             this.scrollByPixels(event.deltaY);
           else if (event.deltaMode == event.DOM_DELTA_PAGE)
-            this.scrollByPage(event.deltaY);
+            this.scrollByPixels(event.deltaY * this.scrollClientSize);
           else
-            this.scrollByIndex(event.deltaY);
+            this.scrollByPixels(event.deltaY * this.lineScrollAmount);
         }
         // We allow vertical scrolling to scroll a horizontal scrollbox
         // because many users have a vertical scroll wheel but no
@@ -577,9 +596,9 @@
             if (event.deltaMode == event.DOM_DELTA_PIXEL)
               this.scrollByPixels(scrollByDelta);
             else if (event.deltaMode == event.DOM_DELTA_PAGE)
-              this.scrollByPage(scrollByDelta);
+              this.scrollByPixels(scrollByDelta * this.scrollClientSize);
             else
-              this.scrollByIndex(scrollByDelta);
+              this.scrollByPixels(scrollByDelta * this.lineScrollAmount);
           }
 
           if (this._prevMouseScrolls.length > 1)
@@ -589,6 +608,40 @@
 
         event.stopPropagation();
         event.preventDefault();
+      ]]></handler>
+
+      <handler event="touchstart"><![CDATA[
+        if (event.touches.length > 1) {
+          // Multiple touch points detected, abort. In particular this aborts
+          // the panning gesture when the user puts a second finger down after
+          // already panning with one finger. Aborting at this point prevents
+          // the pan gesture from being resumed until all fingers are lifted
+          // (as opposed to when the user is back down to one finger).
+          this._touchStart = -1;
+        } else {
+          this._touchStart = (this.orient == "vertical"
+                ? event.touches[0].screenY
+                : event.touches[0].screenX);
+        }
+      ]]></handler>
+
+      <handler event="touchmove"><![CDATA[
+        if (event.touches.length == 1 &&
+            this._touchStart >= 0) {
+          var touchPoint = (this.orient == "vertical"
+                ? event.touches[0].screenY
+                : event.touches[0].screenX);
+          var delta = this._touchStart - touchPoint;
+          if (Math.abs(delta) > 0) {
+            this.scrollByPixels(delta);
+            this._touchStart = touchPoint;
+          }
+          event.preventDefault();
+        }
+      ]]></handler>
+
+      <handler event="touchend"><![CDATA[
+        this._touchStart = -1;
       ]]></handler>
 
       <handler event="underflow" phase="capturing"><![CDATA[
@@ -605,9 +658,9 @@
           if (event.detail == 1)
             return;
         }
-        else {    // horizontal scrollbox
-          if (event.detail == 0)
-            return;
+        else if (event.detail == 0) {
+          // horizontal scrollbox
+          return;
         }
 
         this.setAttribute("notoverflowing", "true");
@@ -621,7 +674,7 @@
           if (childNodes && childNodes.length)
             this.ensureElementIsVisible(childNodes[0], false);
         }
-        catch(e) {
+        catch (e) {
           this.removeAttribute("notoverflowing");
         }
       ]]></handler>
@@ -640,9 +693,9 @@
           if (event.detail == 1)
             return;
         }
-        else {    // horizontal scrollbox
-          if (event.detail == 0)
-            return;
+        else if (event.detail == 0) {
+          // horizontal scrollbox
+          return;
         }
 
         this.removeAttribute("notoverflowing");
@@ -655,7 +708,7 @@
           // as the whole overflow event should not be happening in that case.
           this._updateScrollButtonsDisabledState();
         }
-        catch(e) {
+        catch (e) {
           this.setAttribute("notoverflowing", "true");
         }
       ]]></handler>

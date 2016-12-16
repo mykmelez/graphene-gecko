@@ -127,10 +127,10 @@ Add the following to your mozconfig to compile with the Adjust SDK::
 
  export MOZ_INSTALL_TRACKING=1
  export MOZ_NATIVE_DEVICES=1
- export RELEASE_BUILD=1
+ export RELEASE_OR_BETA=1
  ac_add_options --with-adjust-sdk-keyfile="$topsrcdir/mobile/android/base/adjust-sdk-sandbox.token"
 
-``MOZ_NATIVE_DEVICES`` && ``RELEASE_BUILD`` are required for an unknown
+``MOZ_NATIVE_DEVICES`` && ``RELEASE_OR_BETA`` are required for an unknown
 reason.  If you build without them, the ``StubAdjustHelper`` will be
 returned.
 
@@ -142,10 +142,9 @@ token. Fennec's token is managed by Release Engineering and should not
 be exposed if at all possible; for example, it should *not* leak to build
 logs.  The value of the token is read from the file specified using the
 ``configure`` flag ``--with-adjust-sdk-keyfile=KEYFILE`` and stored in
-the build variable ``MOZ_INSTALL_TRACKING_ADJUST_SDK_APP_TOKEN``. The
-mozconfig specified above defaults to submitting data to a special Adjust
-sandbox allowing a developer to test Adjust without submitting false
-data to our backend.
+the build variable ``MOZ_ADJUST_SDK_KEY``. The mozconfig specified above
+defaults to submitting data to a special Adjust sandbox allowing a
+developer to test Adjust without submitting false data to our backend.
 
 We throw an assertion if ``MOZ_INSTALL_TRACKING`` is specified but
 ``--with-adjust-sdk-keyfile`` is not to ensure our builders have a proper

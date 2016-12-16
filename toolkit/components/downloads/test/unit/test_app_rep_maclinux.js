@@ -8,8 +8,7 @@
  * downloaded files.
  */
 
-////////////////////////////////////////////////////////////////////////////////
-//// Globals
+// Globals
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -64,8 +63,7 @@ function registerTableUpdate(aTable, aFilename) {
   });
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//// Tests
+// Tests
 
 function run_test()
 {
@@ -164,8 +162,6 @@ function processUpdateRequest() {
 function waitForUpdates() {
   let deferred = Promise.defer();
   gHttpServer.registerPathHandler("/downloads", function(request, response) {
-    let buf = NetUtil.readInputStreamToString(request.bodyInputStream,
-      request.bodyInputStream.available());
     let blob = processUpdateRequest();
     response.setHeader("Content-Type",
                        "application/vnd.google.safebrowsing-update", false);
@@ -197,6 +193,7 @@ function waitForUpdates() {
   streamUpdater.downloadUpdates(
     "goog-downloadwhite-digest256",
     "goog-downloadwhite-digest256;\n",
+    true,
     "http://localhost:4444/downloads",
     updateSuccess, handleError, handleError);
   return deferred.promise;

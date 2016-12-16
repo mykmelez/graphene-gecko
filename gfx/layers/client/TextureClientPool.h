@@ -45,11 +45,14 @@ class TextureClientPool final : public TextureClientAllocator
 
 public:
   TextureClientPool(LayersBackend aBackend,
+                    int32_t aMaxTextureSize,
                     gfx::SurfaceFormat aFormat,
                     gfx::IntSize aSize,
                     TextureFlags aFlags,
+                    uint32_t aShrinkTimeoutMsec,
+                    uint32_t aClearTimeoutMsec,
                     uint32_t aInitialPoolSize,
-                    uint32_t aPoolIncrementSize,
+                    uint32_t aPoolUnusedSize,
                     TextureForwarder* aAllocator);
 
   /**
@@ -100,6 +103,7 @@ public:
   void Clear();
 
   LayersBackend GetBackend() const { return mBackend; }
+  int32_t GetMaxTextureSize() const { return mMaxTextureSize; }
   gfx::SurfaceFormat GetFormat() { return mFormat; }
   TextureFlags GetFlags() const { return mFlags; }
 
@@ -111,14 +115,17 @@ public:
 private:
   void ReturnUnlockedClients();
 
-  /// We maintain a number of unused texture clients for immediate return from
-  /// GetTextureClient(). This will normally be called if there are no
-  /// TextureClients available in the pool, which ideally should only ever
-  /// be at startup.
-  void AllocateTextureClients(size_t aSize);
+  /// Allocate a single TextureClient to be returned from the pool.
+  void AllocateTextureClient();
+
+  /// Reset and/or initialise timers for shrinking/clearing the pool.
+  void ResetTimers();
 
   /// Backend passed to the TextureClient for buffer creation.
   LayersBackend mBackend;
+
+  // Max texture size passed to the TextureClient for buffer creation.
+  int32_t mMaxTextureSize;
 
   /// Format is passed to the TextureClient for buffer creation.
   gfx::SurfaceFormat mFormat;
@@ -129,26 +136,32 @@ private:
   /// Flags passed to the TextureClient for buffer creation.
   const TextureFlags mFlags;
 
+  /// How long to wait after a TextureClient is returned before trying
+  /// to shrink the pool to its maximum size of mPoolUnusedSize.
+  uint32_t mShrinkTimeoutMsec;
+
+  /// How long to wait after a TextureClient is returned before trying
+  /// to clear the pool.
+  uint32_t mClearTimeoutMsec;
+
   // The initial number of unused texture clients to seed the pool with
   // on construction
   uint32_t mInitialPoolSize;
 
   // How many unused texture clients to try and keep around if we go over
   // the initial allocation
-  uint32_t mPoolIncrementSize;
+  uint32_t mPoolUnusedSize;
 
   /// This is a total number of clients in the wild and in the stack of
   /// deferred clients (see below).  So, the total number of clients in
   /// existence is always mOutstandingClients + the size of mTextureClients.
   uint32_t mOutstandingClients;
 
-  // On b2g gonk, std::queue might be a better choice.
-  // On ICS, fence wait happens implicitly before drawing.
-  // Since JB, fence wait happens explicitly when fetching a client from the pool.
   std::stack<RefPtr<TextureClient> > mTextureClients;
 
   std::list<RefPtr<TextureClient>> mTextureClientsDeferred;
-  RefPtr<nsITimer> mTimer;
+  RefPtr<nsITimer> mShrinkTimer;
+  RefPtr<nsITimer> mClearTimer;
   // This mSurfaceAllocator owns us, so no need to hold a ref to it
   TextureForwarder* mSurfaceAllocator;
 

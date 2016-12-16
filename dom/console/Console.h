@@ -161,6 +161,9 @@ private:
   static already_AddRefed<Console>
   GetConsole(const GlobalObject& aGlobal);
 
+  static Console*
+  GetConsoleInternal(const GlobalObject& aGlobal, ErrorResult &aRv);
+
   static void
   ProfileMethod(const GlobalObject& aGlobal, const nsAString& aAction,
                 const Sequence<JS::Value>& aData);
@@ -255,9 +258,8 @@ private:
   // the max number of timers is reached.
   // * aCx - the JSContext rooting aName.
   // * aName - this is (should be) the name of the timer as JS::Value.
-  // * aTimestamp - the monotonicTimer for this context (taken from
-  //                window->performance.now() or from Now() -
-  //                workerPrivate->NowBaseTimeStamp() in workers.
+  // * aTimestamp - the monotonicTimer for this context taken from
+  //                performance.now().
   // * aTimerLabel - This label will be populated with the aName converted to a
   //                 string.
   // * aTimerValue - the StartTimer value stored into (or taken from)
@@ -287,9 +289,8 @@ private:
   // the aName timer doesn't exist in the mTimerRegistry.
   // * aCx - the JSContext rooting aName.
   // * aName - this is (should be) the name of the timer as JS::Value.
-  // * aTimestamp - the monotonicTimer for this context (taken from
-  //                window->performance.now() or from Now() -
-  //                workerPrivate->NowBaseTimeStamp() in workers.
+  // * aTimestamp - the monotonicTimer for this context taken from
+  //                performance.now().
   // * aTimerLabel - This label will be populated with the aName converted to a
   //                 string.
   // * aTimerDuration - the difference between aTimestamp and when the timer

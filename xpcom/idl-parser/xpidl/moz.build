@@ -4,15 +4,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-PYTHON_UNIT_TESTS += [
-    'runtests.py',
+PYTHON_UNITTEST_MANIFESTS += [
+    'python.ini',
 ]
 
 GENERATED_FILES += [
-    ('xpidllex.py', 'xpidlyacc.py'),
+    ('xpidl.stub', 'xpidllex.py', 'xpidlyacc.py'),
 ]
 
-GENERATED_FILES[('xpidllex.py', 'xpidlyacc.py')].script = 'header.py:main'
+GENERATED_FILES[('xpidl.stub', 'xpidllex.py', 'xpidlyacc.py')].script = 'header.py:main'
 
 SDK_FILES.bin += [
     '!xpidllex.py',

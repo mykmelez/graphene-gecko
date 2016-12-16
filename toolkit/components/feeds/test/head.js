@@ -23,15 +23,15 @@ function readTestData(testFile) {
       hasmore = istream.readLine(line);
 
       if (line.value.indexOf('Description:') > -1) {
-        testcase.desc = line.value.substring(line.value.indexOf(':')+1).trim();
+        testcase.desc = line.value.substring(line.value.indexOf(':') + 1).trim();
       }
 
       if (line.value.indexOf('Expect:') > -1) {
-        testcase.expect = line.value.substring(line.value.indexOf(':')+1).trim();
+        testcase.expect = line.value.substring(line.value.indexOf(':') + 1).trim();
       }
 
       if (line.value.indexOf('Base:') > -1) {
-        testcase.base = NetUtil.newURI(line.value.substring(line.value.indexOf(':')+1).trim());
+        testcase.base = NetUtil.newURI(line.value.substring(line.value.indexOf(':') + 1).trim());
       }
 
       if (testcase.expect && testcase.desc) {
@@ -42,7 +42,7 @@ function readTestData(testFile) {
 
     } while (hasmore);
 
-  } catch(e) {
+  } catch (e) {
     Assert.ok(false, "FAILED! Error reading testFile case in file " + testFile.leafName  + " ---- " + e);
   } finally {
     istream.close();
@@ -70,11 +70,11 @@ function iterateDir(dir, recurse, callback) {
   }
 }
 
-function isIID(a, iid){
+function isIID(a, iid) {
   try {
     a.QueryInterface(iid);
     return true;
-  } catch(e) { }
+  } catch (e) { }
 
   return false;
 }

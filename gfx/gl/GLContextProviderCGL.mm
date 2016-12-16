@@ -5,7 +5,6 @@
 
 #include "GLContextProvider.h"
 #include "GLContextCGL.h"
-#include "TextureImageCGL.h"
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include <OpenGL/gl.h>
@@ -14,6 +13,7 @@
 #include "prenv.h"
 #include "GeckoProfiler.h"
 #include "mozilla/gfx/MacIOSurface.h"
+#include "mozilla/widget/CompositorWidget.h"
 
 #include <OpenGL/OpenGL.h>
 
@@ -25,6 +25,7 @@ namespace mozilla {
 namespace gl {
 
 using namespace mozilla::gfx;
+using namespace mozilla::widget;
 
 class CGLLibrary
 {
@@ -232,6 +233,12 @@ CreateWithFormat(const NSOpenGLPixelFormatAttribute* attribs)
     [format release];
 
     return context;
+}
+
+already_AddRefed<GLContext>
+GLContextProviderCGL::CreateForCompositorWidget(CompositorWidget* aCompositorWidget, bool aForceAccelerated)
+{
+    return CreateForWindow(aCompositorWidget->RealWidget(), aForceAccelerated);
 }
 
 already_AddRefed<GLContext>

@@ -72,6 +72,7 @@ typedef union {
  * the unit is a must before asking for the value in any particular
  * form.
  */
+ /** <div rustbindgen private accessor="unsafe"></div> */
 class nsStyleCoord {
 public:
   // Non-reference counted calc() value.  See nsStyleStruct.h for some uses
@@ -262,6 +263,7 @@ private:
  * This is commonly used to hold the widths of the borders, margins,
  * or paddings of a box.
  */
+ /** <div rustbindgen private accessor="unsafe"></div> */
 class nsStyleSides {
 public:
   nsStyleSides();
@@ -272,13 +274,13 @@ public:
   bool           operator==(const nsStyleSides& aOther) const;
   bool           operator!=(const nsStyleSides& aOther) const;
 
-  inline nsStyleUnit GetUnit(mozilla::css::Side aSide) const;
+  inline nsStyleUnit GetUnit(mozilla::Side aSide) const;
   inline nsStyleUnit GetLeftUnit() const;
   inline nsStyleUnit GetTopUnit() const;
   inline nsStyleUnit GetRightUnit() const;
   inline nsStyleUnit GetBottomUnit() const;
 
-  inline nsStyleCoord Get(mozilla::css::Side aSide) const;
+  inline nsStyleCoord Get(mozilla::Side aSide) const;
   inline nsStyleCoord GetLeft() const;
   inline nsStyleCoord GetTop() const;
   inline nsStyleCoord GetRight() const;
@@ -311,13 +313,13 @@ public:
   // constructors).
   void Reset();
 
-  inline void Set(mozilla::css::Side aSide, const nsStyleCoord& aCoord);
+  inline void Set(mozilla::Side aSide, const nsStyleCoord& aCoord);
   inline void SetLeft(const nsStyleCoord& aCoord);
   inline void SetTop(const nsStyleCoord& aCoord);
   inline void SetRight(const nsStyleCoord& aCoord);
   inline void SetBottom(const nsStyleCoord& aCoord);
 
-  nscoord ToLength(mozilla::css::Side aSide) const {
+  nscoord ToLength(mozilla::Side aSide) const {
     return nsStyleCoord::ToLength(mUnits[aSide], mValues[aSide]);
   }
 
@@ -336,10 +338,11 @@ protected:
 };
 
 /**
- * Class that represents a set of top-left/top-right/bottom-left/bottom-right
+ * Class that represents a set of top-left/top-right/bottom-right/bottom-left
  * nsStyleCoord pairs.  This is used to hold the dimensions of the
  * corners of a box (for, e.g., border-radius and outline-radius).
  */
+ /** <div rustbindgen private accessor="unsafe"></div> */
 class nsStyleCorners {
 public:
   nsStyleCorners();
@@ -364,6 +367,11 @@ public:
   inline void Set(uint8_t aHalfCorner, const nsStyleCoord& aCoord);
 
 protected:
+  // Stored as:
+  // top-left.x, top-left.y,
+  // top-right.x, top-right.y,
+  // bottom-right.x, bottom-right.y,
+  // bottom-left.x, bottom-left.y
   nsStyleUnit   mUnits[8];
   nsStyleUnion  mValues[8];
 };
@@ -540,79 +548,79 @@ inline bool nsStyleSides::operator!=(const nsStyleSides& aOther) const
   return !((*this) == aOther);
 }
 
-inline nsStyleUnit nsStyleSides::GetUnit(mozilla::css::Side aSide) const
+inline nsStyleUnit nsStyleSides::GetUnit(mozilla::Side aSide) const
 {
   return (nsStyleUnit)mUnits[aSide];
 }
 
 inline nsStyleUnit nsStyleSides::GetLeftUnit() const
 {
-  return GetUnit(NS_SIDE_LEFT);
+  return GetUnit(mozilla::eSideLeft);
 }
 
 inline nsStyleUnit nsStyleSides::GetTopUnit() const
 {
-  return GetUnit(NS_SIDE_TOP);
+  return GetUnit(mozilla::eSideTop);
 }
 
 inline nsStyleUnit nsStyleSides::GetRightUnit() const
 {
-  return GetUnit(NS_SIDE_RIGHT);
+  return GetUnit(mozilla::eSideRight);
 }
 
 inline nsStyleUnit nsStyleSides::GetBottomUnit() const
 {
-  return GetUnit(NS_SIDE_BOTTOM);
+  return GetUnit(mozilla::eSideBottom);
 }
 
-inline nsStyleCoord nsStyleSides::Get(mozilla::css::Side aSide) const
+inline nsStyleCoord nsStyleSides::Get(mozilla::Side aSide) const
 {
   return nsStyleCoord(mValues[aSide], nsStyleUnit(mUnits[aSide]));
 }
 
 inline nsStyleCoord nsStyleSides::GetLeft() const
 {
-  return Get(NS_SIDE_LEFT);
+  return Get(mozilla::eSideLeft);
 }
 
 inline nsStyleCoord nsStyleSides::GetTop() const
 {
-  return Get(NS_SIDE_TOP);
+  return Get(mozilla::eSideTop);
 }
 
 inline nsStyleCoord nsStyleSides::GetRight() const
 {
-  return Get(NS_SIDE_RIGHT);
+  return Get(mozilla::eSideRight);
 }
 
 inline nsStyleCoord nsStyleSides::GetBottom() const
 {
-  return Get(NS_SIDE_BOTTOM);
+  return Get(mozilla::eSideBottom);
 }
 
-inline void nsStyleSides::Set(mozilla::css::Side aSide, const nsStyleCoord& aCoord)
+inline void nsStyleSides::Set(mozilla::Side aSide, const nsStyleCoord& aCoord)
 {
   nsStyleCoord::SetValue(mUnits[aSide], mValues[aSide], aCoord);
 }
 
 inline void nsStyleSides::SetLeft(const nsStyleCoord& aCoord)
 {
-  Set(NS_SIDE_LEFT, aCoord);
+  Set(mozilla::eSideLeft, aCoord);
 }
 
 inline void nsStyleSides::SetTop(const nsStyleCoord& aCoord)
 {
-  Set(NS_SIDE_TOP, aCoord);
+  Set(mozilla::eSideTop, aCoord);
 }
 
 inline void nsStyleSides::SetRight(const nsStyleCoord& aCoord)
 {
-  Set(NS_SIDE_RIGHT, aCoord);
+  Set(mozilla::eSideRight, aCoord);
 }
 
 inline void nsStyleSides::SetBottom(const nsStyleCoord& aCoord)
 {
-  Set(NS_SIDE_BOTTOM, aCoord);
+  Set(mozilla::eSideBottom, aCoord);
 }
 
 // -------------------------

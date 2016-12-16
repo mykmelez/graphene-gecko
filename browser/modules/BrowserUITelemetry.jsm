@@ -109,7 +109,7 @@ XPCOMUtils.defineLazyGetter(this, "PALETTE_ITEMS", function() {
 
 XPCOMUtils.defineLazyGetter(this, "DEFAULT_ITEMS", function() {
   let result = [];
-  for (let [, buttons] of Iterator(DEFAULT_AREA_PLACEMENTS)) {
+  for (let [, buttons] of Object.entries(DEFAULT_AREA_PLACEMENTS)) {
     result = result.concat(buttons);
   }
   return result;
@@ -190,7 +190,7 @@ this.BrowserUITelemetry = {
   },
 
   observe: function(aSubject, aTopic, aData) {
-    switch(aTopic) {
+    switch (aTopic) {
       case "sessionstore-windows-restored":
         this._gatherFirstWindowMeasurements();
         break;
@@ -245,7 +245,7 @@ this.BrowserUITelemetry = {
     let current = aRoot;
     let parent = null;
     aKeys.unshift(this._bucket);
-    for (let [i, key] of Iterator(aKeys)) {
+    for (let [i, key] of aKeys.entries()) {
       if (!(key in current)) {
         if (i == aKeys.length - 1) {
           current[key] = aEndWith;
@@ -260,7 +260,7 @@ this.BrowserUITelemetry = {
   },
 
   _countableEvents: {},
-  _countEvent: function(aKeyArray, root=this._countableEvents) {
+  _countEvent: function(aKeyArray, root = this._countableEvents) {
     let countObject = this._ensureObjectChain(aKeyArray, 0, root);
     let lastItemKey = aKeyArray[aKeyArray.length - 1];
     countObject[lastItemKey]++;
@@ -350,7 +350,7 @@ this.BrowserUITelemetry = {
   },
 
   handleEvent: function(aEvent) {
-    switch(aEvent.type) {
+    switch (aEvent.type) {
       case "unload":
         this._unregisterWindow(aEvent.currentTarget);
         break;
@@ -643,7 +643,7 @@ this.BrowserUITelemetry = {
     this._countEvent(["sidebar", sidebarID, action]);
   },
 
-  _logAwesomeBarSearchResult: function (url) {
+  _logAwesomeBarSearchResult: function(url) {
     let spec = Services.search.parseSubmissionURL(url);
     if (spec.engine) {
       let matchedEngine = "default";

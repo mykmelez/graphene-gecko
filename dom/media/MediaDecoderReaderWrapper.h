@@ -17,12 +17,10 @@
 
 namespace mozilla {
 
-class StartTimeRendezvous;
-
 typedef MozPromise<bool, bool, /* isExclusive = */ false> HaveStartTimePromise;
 
-typedef Variant<MediaData*, MediaDecoderReader::NotDecodedReason> AudioCallbackData;
-typedef Variant<Tuple<MediaData*, TimeStamp>, MediaDecoderReader::NotDecodedReason> VideoCallbackData;
+typedef Variant<MediaData*, MediaResult> AudioCallbackData;
+typedef Variant<Tuple<MediaData*, TimeStamp>, MediaResult> VideoCallbackData;
 typedef Variant<MediaData::Type, WaitForDataRejectValue> WaitCallbackData;
 
 /**
@@ -36,7 +34,6 @@ class MediaDecoderReaderWrapper {
   typedef MediaDecoderReader::MediaDataPromise MediaDataPromise;
   typedef MediaDecoderReader::SeekPromise SeekPromise;
   typedef MediaDecoderReader::WaitForDataPromise WaitForDataPromise;
-  typedef MediaDecoderReader::BufferedUpdatePromise BufferedUpdatePromise;
   typedef MediaDecoderReader::TrackSet TrackSet;
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDecoderReaderWrapper);
 
@@ -47,13 +44,11 @@ private:
   MediaCallbackExc<WaitCallbackData> mVideoWaitCallback;
 
 public:
-  MediaDecoderReaderWrapper(bool aIsRealTime,
-                            AbstractThread* aOwnerThread,
+  MediaDecoderReaderWrapper(AbstractThread* aOwnerThread,
                             MediaDecoderReader* aReader);
 
   media::TimeUnit StartTime() const;
   RefPtr<MetadataPromise> ReadMetadata();
-  RefPtr<HaveStartTimePromise> AwaitStartTime();
 
   decltype(mAudioCallback)& AudioCallback() { return mAudioCallback; }
   decltype(mVideoCallback)& VideoCallback() { return mVideoCallback; }
@@ -72,12 +67,11 @@ public:
   bool IsWaitingAudioData() const;
   bool IsWaitingVideoData() const;
 
-  RefPtr<SeekPromise> Seek(SeekTarget aTarget, media::TimeUnit aEndTime);
-  RefPtr<BufferedUpdatePromise> UpdateBufferedWithPromise();
+  RefPtr<SeekPromise> Seek(const SeekTarget& aTarget,
+                           const media::TimeUnit& aEndTime);
   RefPtr<ShutdownPromise> Shutdown();
 
-  void ReleaseMediaResources();
-  void SetIdle();
+  void ReleaseResources();
   void ResetDecode(TrackSet aTracks);
 
   nsresult Init() { return mReader->Init(); }
@@ -113,13 +107,10 @@ public:
   AbstractCanonical<media::TimeIntervals>* CanonicalBuffered() {
     return mReader->CanonicalBuffered();
   }
-  AbstractCanonical<bool>* CanonicalIsSuspended() {
-    return mReader->CanonicalIsSuspended();
-  }
 
-#ifdef MOZ_EME
   void SetCDMProxy(CDMProxy* aProxy) { mReader->SetCDMProxy(aProxy); }
-#endif
+
+  void SetVideoBlankDecode(bool aIsBlankDecode);
 
 private:
   ~MediaDecoderReaderWrapper();
@@ -129,12 +120,11 @@ private:
   MediaCallbackExc<WaitCallbackData>& WaitCallbackRef(MediaData::Type aType);
   MozPromiseRequestHolder<WaitForDataPromise>& WaitRequestRef(MediaData::Type aType);
 
-  const bool mForceZeroStartTime;
   const RefPtr<AbstractThread> mOwnerThread;
   const RefPtr<MediaDecoderReader> mReader;
 
   bool mShutdown = false;
-  RefPtr<StartTimeRendezvous> mStartTimeRendezvous;
+  Maybe<media::TimeUnit> mStartTime;
 
   MozPromiseRequestHolder<MediaDataPromise> mAudioDataRequest;
   MozPromiseRequestHolder<MediaDataPromise> mVideoDataRequest;

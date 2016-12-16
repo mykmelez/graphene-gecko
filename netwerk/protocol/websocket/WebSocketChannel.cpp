@@ -705,7 +705,7 @@ public:
       mListenerMT(mChannel->mListenerMT),
       mSize(aSize) {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     MOZ_ASSERT(mChannel->IsOnTargetThread());
 
@@ -1177,11 +1177,7 @@ WebSocketChannel::WebSocketChannel() :
   mDynamicOutputSize(0),
   mDynamicOutput(nullptr),
   mPrivateBrowsing(false),
-  mConnectionLogService(nullptr),
-  mCountRecv(0),
-  mCountSent(0),
-  mAppId(NECKO_NO_APP_ID),
-  mIsInIsolatedMozBrowser(false)
+  mConnectionLogService(nullptr)
 {
   MOZ_ASSERT(NS_IsMainThread(), "not main thread");
 
@@ -1391,19 +1387,6 @@ WebSocketChannel::BeginOpenInternal()
     AbortSession(NS_ERROR_UNEXPECTED);
     return;
   }
-
-  if (localChannel) {
-    NS_GetAppInfo(localChannel, &mAppId, &mIsInIsolatedMozBrowser);
-  }
-
-#ifdef MOZ_WIDGET_GONK
-  if (mAppId != NECKO_NO_APP_ID) {
-    nsCOMPtr<nsINetworkInfo> activeNetworkInfo;
-    GetActiveNetworkInfo(activeNetworkInfo);
-    mActiveNetworkInfo =
-      new nsMainThreadPtrHolder<nsINetworkInfo>(activeNetworkInfo);
-  }
-#endif
 
   rv = NS_MaybeOpenChannelUsingAsyncOpen2(localChannel, this);
 
@@ -2183,14 +2166,16 @@ WebSocketChannel::PrimeNewOutgoingMessage()
     // Perform the sending mask. Never use a zero mask
     do {
       uint8_t *buffer;
-      nsresult rv = mRandomGenerator->GenerateRandomBytes(4, &buffer);
+      static_assert(4 == sizeof(mask), "Size of the mask should be equal to 4");
+      nsresult rv = mRandomGenerator->GenerateRandomBytes(sizeof(mask),
+                                                          &buffer);
       if (NS_FAILED(rv)) {
         LOG(("WebSocketChannel::PrimeNewOutgoingMessage(): "
              "GenerateRandomBytes failure %x\n", rv));
         StopSession(rv);
         return;
       }
-      mask = * reinterpret_cast<uint32_t *>(buffer);
+      memcpy(&mask, buffer, sizeof(mask));
       free(buffer);
     } while (!mask);
     NetworkEndian::writeUint32(payload - sizeof(uint32_t), mask);
@@ -2280,7 +2265,7 @@ public:
     : mChannel(aChannel)
   {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();
@@ -3522,9 +3507,6 @@ WebSocketChannel::Close(uint16_t code, const nsACString & reason)
   LOG(("WebSocketChannel::Close() %p\n", this));
   MOZ_ASSERT(NS_IsMainThread(), "not main thread");
 
-  // save the networkstats (bug 855949)
-  SaveNetworkStats(true);
-
   if (mRequestedClose) {
     return NS_OK;
   }
@@ -3918,9 +3900,6 @@ WebSocketChannel::OnInputStreamReady(nsIAsyncInputStream *aStream)
     rv = mSocketIn->Read((char *)buffer, 2048, &count);
     LOG(("WebSocketChannel::OnInputStreamReady: read %u rv %x\n", count, rv));
 
-    // accumulate received bytes
-    CountRecvBytes(count);
-
     if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
       mSocketIn->AsyncWait(this, 0, 0, mSocketThread);
       return NS_OK;
@@ -3991,9 +3970,6 @@ WebSocketChannel::OnOutputStreamReady(nsIAsyncOutputStream *aStream)
       LOG(("WebSocketChannel::OnOutputStreamReady: write %u rv %x\n",
            amtSent, rv));
 
-      // accumulate sent bytes
-      CountSentBytes(amtSent);
-
       if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
         mSocketOut->AsyncWait(this, 0, 0, mSocketThread);
         return NS_OK;
@@ -4056,47 +4032,6 @@ WebSocketChannel::OnDataAvailable(nsIRequest *aRequest,
          aCount));
 
   return NS_OK;
-}
-
-nsresult
-WebSocketChannel::SaveNetworkStats(bool enforce)
-{
-#ifdef MOZ_WIDGET_GONK
-  // Check if the active network and app id are valid.
-  if(!mActiveNetworkInfo || mAppId == NECKO_NO_APP_ID) {
-    return NS_OK;
-  }
-
-  uint64_t countRecv = 0;
-  uint64_t countSent = 0;
-
-  mCountRecv.exchange(countRecv);
-  mCountSent.exchange(countSent);
-
-  if (countRecv == 0 && countSent == 0) {
-    // There is no traffic, no need to save.
-    return NS_OK;
-  }
-
-  // If |enforce| is false, the traffic amount is saved
-  // only when the total amount exceeds the predefined
-  // threshold.
-  uint64_t totalBytes = countRecv + countSent;
-  if (!enforce && totalBytes < NETWORK_STATS_THRESHOLD) {
-    return NS_OK;
-  }
-
-  // Create the event to save the network statistics.
-  // the event is then dispatched to the main thread.
-  RefPtr<Runnable> event =
-    new SaveNetworkStatsEvent(mAppId, mIsInIsolatedMozBrowser, mActiveNetworkInfo,
-                              countRecv, countSent, false);
-  NS_DispatchToMainThread(event);
-
-  return NS_OK;
-#else
-  return NS_ERROR_NOT_IMPLEMENTED;
-#endif
 }
 
 } // namespace net

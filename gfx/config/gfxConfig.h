@@ -6,13 +6,16 @@
 #ifndef mozilla_gfx_config_gfxConfig_h
 #define mozilla_gfx_config_gfxConfig_h
 
+#include <functional>
 #include "gfxFeature.h"
 #include "gfxFallback.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/Function.h"
 
 namespace mozilla {
 namespace gfx {
+
+// Defined in GraphicsMessages.ipdlh.
+class FeatureChange;
 
 // Manages the history and state of a graphics feature. The flow of a feature
 // is:
@@ -44,6 +47,9 @@ public:
   // IsDisabledByDefault returns whether or not the initial status of the
   // feature, before adding user prefs and runtime decisions, was disabled.
   static bool IsForcedOnByUser(Feature aFeature);
+
+  // This returns true if the feature was disabled by default, or was never
+  // initialized to begin with.
   static bool IsDisabledByDefault(Feature aFeature);
 
   // Query the status value of a parameter. This is computed similar to
@@ -66,6 +72,9 @@ public:
                                const char* aDisableMessage,
                                const nsACString& aFailureId = EmptyCString());
   static void EnableByDefault(Feature aFeature);
+
+  // Inherit a computed value from another process.
+  static void Inherit(Feature aFeature, FeatureStatus aStatus);
 
   // Set a environment status that overrides both the default and user
   // statuses; this should be used to disable features based on system
@@ -159,18 +168,20 @@ public:
   static void EnableFallback(Fallback aFallback, const char* aMessage);
 
   // Run a callback for each initialized FeatureState.
-  typedef mozilla::function<void(const char* aName,
-                                 const char* aDescription,
-                                 FeatureState& aFeature)> FeatureIterCallback;
+  typedef std::function<void(const char* aName,
+                             const char* aDescription,
+                             FeatureState& aFeature)> FeatureIterCallback;
   static void ForEachFeature(const FeatureIterCallback& aCallback);
 
   // Run a callback for each enabled fallback.
-  typedef mozilla::function<void(const char* aName, const char* aMsg)> 
+  typedef std::function<void(const char* aName, const char* aMsg)> 
     FallbackIterCallback;
   static void ForEachFallback(const FallbackIterCallback& aCallback);
 
   // Get the most descriptive failure id message for this feature.
-  static const nsACString& GetFailureId(Feature aFeature);
+  static const nsCString& GetFailureId(Feature aFeature);
+
+  static void ImportChange(Feature aFeature, const FeatureChange& aChange);
 
   static void Init();
   static void Shutdown();

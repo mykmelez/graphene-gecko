@@ -16,6 +16,7 @@
 #include "libANGLE/Framebuffer.h"
 #include "libANGLE/Program.h"
 #include "libANGLE/Shader.h"
+#include "libANGLE/TransformFeedback.h"
 #include "libANGLE/VertexArray.h"
 
 namespace gl
@@ -62,7 +63,7 @@ class GLImplFactory : angle::NonCopyable
     virtual RenderbufferImpl *createRenderbuffer() = 0;
 
     // Buffer creation
-    virtual BufferImpl *createBuffer() = 0;
+    virtual BufferImpl *createBuffer(const gl::BufferState &state) = 0;
 
     // Vertex Array creation
     virtual VertexArrayImpl *createVertexArray(const gl::VertexArrayState &data) = 0;
@@ -73,7 +74,8 @@ class GLImplFactory : angle::NonCopyable
     virtual FenceSyncImpl *createFenceSync() = 0;
 
     // Transform Feedback creation
-    virtual TransformFeedbackImpl *createTransformFeedback() = 0;
+    virtual TransformFeedbackImpl *createTransformFeedback(
+        const gl::TransformFeedbackState &state) = 0;
 
     // Sampler object creation
     virtual SamplerImpl *createSampler() = 0;

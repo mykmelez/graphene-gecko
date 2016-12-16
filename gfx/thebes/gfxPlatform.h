@@ -51,7 +51,9 @@ class DataSourceSurface;
 class ScaledFont;
 class DrawEventRecorder;
 class VsyncSource;
-class DeviceInitData;
+class ContentDeviceData;
+class GPUDeviceData;
+class FeatureState;
 
 inline uint32_t
 BackendTypeBit(BackendType b)
@@ -60,6 +62,9 @@ BackendTypeBit(BackendType b)
 }
 
 } // namespace gfx
+namespace dom {
+class FontFamilyListEntry;
+}
 } // namespace mozilla
 
 #define MOZ_PERFORMANCE_WARNING(module, ...) \
@@ -102,10 +107,6 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
   switch (aBackend) {
       case mozilla::gfx::BackendType::DIRECT2D:
         return "direct2d";
-      case mozilla::gfx::BackendType::COREGRAPHICS_ACCELERATED:
-        return "quartz accelerated";
-      case mozilla::gfx::BackendType::COREGRAPHICS:
-        return "quartz";
       case mozilla::gfx::BackendType::CAIRO:
         return "cairo";
       case mozilla::gfx::BackendType::SKIA:
@@ -116,6 +117,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
         return "direct2d 1.1";
       case mozilla::gfx::BackendType::NONE:
         return "none";
+      case mozilla::gfx::BackendType::BACKEND_LAST:
+        return "invalid";
   }
   MOZ_CRASH("Incomplete switch");
 }
@@ -130,7 +133,8 @@ enum class DeviceResetReason
   INVALID_CALL,
   OUT_OF_MEMORY,
   FORCED_RESET,
-  UNKNOWN
+  UNKNOWN,
+  D3D9_RESET
 };
 
 enum class ForcedDeviceResetReason
@@ -178,6 +182,8 @@ public:
      */
     static void InitNullMetadata();
 
+    static void InitMoz2DLogging();
+
     /**
      * Create an offscreen surface of the given dimensions
      * and image format.
@@ -194,7 +200,7 @@ public:
      * support the DrawTarget we get back.
      * See SupportsAzureContentForDrawTarget.
      */
-    virtual already_AddRefed<DrawTarget>
+    static already_AddRefed<DrawTarget>
       CreateDrawTargetForSurface(gfxASurface *aSurface, const mozilla::gfx::IntSize& aSize);
 
     /*
@@ -208,9 +214,14 @@ public:
      * This function is static so that it can be accessed from
      * PluginInstanceChild (where we can't call gfxPlatform::GetPlatform()
      * because the prefs service can only be accessed from the main process).
+     *
+     * aIsPlugin is used to tell the backend that they can optimize this surface
+     * specifically because it's used for a plugin. This is mostly for Skia.
      */
     static already_AddRefed<SourceSurface>
-      GetSourceSurfaceForSurface(mozilla::gfx::DrawTarget *aTarget, gfxASurface *aSurface);
+      GetSourceSurfaceForSurface(mozilla::gfx::DrawTarget *aTarget,
+                                 gfxASurface *aSurface,
+                                 bool aIsPlugin = false);
 
     static void ClearSourceSurfaceForSurface(gfxASurface *aSurface);
 
@@ -226,9 +237,15 @@ public:
     already_AddRefed<DrawTarget>
       CreateOffscreenCanvasDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
 
-    virtual already_AddRefed<DrawTarget>
-      CreateDrawTargetForData(unsigned char* aData, const mozilla::gfx::IntSize& aSize, 
-                              int32_t aStride, mozilla::gfx::SurfaceFormat aFormat);
+    already_AddRefed<DrawTarget>
+      CreateSimilarSoftwareDrawTarget(DrawTarget* aDT, const IntSize &aSize, mozilla::gfx::SurfaceFormat aFormat);
+
+    static already_AddRefed<DrawTarget>
+      CreateDrawTargetForData(unsigned char* aData,
+                              const mozilla::gfx::IntSize& aSize, 
+                              int32_t aStride,
+                              mozilla::gfx::SurfaceFormat aFormat,
+                              bool aUninitialized = false);
 
     /**
      * Returns true if rendering to data surfaces produces the same results as
@@ -259,18 +276,14 @@ public:
     /// asking for it, we will examine the commands in the first few seconds
     /// of the canvas usage, and potentially change to accelerated or
     /// non-accelerated canvas.
-    virtual bool UseAcceleratedCanvas();
+    bool AllowOpenGLCanvas();
     virtual void InitializeSkiaCacheLimits();
-
-    /// These should be used instead of directly accessing the preference,
-    /// as different platforms may override the behaviour.
-    virtual bool UseProgressivePaint();
 
     static bool AsyncPanZoomEnabled();
 
     virtual void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
-      aObj.DefineProperty("AzureCanvasAccelerated", UseAcceleratedCanvas());
+      aObj.DefineProperty("AzureCanvasAccelerated", AllowOpenGLCanvas());
       aObj.DefineProperty("AzureFallbackCanvasBackend", GetBackendName(mFallbackCanvasBackend));
       aObj.DefineProperty("AzureContentBackend", GetBackendName(mContentBackend));
     }
@@ -282,6 +295,11 @@ public:
     // GetContentBackendFor() should be called instead.
     mozilla::gfx::BackendType GetDefaultContentBackend() {
       return mContentBackend;
+    }
+
+    /// Return the software backend to use by default.
+    mozilla::gfx::BackendType GetSoftwareBackend() {
+        return mSoftwareBackend;
     }
 
     // Return the best content backend available that is compatible with the
@@ -311,9 +329,14 @@ public:
                                  const nsACString& aGenericFamily,
                                  nsTArray<nsString>& aListOfFonts);
 
-    int GetTileWidth();
-    int GetTileHeight();
-    void SetTileSize(int aWidth, int aHeight);
+    /**
+     * Fill aFontFamilies with a list of FontFamilyListEntry records for the
+     * available fonts on the platform; used to pass the list from chrome to
+     * content process. Currently implemented only on MacOSX.
+     */
+    virtual void GetSystemFontFamilyList(
+      InfallibleTArray<mozilla::dom::FontFamilyListEntry>* aFontFamilies)
+    { }
 
     /**
      * Rebuilds the any cached system font lists
@@ -390,9 +413,7 @@ public:
      * True when zooming should not require reflow, so glyph metrics and
      * positioning should not be adjusted for device pixels.
      * If this is TRUE, then FontHintingEnabled() should be FALSE,
-     * but the converse is not necessarily required; in particular,
-     * B2G always has FontHintingEnabled FALSE, but RequiresLinearZoom
-     * is only true for the browser process, not Gaia or other apps.
+     * but the converse is not necessarily required;
      *
      * Like FontHintingEnabled (above), this setting shouldn't
      * change per gecko process, while the process is live.  If so the
@@ -453,7 +474,7 @@ public:
 
     static bool OffMainThreadCompositingEnabled();
 
-    virtual bool CanUseHardwareVideoDecoding();
+    void UpdateCanUseHardwareVideoDecoding();
 
     // Returns a prioritized list of all available compositor backends.
     void GetCompositorBackends(bool useAcceleration, nsTArray<mozilla::layers::LayersBackend>& aBackends);
@@ -642,10 +663,6 @@ public:
 
     virtual void CompositorUpdated() {}
 
-    // Return information on how child processes should initialize graphics
-    // devices. Currently this is only used on Windows.
-    virtual void GetDeviceInitData(mozilla::gfx::DeviceInitData* aOut);
-
     // Plugin async drawing support.
     virtual bool SupportsPluginDirectBitmapDrawing() {
       return false;
@@ -670,11 +687,28 @@ public:
 
     const gfxSkipChars& EmptySkipChars() const { return kEmptySkipChars; }
 
+    /**
+     * Return information on how child processes should initialize graphics
+     * devices.
+     */
+    virtual void BuildContentDeviceData(mozilla::gfx::ContentDeviceData* aOut);
+
+    /**
+     * Imports settings from the GPU process. This should only be called through
+     * GPUProcessManager, in the UI process.
+     */
+    virtual void ImportGPUDeviceData(const mozilla::gfx::GPUDeviceData& aData);
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
 
     virtual void InitAcceleration();
+
+    /**
+     * Called immediately before deleting the gfxPlatform object.
+     */
+    virtual void WillShutdown();
 
     /**
      * Initialized hardware vsync based on each platform.
@@ -697,10 +731,11 @@ protected:
                           uint32_t aContentBitmask, mozilla::gfx::BackendType aContentDefault);
 
     /**
-     * If in a child process, triggers a refresh of device preferences, then returns true.
-     * In a parent process, nothing happens and false is returned.
+     * Content-process only. Requests device preferences from the parent process
+     * and updates any cached settings.
      */
-    virtual bool UpdateDeviceInitData();
+    void FetchAndImportContentDeviceData();
+    virtual void ImportContentDeviceData(const mozilla::gfx::ContentDeviceData& aData);
 
     /**
      * Increase the global device counter after a device has been removed/reset.
@@ -735,7 +770,7 @@ protected:
     static already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFontWithCairoSkia(mozilla::gfx::DrawTarget* aTarget, gfxFont* aFont);
 
-    static mozilla::gfx::DeviceInitData& GetParentDevicePrefs();
+    virtual bool CanUseHardwareVideoDecoding();
 
     int8_t  mAllowDownloadableFonts;
     int8_t  mGraphiteShapingEnabled;
@@ -753,7 +788,7 @@ protected:
     // max number of entries in word cache
     int32_t mWordCacheMaxEntries;
 
-    uint32_t mTotalSystemMemory;
+    uint64_t mTotalSystemMemory;
 
     // Hardware vsync source. Only valid on parent process
     RefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
@@ -788,6 +823,9 @@ private:
     void PopulateScreenInfo();
 
     void InitCompositorAccelerationPrefs();
+    void InitGPUProcessPrefs();
+
+    static bool IsDXInterop2Blocked();
 
     RefPtr<gfxASurface> mScreenReferenceSurface;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
@@ -800,11 +838,10 @@ private:
     mozilla::gfx::BackendType mFallbackCanvasBackend;
     // The backend to use for content
     mozilla::gfx::BackendType mContentBackend;
+    // The backend to use when we need it not to be accelerated.
+    mozilla::gfx::BackendType mSoftwareBackend;
     // Bitmask of backend types we can use to render content
     uint32_t mContentBackendBitmask;
-
-    int mTileWidth;
-    int mTileHeight;
 
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
     mozilla::widget::GfxInfoCollector<gfxPlatform> mApzSupportCollector;

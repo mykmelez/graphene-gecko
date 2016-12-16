@@ -22,7 +22,7 @@ var gSyncUtils = {
   },
 
   // opens in a new window if we're in a modal prefwindow world, in a new tab otherwise
-  _openLink: function (url) {
+  _openLink: function(url) {
     let thisDocEl = document.documentElement,
         openerDocEl = window.opener && window.opener.document.documentElement;
     if (thisDocEl.id == "accountSetup" && window.opener &&
@@ -58,33 +58,41 @@ var gSyncUtils = {
                                         type, duringSetup);
   },
 
-  changePassword: function () {
+  changePassword: function() {
     if (Weave.Utils.ensureMPUnlocked())
       this.openChange("ChangePassword");
   },
 
-  resetPassphrase: function (duringSetup) {
+  resetPassphrase: function(duringSetup) {
     if (Weave.Utils.ensureMPUnlocked())
       this.openChange("ResetPassphrase", duringSetup);
   },
 
-  updatePassphrase: function () {
+  updatePassphrase: function() {
     if (Weave.Utils.ensureMPUnlocked())
       this.openChange("UpdatePassphrase");
   },
 
-  resetPassword: function () {
+  resetPassword: function() {
     this._openLink(Weave.Service.pwResetURL);
   },
 
-  openToS: function () {
+  get tosURL() {
     let root = this.fxAccountsEnabled ? "fxa." : "";
-    this._openLink(Weave.Svc.Prefs.get(root + "termsURL"));
+    return  Weave.Svc.Prefs.get(root + "termsURL");
   },
 
-  openPrivacyPolicy: function () {
+  openToS: function() {
+    this._openLink(this.tosURL);
+  },
+
+  get privacyPolicyURL() {
     let root = this.fxAccountsEnabled ? "fxa." : "";
-    this._openLink(Weave.Svc.Prefs.get(root + "privacyURL"));
+    return  Weave.Svc.Prefs.get(root + "privacyURL");
+  },
+
+  openPrivacyPolicy: function() {
+    this._openLink(this.privacyPolicyURL);
   },
 
   /**
@@ -195,7 +203,7 @@ var gSyncUtils = {
    *
    * returns [valid, errorString]
    */
-  validatePassword: function (el1, el2) {
+  validatePassword: function(el1, el2) {
     let valid = false;
     let val1 = el1.value;
     let val2 = el2 ? el2.value : "";

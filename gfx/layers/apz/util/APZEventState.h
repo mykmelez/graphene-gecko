@@ -11,12 +11,13 @@
 #include "FrameMetrics.h"     // for ScrollableLayerGuid
 #include "Units.h"
 #include "mozilla/EventForwards.h"
-#include "mozilla/Function.h"
 #include "mozilla/layers/GeckoContentController.h"  // for APZStateChange
 #include "mozilla/RefPtr.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsImpl.h"  // for NS_INLINE_DECL_REFCOUNTING
 #include "nsIWeakReferenceUtils.h"  // for nsWeakPtr
+
+#include <functional>
 
 template <class> class nsCOMPtr;
 class nsIDocument;
@@ -28,9 +29,9 @@ namespace layers {
 
 class ActiveElementManager;
 
-typedef function<void(const ScrollableLayerGuid&,
-                      uint64_t /* input block id */,
-                      bool /* prevent default */)>
+typedef std::function<void(const ScrollableLayerGuid&,
+                           uint64_t /* input block id */,
+                           bool /* prevent default */)>
         ContentReceivedInputBlockCallback;
 
 /**
@@ -47,14 +48,20 @@ public:
   NS_INLINE_DECL_REFCOUNTING(APZEventState);
 
   void ProcessSingleTap(const CSSPoint& aPoint,
+                        const CSSToLayoutDeviceScale& aScale,
                         Modifiers aModifiers,
-                        const ScrollableLayerGuid& aGuid);
+                        const ScrollableLayerGuid& aGuid,
+                        int32_t aClickCount);
   void ProcessLongTap(const nsCOMPtr<nsIPresShell>& aUtils,
                       const CSSPoint& aPoint,
+                      const CSSToLayoutDeviceScale& aScale,
                       Modifiers aModifiers,
                       const ScrollableLayerGuid& aGuid,
                       uint64_t aInputBlockId);
-  void ProcessLongTapUp();
+  void ProcessLongTapUp(const nsCOMPtr<nsIPresShell>& aPresShell,
+                        const CSSPoint& aPoint,
+                        const CSSToLayoutDeviceScale& aScale,
+                        Modifiers aModifiers);
   void ProcessTouchEvent(const WidgetTouchEvent& aEvent,
                          const ScrollableLayerGuid& aGuid,
                          uint64_t aInputBlockId,
@@ -66,14 +73,18 @@ public:
   void ProcessMouseEvent(const WidgetMouseEvent& aEvent,
                          const ScrollableLayerGuid& aGuid,
                          uint64_t aInputBlockId);
-  void ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
-                             ViewID aViewId,
+  void ProcessAPZStateChange(ViewID aViewId,
                              APZStateChange aChange,
                              int aArg);
   void ProcessClusterHit();
 private:
   ~APZEventState();
   bool SendPendingTouchPreventedResponse(bool aPreventDefault);
+  bool FireContextmenuEvents(const nsCOMPtr<nsIPresShell>& aPresShell,
+                             const CSSPoint& aPoint,
+                             const CSSToLayoutDeviceScale& aScale,
+                             Modifiers aModifiers,
+                             const nsCOMPtr<nsIWidget>& aWidget);
   already_AddRefed<nsIWidget> GetWidget() const;
 private:
   nsWeakPtr mWidget;
@@ -84,7 +95,6 @@ private:
   uint64_t mPendingTouchPreventedBlockId;
   bool mEndTouchIsClick;
   bool mTouchEndCancelled;
-  int mActiveAPZTransforms;
   int32_t mLastTouchIdentifier;
 };
 

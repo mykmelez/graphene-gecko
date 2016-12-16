@@ -45,7 +45,7 @@
 #endif
 
 #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
-  #include "AndroidBridge.h"
+  #include "FennecJNIWrappers.h"
 #endif
 
 #ifndef SPS_STANDALONE
@@ -63,11 +63,6 @@ typedef CONTEXT tickcontext_t;
 #elif defined(LINUX)
 #include <ucontext.h>
 typedef ucontext_t tickcontext_t;
-#endif
-
-#if defined(LINUX) || defined(XP_MACOSX)
-#include <sys/types.h>
-pid_t gettid();
 #endif
 
 #if defined(__arm__) && defined(ANDROID)
@@ -192,7 +187,6 @@ GeckoSampler::GeckoSampler(double aInterval, int aEntrySize,
   mUseStackWalk = hasFeature(aFeatures, aFeatureCount, "stackwalk");
 
   mProfileJS = hasFeature(aFeatures, aFeatureCount, "js");
-  mProfileJava = hasFeature(aFeatures, aFeatureCount, "java");
   mProfileGPU = hasFeature(aFeatures, aFeatureCount, "gpu");
   mProfilePower = hasFeature(aFeatures, aFeatureCount, "power");
   // Users sometimes ask to filter by a list of threads but forget to request
@@ -212,6 +206,13 @@ GeckoSampler::GeckoSampler(double aInterval, int aEntrySize,
     mIntelPowerGadget = new IntelPowerGadget();
     mProfilePower = mIntelPowerGadget->Init();
   }
+#endif
+
+#if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
+  mProfileJava = mozilla::jni::IsFennec() &&
+      hasFeature(aFeatures, aFeatureCount, "java");
+#else
+  mProfileJava = false;
 #endif
 
   // Deep copy aThreadNameFilters
@@ -285,6 +286,12 @@ GeckoSampler::~GeckoSampler()
   // Cancel any in-flight async profile gatherering
   // requests
   mGatherer->Cancel();
+
+#ifdef MOZ_TASK_TRACER
+  if (mTaskTracer) {
+    mozilla::tasktracer::StopLogging();
+  }
+#endif
 }
 
 void GeckoSampler::HandleSaveRequest()
@@ -437,6 +444,15 @@ void GeckoSampler::ToJSObjectAsync(double aSinceTime,
   mGatherer->Start(aSinceTime, aPromise);
 }
 
+void GeckoSampler::ToFileAsync(const nsACString& aFileName, double aSinceTime)
+{
+  if (NS_WARN_IF(!mGatherer)) {
+    return;
+  }
+
+  mGatherer->Start(aSinceTime, aFileName);
+}
+
 struct SubprocessClosure {
   explicit SubprocessClosure(SpliceableJSONWriter* aWriter)
     : mWriter(aWriter)
@@ -469,10 +485,10 @@ void BuildJavaThreadJSObject(SpliceableJSONWriter& aWriter)
       bool firstRun = true;
       // for each frame
       for (int frameId = 0; true; frameId++) {
-        nsCString result;
-        bool hasFrame = AndroidBridge::Bridge()->GetFrameNameJavaProfiling(0, sampleId, frameId, result);
+        jni::String::LocalRef frameName =
+            java::GeckoJavaSampler::GetFrameName(0, sampleId, frameId);
         // when we run out of frames, we stop looping
-        if (!hasFrame) {
+        if (!frameName) {
           // if we found at least one frame, we have objects to close
           if (!firstRun) {
               aWriter.EndArray();
@@ -485,7 +501,7 @@ void BuildJavaThreadJSObject(SpliceableJSONWriter& aWriter)
           firstRun = false;
 
           double sampleTime =
-              java::GeckoJavaSampler::GetSampleTimeJavaProfiling(0, sampleId);
+              java::GeckoJavaSampler::GetSampleTime(0, sampleId);
 
           aWriter.StartObjectElement();
             aWriter.DoubleProperty("time", sampleTime);
@@ -494,7 +510,8 @@ void BuildJavaThreadJSObject(SpliceableJSONWriter& aWriter)
         }
         // add a frame to the sample
         aWriter.StartObjectElement();
-          aWriter.StringProperty("location", result.BeginReading());
+          aWriter.StringProperty("location",
+                                 frameName->ToCString().BeginReading());
         aWriter.EndObject();
       }
       // if we found no frames for this sample, we are done
@@ -562,7 +579,7 @@ void GeckoSampler::StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
 
   #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
       if (ProfileJava()) {
-        java::GeckoJavaSampler::PauseJavaProfiling();
+        java::GeckoJavaSampler::Pause();
 
         aWriter.Start();
         {
@@ -570,7 +587,7 @@ void GeckoSampler::StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
         }
         aWriter.End();
 
-        java::GeckoJavaSampler::UnpauseJavaProfiling();
+        java::GeckoJavaSampler::Unpause();
       }
   #endif
 #endif
@@ -582,7 +599,7 @@ void GeckoSampler::StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
   aWriter.End();
 }
 
-void GeckoSampler::FlushOnJSShutdown(JSRuntime* aRuntime)
+void GeckoSampler::FlushOnJSShutdown(JSContext* aContext)
 {
 #ifndef SPS_STANDALONE
   SetPaused(true);
@@ -597,8 +614,8 @@ void GeckoSampler::FlushOnJSShutdown(JSRuntime* aRuntime)
         continue;
       }
 
-      // Thread not profiling the runtime that's going away, skip it.
-      if (sRegisteredThreads->at(i)->Profile()->GetPseudoStack()->mRuntime != aRuntime) {
+      // Thread not profiling the context that's going away, skip it.
+      if (sRegisteredThreads->at(i)->Profile()->GetPseudoStack()->mContext != aContext) {
         continue;
       }
 
@@ -614,10 +631,10 @@ void GeckoSampler::FlushOnJSShutdown(JSRuntime* aRuntime)
 void PseudoStack::flushSamplerOnJSShutdown()
 {
 #ifndef SPS_STANDALONE
-  MOZ_ASSERT(mRuntime);
+  MOZ_ASSERT(mContext);
   GeckoSampler* t = tlsTicker.get();
   if (t) {
-    t->FlushOnJSShutdown(mRuntime);
+    t->FlushOnJSShutdown(mContext);
   }
 #endif
 }
@@ -666,19 +683,22 @@ void addPseudoEntry(volatile StackEntry &entry, ThreadProfile &aProfile,
     addDynamicTag(aProfile, 'c', sampleLabel);
 #ifndef SPS_STANDALONE
     if (entry.isJs()) {
-      if (!entry.pc()) {
-        // The JIT only allows the top-most entry to have a nullptr pc
-        MOZ_ASSERT(&entry == &stack->mStack[stack->stackSize() - 1]);
-        // If stack-walking was disabled, then that's just unfortunate
-        if (lastpc) {
-          jsbytecode *jspc = js::ProfilingGetPC(stack->mRuntime, entry.script(),
-                                                lastpc);
-          if (jspc) {
-            lineno = JS_PCToLineNumber(entry.script(), jspc);
+      JSScript* script = entry.script();
+      if (script) {
+        if (!entry.pc()) {
+          // The JIT only allows the top-most entry to have a nullptr pc
+          MOZ_ASSERT(&entry == &stack->mStack[stack->stackSize() - 1]);
+          // If stack-walking was disabled, then that's just unfortunate
+          if (lastpc) {
+            jsbytecode *jspc = js::ProfilingGetPC(stack->mContext, script,
+                                                  lastpc);
+            if (jspc) {
+              lineno = JS_PCToLineNumber(script, jspc);
+            }
           }
+        } else {
+          lineno = JS_PCToLineNumber(script, entry.pc());
         }
-      } else {
-        lineno = JS_PCToLineNumber(entry.script(), entry.pc());
       }
     } else {
       lineno = entry.line();
@@ -755,7 +775,7 @@ void mergeStacksIntoProfile(ThreadProfile& aProfile, TickSample* aSample, Native
 #ifndef SPS_STANDALONE
   JS::ProfilingFrameIterator::Frame jsFrames[1000];
   // Only walk jit stack if profiling frame iterator is turned on.
-  if (pseudoStack->mRuntime && JS::IsProfilingEnabledForRuntime(pseudoStack->mRuntime)) {
+  if (pseudoStack->mContext && JS::IsProfilingEnabledForContext(pseudoStack->mContext)) {
     AutoWalkJSStack autoWalkJSStack;
     const uint32_t maxFrames = mozilla::ArrayLength(jsFrames);
 
@@ -767,12 +787,12 @@ void mergeStacksIntoProfile(ThreadProfile& aProfile, TickSample* aSample, Native
       registerState.lr = aSample->lr;
 #endif
 
-      JS::ProfilingFrameIterator jsIter(pseudoStack->mRuntime,
+      JS::ProfilingFrameIterator jsIter(pseudoStack->mContext,
                                         registerState,
                                         startBufferGen);
       for (; jsCount < maxFrames && !jsIter.done(); ++jsIter) {
         // See note below regarding 'J' entries.
-        if (aSample->isSamplingCurrentThread || jsIter.isAsmJS()) {
+        if (aSample->isSamplingCurrentThread || jsIter.isWasm()) {
           uint32_t extracted = jsIter.extractStack(jsFrames, jsCount, maxFrames);
           jsCount += extracted;
           if (jsCount == maxFrames)
@@ -876,7 +896,7 @@ void mergeStacksIntoProfile(ThreadProfile& aProfile, TickSample* aSample, Native
       MOZ_ASSERT(jsIndex >= 0);
       const JS::ProfilingFrameIterator::Frame& jsFrame = jsFrames[jsIndex];
 
-      // Stringifying non-asm.js JIT frames is delayed until streaming
+      // Stringifying non-wasm JIT frames is delayed until streaming
       // time. To re-lookup the entry in the JitcodeGlobalTable, we need to
       // store the JIT code address ('J') in the circular buffer.
       //
@@ -890,7 +910,7 @@ void mergeStacksIntoProfile(ThreadProfile& aProfile, TickSample* aSample, Native
       // the buffer, nsRefreshDriver would now be holding on to a backtrace
       // with stale JIT code return addresses.
       if (aSample->isSamplingCurrentThread ||
-          jsFrame.kind == JS::ProfilingFrameIterator::Frame_AsmJS) {
+          jsFrame.kind == JS::ProfilingFrameIterator::Frame_Wasm) {
         addDynamicTag(aProfile, 'c', jsFrame.label);
       } else {
         MOZ_ASSERT(jsFrame.kind == JS::ProfilingFrameIterator::Frame_Ion ||
@@ -916,14 +936,14 @@ void mergeStacksIntoProfile(ThreadProfile& aProfile, TickSample* aSample, Native
   }
 
 #ifndef SPS_STANDALONE
-  // Update the JS runtime with the current profile sample buffer generation.
+  // Update the JS context with the current profile sample buffer generation.
   //
   // Do not do this for synchronous sampling, which create their own
   // ProfileBuffers.
-  if (!aSample->isSamplingCurrentThread && pseudoStack->mRuntime) {
+  if (!aSample->isSamplingCurrentThread && pseudoStack->mContext) {
     MOZ_ASSERT(aProfile.bufferGeneration() >= startBufferGen);
     uint32_t lapCount = aProfile.bufferGeneration() - startBufferGen;
-    JS::UpdateJSRuntimeProfilerSampleBufferGen(pseudoStack->mRuntime,
+    JS::UpdateJSContextProfilerSampleBufferGen(pseudoStack->mContext,
                                                aProfile.bufferGeneration(),
                                                lapCount);
   }

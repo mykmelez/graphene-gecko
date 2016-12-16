@@ -124,7 +124,7 @@ static const FeatureInfo sFeatureInfoArr[] = {
     {
         "draw_buffers",
         GLVersion::GL2,
-        GLESVersion::NONE,
+        GLESVersion::ES3,
         GLContext::Extension_None,
         {
             GLContext::ARB_draw_buffers,
@@ -436,6 +436,25 @@ static const FeatureInfo sFeatureInfoArr[] = {
         {
             GLContext::EXT_packed_depth_stencil,
             GLContext::OES_packed_depth_stencil,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "prim_restart",
+        GLVersion::GL3_1,
+        GLESVersion::NONE,
+        GLContext::Extension_None,
+        {
+            GLContext::NV_primitive_restart,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "prim_restart_fixed",
+        kGLCoreVersionForES3Compat,
+        GLESVersion::ES3,
+        GLContext::ARB_ES3_compatibility,
+        {
             GLContext::Extensions_End
         }
     },

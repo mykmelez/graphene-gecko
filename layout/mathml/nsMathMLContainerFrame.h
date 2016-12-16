@@ -300,7 +300,7 @@ protected:
   // Record metrics of a child frame for recovery through the following method
   static void
   SaveReflowAndBoundingMetricsFor(nsIFrame*                  aFrame,
-                                  const ReflowOutput& aReflowMetrics,
+                                  const ReflowOutput& aReflowOutput,
                                   const nsBoundingMetrics&   aBoundingMetrics);
 
   // helper method to facilitate getting the reflow and bounding metrics of a
@@ -312,7 +312,7 @@ protected:
   // during Reflow/Stretch() and GetPrefISize().
   static void
   GetReflowAndBoundingMetricsFor(nsIFrame*            aFrame,
-                                 ReflowOutput& aReflowMetrics,
+                                 ReflowOutput& aReflowOutput,
                                  nsBoundingMetrics&   aBoundingMetrics,
                                  eMathMLFrameType*    aMathMLFrameType = nullptr);
 
@@ -418,7 +418,7 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   friend nsContainerFrame* NS_NewMathMLmathBlockFrame(nsIPresShell* aPresShell,
-          nsStyleContext* aContext, nsFrameState aFlags);
+          nsStyleContext* aContext);
 
   // beware, mFrames is not set by nsBlockFrame
   // cannot use mFrames{.FirstChild()|.etc} since the block code doesn't set mFrames
@@ -426,10 +426,13 @@ public:
   SetInitialChildList(ChildListID     aListID,
                       nsFrameList&    aChildList) override
   {
-    NS_ASSERTION(aListID == kPrincipalList, "unexpected frame list");
+    MOZ_ASSERT(aListID == kPrincipalList || aListID == kBackdropList,
+               "unexpected frame list");
     nsBlockFrame::SetInitialChildList(aListID, aChildList);
-    // re-resolve our subtree to set any mathml-expected data
-    nsMathMLContainerFrame::RebuildAutomaticDataForChildren(this);
+    if (aListID == kPrincipalList) {
+      // re-resolve our subtree to set any mathml-expected data
+      nsMathMLContainerFrame::RebuildAutomaticDataForChildren(this);
+    }
   }
 
   virtual void
@@ -481,7 +484,8 @@ protected:
   explicit nsMathMLmathBlockFrame(nsStyleContext* aContext) : nsBlockFrame(aContext) {
     // We should always have a float manager.  Not that things can really try
     // to float out of us anyway, but we need one for line layout.
-    AddStateBits(NS_BLOCK_FLOAT_MGR);
+    // Bug 1301881: Do we still need to set NS_BLOCK_FLOAT_MGR?
+    // AddStateBits(NS_BLOCK_FLOAT_MGR);
   }
   virtual ~nsMathMLmathBlockFrame() {}
 };

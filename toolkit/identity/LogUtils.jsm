@@ -27,7 +27,7 @@ IdentityLogger.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports, Ci.nsIObserver]),
 
   observe: function observe(aSubject, aTopic, aData) {
-    switch(aTopic) {
+    switch (aTopic) {
       case "nsPref:changed":
         this._debug = Services.prefs.getBoolPref(PREF_DEBUG);
         break;
@@ -58,7 +58,7 @@ IdentityLogger.prototype = {
       } else {
         try {
           strings.push(JSON.stringify(arg, null, 2));
-        } catch(err) {
+        } catch (err) {
           strings.push("<<something>>");
         }
       }
@@ -87,8 +87,6 @@ IdentityLogger.prototype = {
    * our log function
    */
   reportError: function reportError(aPrefix, ...aArgs) {
-    let prefix = aPrefix + ' ERROR';
-
     // Report the error in the browser
     let output = this._generateLogMessage(aPrefix, aArgs);
     Cu.reportError(output);

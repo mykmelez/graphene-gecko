@@ -276,6 +276,7 @@ PushRecord.prototype = {
       lastPush: this.lastPush,
       pushCount: this.pushCount,
       p256dhKey: this.p256dhPublicKey,
+      p256dhPrivateKey: this.p256dhPrivateKey,
       authenticationSecret: this.authenticationSecret,
       appServerKey: this.appServerKey,
       quota: this.quotaApplies() ? this.quota : -1,
@@ -295,12 +296,12 @@ Object.defineProperties(PushRecord.prototype, {
       }
       let principal = principals.get(this);
       if (!principal) {
-        let url = this.scope;
-        if (this.originAttributes) {
-          // Allow tests to omit origin attributes.
-          url += this.originAttributes;
-        }
-        principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(url);
+        let uri = Services.io.newURI(this.scope, null, null);
+        // Allow tests to omit origin attributes.
+        let originSuffix = this.originAttributes || "";
+        let originAttributes =
+        principal = Services.scriptSecurityManager.createCodebasePrincipal(uri,
+          ChromeUtils.createOriginAttributesFromOrigin(originSuffix));
         principals.set(this, principal);
       }
       return principal;

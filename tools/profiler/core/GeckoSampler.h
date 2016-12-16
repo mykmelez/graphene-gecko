@@ -18,6 +18,8 @@
 #include "GeckoTaskTracer.h"
 #endif
 
+#include <algorithm>
+
 namespace mozilla {
 class ProfileGatherer;
 } // namespace mozilla
@@ -31,8 +33,15 @@ threadSelected(ThreadInfo* aInfo, const ThreadNameFilterList &aThreadNameFilters
     return true;
   }
 
+  std::string name = aInfo->Name();
+  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
   for (uint32_t i = 0; i < aThreadNameFilters.length(); ++i) {
-    if (aThreadNameFilters[i] == aInfo->Name()) {
+    std::string filter = aThreadNameFilters[i];
+    std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+    // Crude, non UTF-8 compatible, case insensitive substring search
+    if (name.find(filter) != std::string::npos) {
       return true;
     }
   }
@@ -74,11 +83,6 @@ class GeckoSampler: public Sampler {
   virtual void RequestSave() override
   {
     mSaveRequested = true;
-#ifdef MOZ_TASK_TRACER
-    if (mTaskTracer) {
-      mozilla::tasktracer::StopLogging();
-    }
-#endif
   }
 
   virtual void HandleSaveRequest() override;
@@ -108,9 +112,10 @@ class GeckoSampler: public Sampler {
 #endif
   mozilla::UniquePtr<char[]> ToJSON(double aSinceTime = 0);
   virtual void ToJSObjectAsync(double aSinceTime = 0, mozilla::dom::Promise* aPromise = 0);
+  void ToFileAsync(const nsACString& aFileName, double aSinceTime = 0);
   void StreamMetaJSCustomObject(SpliceableJSONWriter& aWriter);
   void StreamTaskTracer(SpliceableJSONWriter& aWriter);
-  void FlushOnJSShutdown(JSRuntime* aRuntime);
+  void FlushOnJSShutdown(JSContext* aContext);
   bool ProfileJS() const { return mProfileJS; }
   bool ProfileJava() const { return mProfileJava; }
   bool ProfileGPU() const { return mProfileGPU; }

@@ -30,19 +30,17 @@
 #include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
+#include "vm/EnvironmentObject-inl.h"
 #include "vm/NativeObject-inl.h"
-#include "vm/ScopeObject-inl.h"
 
 using namespace js;
 
 using mozilla::Move;
 using mozilla::PodArrayZero;
 
-// Required by PerThreadDataFriendFields::getMainThread()
-JS_STATIC_ASSERT(offsetof(JSRuntime, mainThread) ==
-                 PerThreadDataFriendFields::RuntimeMainThreadOffset);
-
-PerThreadDataFriendFields::PerThreadDataFriendFields()
+js::ContextFriendFields::ContextFriendFields(bool isJSContext)
+  : JS::RootingContext(isJSContext),
+    compartment_(nullptr), zone_(nullptr)
 {
     PodArrayZero(nativeStackLimit);
 #if JS_STACK_GROWTH_DIRECTION > 0
@@ -423,9 +421,9 @@ js::GetOutermostEnclosingFunctionOfScriptedCaller(JSContext* cx)
         return nullptr;
 
     RootedFunction curr(cx, iter.callee(cx));
-    for (StaticScopeIter<NoGC> i(curr); !i.done(); i++) {
-        if (i.type() == StaticScopeIter<NoGC>::Function)
-            curr = &i.fun();
+    for (ScopeIter si(curr->nonLazyScript()); si; si++) {
+        if (si.kind() == ScopeKind::Function)
+            curr = si.scope()->as<FunctionScope>().canonicalFunction();
     }
 
     assertSameCompartment(cx, curr);
@@ -599,7 +597,7 @@ JS_FRIEND_API(bool)
 js::ZoneGlobalsAreAllGray(JS::Zone* zone)
 {
     for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next()) {
-        JSObject* obj = comp->maybeGlobal();
+        JSObject* obj = comp->unsafeUnbarrieredMaybeGlobal();
         if (!obj || !JS::ObjectIsMarkedGray(obj))
             return false;
     }
@@ -765,11 +763,16 @@ FormatValue(JSContext* cx, const Value& vArg, JSAutoByteString& bytes)
 
 // Wrapper for JS_sprintf_append() that reports allocation failure to the
 // context.
-template <typename... Args>
 static char*
-sprintf_append(JSContext* cx, char* buf, Args&&... args)
+MOZ_FORMAT_PRINTF(3, 4)
+sprintf_append(JSContext* cx, char* buf, const char* fmt, ...)
 {
-    char* result = JS_sprintf_append(buf, mozilla::Forward<Args>(args)...);
+    va_list ap;
+
+    va_start(ap, fmt);
+    char* result = JS_vsprintf_append(buf, fmt, ap);
+    va_end(ap);
+
     if (!result) {
         ReportOutOfMemory(cx);
         return nullptr;
@@ -779,15 +782,15 @@ sprintf_append(JSContext* cx, char* buf, Args&&... args)
 }
 
 static char*
-FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
+FormatFrame(JSContext* cx, const FrameIter& iter, char* buf, int num,
             bool showArgs, bool showLocals, bool showThisProps)
 {
     MOZ_ASSERT(!cx->isExceptionPending());
     RootedScript script(cx, iter.script());
     jsbytecode* pc = iter.pc();
 
-    RootedObject scopeChain(cx, iter.scopeChain(cx));
-    JSAutoCompartment ac(cx, scopeChain);
+    RootedObject envChain(cx, iter.environmentChain(cx));
+    JSAutoCompartment ac(cx, envChain);
 
     const char* filename = script->filename();
     unsigned lineno = PCToLineNumber(script, pc);
@@ -799,7 +802,8 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
     RootedValue thisVal(cx);
     if (iter.hasUsableAbstractFramePtr() &&
         iter.isFunctionFrame() &&
-        fun && !fun->isArrow() && !fun->isDerivedClassConstructor())
+        fun && !fun->isArrow() && !fun->isDerivedClassConstructor() &&
+        !(fun->isBoundFunction() && iter.isConstructing()))
     {
         if (!GetFunctionThis(cx, iter.abstractFramePtr(), &thisVal))
             return nullptr;
@@ -821,17 +825,12 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
         return nullptr;
 
     if (showArgs && iter.hasArgs()) {
-        BindingIter bi(script);
+        PositionalFormalParameterIter fi(script);
         bool first = true;
         for (unsigned i = 0; i < iter.numActualArgs(); i++) {
             RootedValue arg(cx);
-            if (i < iter.numFormalArgs() && script->formalIsAliased(i)) {
-                for (AliasedFormalIter fi(script); ; fi++) {
-                    if (fi.frameIndex() == i) {
-                        arg = iter.callObj(cx).aliasedVar(fi);
-                        break;
-                    }
-                }
+            if (i < iter.numFormalArgs() && fi.closedOver()) {
+                arg = iter.callObj(cx).aliasedBinding(fi);
             } else if (iter.hasUsableAbstractFramePtr()) {
                 if (script->analyzedArgsUsage() &&
                     script->argsObjAliasesFormals() &&
@@ -857,11 +856,15 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
             const char* name = nullptr;
 
             if (i < iter.numFormalArgs()) {
-                MOZ_ASSERT(i == bi.argIndex());
-                name = nameBytes.encodeLatin1(cx, bi->name());
-                if (!name)
-                    return nullptr;
-                bi++;
+                MOZ_ASSERT(fi.argumentSlot() == i);
+                if (!fi.isDestructured()) {
+                    name = nameBytes.encodeLatin1(cx, fi.name());
+                    if (!name)
+                        return nullptr;
+                } else {
+                    name = "(destructured parameter)";
+                }
+                fi++;
             }
 
             if (value) {
@@ -983,13 +986,39 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
     return buf;
 }
 
+static char*
+FormatWasmFrame(JSContext* cx, const FrameIter& iter, char* buf, int num, bool showArgs)
+{
+    JSAtom* functionDisplayAtom = iter.functionDisplayAtom();
+    UniqueChars nameStr;
+    if (functionDisplayAtom)
+        nameStr = StringToNewUTF8CharsZ(cx, *functionDisplayAtom);
+
+    buf = sprintf_append(cx, buf, "%d %s()",
+                         num,
+                         nameStr ? nameStr.get() : "<wasm-function>");
+    if (!buf)
+        return nullptr;
+    const char* filename = iter.filename();
+    uint32_t lineno = iter.computeLine();
+    buf = sprintf_append(cx, buf, " [\"%s\":%d]\n",
+                         filename ? filename : "<unknown>",
+                         lineno);
+
+    MOZ_ASSERT(!cx->isExceptionPending());
+    return buf;
+}
+
 JS_FRIEND_API(char*)
 JS::FormatStackDump(JSContext* cx, char* buf, bool showArgs, bool showLocals, bool showThisProps)
 {
     int num = 0;
 
     for (AllFramesIter i(cx); !i.done(); ++i) {
-        buf = FormatFrame(cx, i, buf, num, showArgs, showLocals, showThisProps);
+        if (i.hasScript())
+            buf = FormatFrame(cx, i, buf, num, showArgs, showLocals, showThisProps);
+        else
+            buf = FormatWasmFrame(cx, i, buf, num, showArgs);
         if (!buf)
             return nullptr;
         num++;
@@ -1028,9 +1057,9 @@ struct DumpHeapTracer : public JS::CallbackTracer, public WeakMapTracer
     const char* prefix;
     FILE* output;
 
-    DumpHeapTracer(FILE* fp, JSRuntime* rt)
-      : JS::CallbackTracer(rt, DoNotTraceWeakMaps),
-        js::WeakMapTracer(rt), prefix(""), output(fp)
+    DumpHeapTracer(FILE* fp, JSContext* cx)
+      : JS::CallbackTracer(cx, DoNotTraceWeakMaps),
+        js::WeakMapTracer(cx), prefix(""), output(fp)
     {}
 
   private:
@@ -1165,6 +1194,12 @@ JS::ObjectPtr::finalize(JSRuntime* rt)
     if (IsIncrementalBarrierNeeded(rt->contextFromMainThread()))
         IncrementalObjectBarrier(value);
     value = nullptr;
+}
+
+void
+JS::ObjectPtr::finalize(JSContext* cx)
+{
+    finalize(cx->runtime());
 }
 
 void
@@ -1304,21 +1339,6 @@ JS_FRIEND_API(bool)
 js::ReportIsNotFunction(JSContext* cx, HandleValue v)
 {
     return ReportIsNotFunction(cx, v, -1);
-}
-
-JS_FRIEND_API(void)
-js::ReportErrorWithId(JSContext* cx, const char* msg, HandleId id)
-{
-    RootedValue idv(cx);
-    if (!JS_IdToValue(cx, id, &idv))
-        return;
-    JSString* idstr = JS::ToString(cx, idv);
-    if (!idstr)
-        return;
-    JSAutoByteString bytes(cx, idstr);
-    if (!bytes)
-        return;
-    JS_ReportError(cx, msg, bytes.ptr());
 }
 
 #ifdef DEBUG

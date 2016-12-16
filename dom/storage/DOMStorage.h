@@ -9,6 +9,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/Maybe.h"
 #include "nsIDOMStorage.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsWeakReference.h"
@@ -54,17 +55,12 @@ public:
   nsIPrincipal* GetPrincipal();
   bool PrincipalEquals(nsIPrincipal* aPrincipal);
   bool CanAccess(nsIPrincipal* aPrincipal);
-  bool IsPrivate()
-  {
-    return mIsPrivate;
-  }
 
   DOMStorage(nsPIDOMWindowInner* aWindow,
              DOMStorageManager* aManager,
              DOMStorageCache* aCache,
              const nsAString& aDocumentURI,
-             nsIPrincipal* aPrincipal,
-             bool aIsPrivate);
+             nsIPrincipal* aPrincipal);
 
   // WebIDL
   JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
@@ -74,52 +70,55 @@ public:
     return mWindow;
   }
 
-  uint32_t GetLength(ErrorResult& aRv);
+  uint32_t GetLength(nsIPrincipal& aSubjectPrincipal,
+                     ErrorResult& aRv);
 
-  void Key(uint32_t aIndex, nsAString& aResult, ErrorResult& aRv);
+  void Key(uint32_t aIndex, nsAString& aResult,
+           nsIPrincipal& aSubjectPrincipal,
+           ErrorResult& aRv);
 
-  void GetItem(const nsAString& aKey, nsAString& aResult, ErrorResult& aRv);
+  void GetItem(const nsAString& aKey, nsAString& aResult,
+               nsIPrincipal& aSubjectPrincipal,
+               ErrorResult& aRv);
 
   void GetSupportedNames(nsTArray<nsString>& aKeys);
 
   void NamedGetter(const nsAString& aKey, bool& aFound, nsAString& aResult,
+                   nsIPrincipal& aSubjectPrincipal,
                    ErrorResult& aRv)
   {
-    GetItem(aKey, aResult, aRv);
+    GetItem(aKey, aResult, aSubjectPrincipal, aRv);
     aFound = !aResult.IsVoid();
   }
 
   void SetItem(const nsAString& aKey, const nsAString& aValue,
+               nsIPrincipal& aSubjectPrincipal,
                ErrorResult& aRv);
 
   void NamedSetter(const nsAString& aKey, const nsAString& aValue,
+                   nsIPrincipal& aSubjectPrincipal,
                    ErrorResult& aRv)
   {
-    SetItem(aKey, aValue, aRv);
+    SetItem(aKey, aValue, aSubjectPrincipal, aRv);
   }
 
-  void RemoveItem(const nsAString& aKey, ErrorResult& aRv);
+  void RemoveItem(const nsAString& aKey,
+                  nsIPrincipal& aSubjectPrincipal,
+                  ErrorResult& aRv);
 
-  void NamedDeleter(const nsAString& aKey, bool& aFound, ErrorResult& aRv)
+  void NamedDeleter(const nsAString& aKey, bool& aFound,
+                    nsIPrincipal& aSubjectPrincipal,
+                    ErrorResult& aRv)
   {
-    RemoveItem(aKey, aRv);
+    RemoveItem(aKey, aSubjectPrincipal, aRv);
 
     aFound = !aRv.ErrorCodeIs(NS_SUCCESS_DOM_NO_OPERATION);
   }
 
-  void Clear(ErrorResult& aRv);
+  void Clear(nsIPrincipal& aSubjectPrincipal,
+             ErrorResult& aRv);
 
-  // The method checks whether the caller can use a storage.
-  // CanUseStorage is called before any DOM initiated operation
-  // on a storage is about to happen and ensures that the storage's
-  // session-only flag is properly set according the current settings.
-  // It is an optimization since the privileges check and session only
-  // state determination are complex and share the code (comes hand in
-  // hand together).
-  static bool CanUseStorage(nsPIDOMWindowInner* aWindow,
-                            DOMStorage* aStorage = nullptr);
-
-  bool IsPrivate() const { return mIsPrivate; }
+  bool IsPrivate() const;
   bool IsSessionOnly() const { return mIsSessionOnly; }
 
   bool IsForkOf(const DOMStorage* aOther) const
@@ -127,6 +126,16 @@ public:
     MOZ_ASSERT(aOther);
     return mCache == aOther->mCache;
   }
+
+protected:
+  // The method checks whether the caller can use a storage.
+  // CanUseStorage is called before any DOM initiated operation
+  // on a storage is about to happen and ensures that the storage's
+  // session-only flag is properly set according the current settings.
+  // It is an optimization since the privileges check and session only
+  // state determination are complex and share the code (comes hand in
+  // hand together).
+  bool CanUseStorage(nsIPrincipal& aSubjectPrincipal);
 
 private:
   ~DOMStorage();
@@ -142,9 +151,6 @@ private:
   // Principal this DOMStorage (i.e. localStorage or sessionStorage) has
   // been created for
   nsCOMPtr<nsIPrincipal> mPrincipal;
-
-  // Whether this storage is running in private-browsing window.
-  bool mIsPrivate : 1;
 
   // Whether storage is set to persist data only per session, may change
   // dynamically and is set by CanUseStorage function that is called

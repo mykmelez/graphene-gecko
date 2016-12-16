@@ -181,7 +181,7 @@ public:
     , mAudioChannel(aAudioChannel)
   {}
 
-  NS_IMETHODIMP Run() override
+  NS_IMETHOD Run() override
   {
     RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
     if (!service) {
@@ -209,7 +209,7 @@ public:
   {}
 
 protected:
-  virtual void DoWork(AudioChannelService* aService, JSContext* aCx) override
+  void DoWork(AudioChannelService* aService, JSContext* aCx) override
   {
     float volume = aService->GetAudioChannelVolume(mFrameWindow, mAudioChannel);
 
@@ -233,7 +233,7 @@ public:
   {}
 
 protected:
-  virtual void DoWork(AudioChannelService* aService, JSContext* aCx) override
+  void DoWork(AudioChannelService* aService, JSContext* aCx) override
   {
     bool muted = aService->GetAudioChannelMuted(mFrameWindow, mAudioChannel);
 
@@ -271,7 +271,7 @@ public:
   {}
 
 protected:
-  virtual void DoWork(AudioChannelService* aService, JSContext* aCx) override
+  void DoWork(AudioChannelService* aService, JSContext* aCx) override
   {
     if (!mValueKnown) {
       mActive = aService->IsAudioChannelActive(mFrameWindow, mAudioChannel);
@@ -297,7 +297,7 @@ public:
   {}
 
 protected:
-  virtual void DoWork(AudioChannelService* aService, JSContext* aCx) override
+  void DoWork(AudioChannelService* aService, JSContext* aCx) override
   {
     JS::Rooted<JS::Value> value(aCx);
     mRequest->FireSuccess(value);

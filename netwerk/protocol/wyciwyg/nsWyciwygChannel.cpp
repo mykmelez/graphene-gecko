@@ -25,7 +25,7 @@
 #include "nsIProgressEventSink.h"
 #include "nsIURI.h"
 #include "mozilla/DebugOnly.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/BasePrincipal.h"
 #include "nsProxyRelease.h"
 #include "nsContentSecurityManager.h"
@@ -51,7 +51,7 @@ public:
   explicit nsWyciwygSetCharsetandSourceEvent(nsWyciwygChannel *aChannel)
     : nsWyciwygAsyncEvent(aChannel) {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mChannel->SetCharsetAndSourceInternal();
     return NS_OK;
@@ -63,7 +63,7 @@ public:
   nsWyciwygWriteEvent(nsWyciwygChannel *aChannel, const nsAString &aData)
     : nsWyciwygAsyncEvent(aChannel), mData(aData) {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mChannel->WriteToCacheEntryInternal(mData);
     return NS_OK;
@@ -77,7 +77,7 @@ public:
   nsWyciwygCloseEvent(nsWyciwygChannel *aChannel, nsresult aReason)
     : nsWyciwygAsyncEvent(aChannel), mReason(aReason) {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mChannel->CloseCacheEntryInternal(mReason);
     return NS_OK;
@@ -572,13 +572,13 @@ nsWyciwygChannel::CloseCacheEntryInternal(nsresult reason)
 
   if (mCacheEntry) {
     LOG(("nsWyciwygChannel::CloseCacheEntryInternal [this=%p ]", this));
-    mCacheOutputStream = 0;
-    mCacheInputStream = 0;
+    mCacheOutputStream = nullptr;
+    mCacheInputStream = nullptr;
 
     if (NS_FAILED(reason))
       mCacheEntry->AsyncDoom(nullptr); // here we were calling Doom() ...
 
-    mCacheEntry = 0;
+    mCacheEntry = nullptr;
   }
   return NS_OK;
 }
@@ -756,19 +756,19 @@ nsWyciwygChannel::OnStopRequest(nsIRequest *request, nsISupports *ctx, nsresult 
     mStatus = status;
 
   mListener->OnStopRequest(this, mListenerContext, mStatus);
-  mListener = 0;
-  mListenerContext = 0;
+  mListener = nullptr;
+  mListenerContext = nullptr;
 
   if (mLoadGroup)
     mLoadGroup->RemoveRequest(this, nullptr, mStatus);
 
   CloseCacheEntry(mStatus);
-  mPump = 0;
+  mPump = nullptr;
   mIsPending = false;
 
   // Drop notification callbacks to prevent cycles.
-  mCallbacks = 0;
-  mProgressSink = 0;
+  mCallbacks = nullptr;
+  mProgressSink = nullptr;
 
   return NS_OK;
 }
@@ -788,8 +788,8 @@ nsWyciwygChannel::OpenCacheEntry(nsIURI *aURI,
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool anonymous = mLoadFlags & LOAD_ANONYMOUS;
-  RefPtr<LoadContextInfo> loadInfo = mozilla::net::GetLoadContextInfo(
-    mPrivateBrowsing, anonymous, mOriginAttributes);
+  mOriginAttributes.SyncAttributesWithPrivateBrowsing(mPrivateBrowsing);
+  RefPtr<LoadContextInfo> loadInfo = mozilla::net::GetLoadContextInfo(anonymous, mOriginAttributes);
 
   nsCOMPtr<nsICacheStorage> cacheStorage;
   if (mLoadFlags & INHIBIT_PERSISTENT_CACHING)
@@ -854,8 +854,8 @@ nsWyciwygChannel::NotifyListener()
   if (mListener) {
     mListener->OnStartRequest(this, mListenerContext);
     mListener->OnStopRequest(this, mListenerContext, mStatus);
-    mListener = 0;
-    mListenerContext = 0;
+    mListener = nullptr;
+    mListenerContext = nullptr;
   }
 
   mIsPending = false;

@@ -145,7 +145,7 @@ function makeObserver(aObserveTopic, aObserveFunc) {
     // nsIObserver is to be an observer
     QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports, Ci.nsIObserver]),
 
-    observe: function (aSubject, aTopic, aData) {
+    observe: function(aSubject, aTopic, aData) {
       if (aTopic == aObserveTopic) {
         aObserveFunc(aSubject, aTopic, aData);
         Services.obs.removeObserver(observer, aObserveTopic);
@@ -183,7 +183,7 @@ function call_sequentially() {
       do_throw("Too many calls: " + argString);
       return;
     }
-    funcs[numCalls].apply(funcs[numCalls],arguments);
+    funcs[numCalls].apply(funcs[numCalls], arguments);
     numCalls += 1;
   };
 }
@@ -236,14 +236,14 @@ function setup_provisioning(identity, afterSetupCallback, doneProvisioningCallba
 var initialPrefDebugValue = false;
 try {
   initialPrefDebugValue = Services.prefs.getBoolPref("toolkit.identity.debug");
-} catch(noPref) {}
+} catch (noPref) {}
 Services.prefs.setBoolPref("toolkit.identity.debug", true);
 
 // Switch on firefox accounts
 var initialPrefFXAValue = false;
 try {
   initialPrefFXAValue = Services.prefs.getBoolPref("identity.fxaccounts.enabled");
-} catch(noPref) {}
+} catch (noPref) {}
 Services.prefs.setBoolPref("identity.fxaccounts.enabled", true);
 
 // after execution, restore prefs

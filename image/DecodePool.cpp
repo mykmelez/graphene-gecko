@@ -16,10 +16,7 @@
 #include "nsThreadUtils.h"
 #include "nsXPCOMCIDInternal.h"
 #include "prsystem.h"
-
-#ifdef MOZ_NUWA_PROCESS
-#include "ipc/Nuwa.h"
-#endif
+#include "nsIXULRuntime.h"
 
 #include "gfxPrefs.h"
 
@@ -69,12 +66,6 @@ public:
     MOZ_ASSERT(!NS_IsMainThread());
 
     mThreadNaming.SetThreadPoolName(NS_LITERAL_CSTRING("ImgDecoder"));
-
-#ifdef MOZ_NUWA_PROCESS
-    if (IsNuwaProcess()) {
-      NuwaMarkCurrentThread(static_cast<void(*)(void*)>(nullptr), nullptr);
-    }
-#endif // MOZ_NUWA_PROCESS
   }
 
   /// Shut down the provided decode pool thread.
@@ -169,16 +160,27 @@ private:
 class DecodePoolWorker : public Runnable
 {
 public:
-  explicit DecodePoolWorker(DecodePoolImpl* aImpl) : mImpl(aImpl) { }
+  explicit DecodePoolWorker(DecodePoolImpl* aImpl)
+    : mImpl(aImpl)
+  { }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
+#ifdef MOZ_ENABLE_PROFILER_SPS
+    char stackBaseGuess; // Need to be the first variable of main loop function.
+#endif // MOZ_ENABLE_PROFILER_SPS
+
     MOZ_ASSERT(!NS_IsMainThread());
 
     mImpl->InitCurrentThread();
 
     nsCOMPtr<nsIThread> thisThread;
-    nsThreadManager::get()->GetCurrentThread(getter_AddRefs(thisThread));
+    nsThreadManager::get().GetCurrentThread(getter_AddRefs(thisThread));
+
+#ifdef MOZ_ENABLE_PROFILER_SPS
+    // InitCurrentThread() has assigned the thread name.
+    profiler_register_thread(PR_GetThreadName(PR_GetCurrentThread()), &stackBaseGuess);
+#endif // MOZ_ENABLE_PROFILER_SPS
 
     do {
       Work work = mImpl->PopWork();
@@ -189,6 +191,11 @@ public:
 
         case Work::Type::SHUTDOWN:
           DecodePoolImpl::ShutdownThread(thisThread);
+
+#ifdef MOZ_ENABLE_PROFILER_SPS
+          profiler_unregister_thread();
+#endif // MOZ_ENABLE_PROFILER_SPS
+
           return NS_OK;
 
         default:
@@ -255,6 +262,11 @@ DecodePool::DecodePool()
   if (limit > 32) {
     limit = 32;
   }
+  // The parent process where there are content processes doesn't need as many
+  // threads for decoding images.
+  if (limit > 4 && XRE_IsParentProcess() && BrowserTabsRemoteAutostart()) {
+    limit = 4;
+  }
 
   // Initialize the thread pool.
   for (uint32_t i = 0 ; i < limit ; ++i) {
@@ -270,15 +282,6 @@ DecodePool::DecodePool()
   nsresult rv = NS_NewNamedThread("ImageIO", getter_AddRefs(mIOThread));
   MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv) && mIOThread,
                      "Should successfully create image I/O thread");
-
-#ifdef MOZ_NUWA_PROCESS
-  rv = mIOThread->Dispatch(NS_NewRunnableFunction([]() -> void {
-    NuwaMarkCurrentThread(static_cast<void(*)(void*)>(nullptr), nullptr);
-  }), NS_DISPATCH_NORMAL);
-
-  MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv),
-                     "Should register decode IO thread with Nuwa process");
-#endif
 
   nsCOMPtr<nsIObserverService> obsSvc = services::GetObserverService();
   if (obsSvc) {

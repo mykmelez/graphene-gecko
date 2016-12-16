@@ -45,7 +45,7 @@ function init() {
 
     let links = [
       {id: "releaseNotesURL", pref: "app.releaseNotesURL"},
-      {id: "supportURL",      pref: "app.support.baseURL"},
+      {id: "supportURL",      pref: "app.supportURL"},
       {id: "faqURL",          pref: "app.faqURL"},
       {id: "privacyURL",      pref: "app.privacyURL"},
       {id: "creditsURL",      pref: "app.creditsURL"},
@@ -78,17 +78,20 @@ function init() {
   function checkForUpdates() {
     showCheckingMessage();
 
-    Services.androidBridge.handleGeckoMessage({ type: "Update:Check" });
+    let window = Services.wm.getMostRecentWindow("navigator:browser");
+    window.WindowEventDispatcher.sendRequest({ type: "Update:Check" });
   }
 
   function downloadUpdate() {
-    Services.androidBridge.handleGeckoMessage({ type: "Update:Download" });
+    let window = Services.wm.getMostRecentWindow("navigator:browser");
+    window.WindowEventDispatcher.sendRequest({ type: "Update:Download" });
   }
 
   function installUpdate() {
     showCheckAction();
 
-    Services.androidBridge.handleGeckoMessage({ type: "Update:Install" });
+    let window = Services.wm.getMostRecentWindow("navigator:browser");
+    window.WindowEventDispatcher.sendRequest({ type: "Update:Install" });
   }
 
   let updateLink = document.getElementById("updateLink");

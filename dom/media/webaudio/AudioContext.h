@@ -52,6 +52,7 @@ class AudioNode;
 class BiquadFilterNode;
 class ChannelMergerNode;
 class ChannelSplitterNode;
+class ConstantSourceNode;
 class ConvolverNode;
 class DelayNode;
 class DynamicsCompressorNode;
@@ -200,6 +201,8 @@ public:
 
   already_AddRefed<AudioBufferSourceNode> CreateBufferSource(ErrorResult& aRv);
 
+  already_AddRefed<ConstantSourceNode> CreateConstantSource(ErrorResult& aRv);
+
   already_AddRefed<AudioBuffer>
   CreateBuffer(uint32_t aNumberOfChannels, uint32_t aLength, float aSampleRate,
                ErrorResult& aRv);
@@ -320,18 +323,17 @@ public:
   IMPL_EVENT_HANDLER(mozinterruptbegin)
   IMPL_EVENT_HANDLER(mozinterruptend)
 
+  bool CheckClosed(ErrorResult& aRv);
+
 private:
   void DisconnectFromWindow();
   void RemoveFromDecodeQueue(WebAudioDecodeJob* aDecodeJob);
   void ShutdownDecoder();
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
-  NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                            nsISupports* aData, bool aAnonymize) override;
+  NS_DECL_NSIMEMORYREPORTER
 
   friend struct ::mozilla::WebAudioDecodeJob;
-
-  bool CheckClosed(ErrorResult& aRv);
 
   nsTArray<MediaStream*> GetAllStreams() const;
 

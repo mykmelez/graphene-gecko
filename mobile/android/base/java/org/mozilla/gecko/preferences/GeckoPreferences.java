@@ -16,6 +16,7 @@ import org.mozilla.gecko.DataReportingNotification;
 import org.mozilla.gecko.DynamicToolbar;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoActivityStatus;
+import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoProfile;
@@ -28,6 +29,7 @@ import org.mozilla.gecko.SnackbarBuilder;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.TelemetryContract.Method;
+import org.mozilla.gecko.activitystream.ActivityStream;
 import org.mozilla.gecko.background.common.GlobalConstants;
 import org.mozilla.gecko.db.BrowserContract.SuggestedSites;
 import org.mozilla.gecko.feeds.FeedService;
@@ -39,11 +41,12 @@ import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.tabqueue.TabQueuePrompt;
 import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
+import org.mozilla.gecko.util.BundleEventListener;
+import org.mozilla.gecko.util.ContextUtils;
 import org.mozilla.gecko.util.EventCallback;
-import org.mozilla.gecko.util.GeckoEventListener;
+import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
-import org.mozilla.gecko.util.NativeEventListener;
 import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ThreadUtils;
 
@@ -90,8 +93,6 @@ import android.widget.LinearLayout;
 import android.widget.ListAdapter;
 import android.widget.ListView;
 
-import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -101,13 +102,11 @@ import java.util.Locale;
 import java.util.Map;
 
 public class GeckoPreferences
-extends AppCompatPreferenceActivity
-implements
-GeckoActivityStatus,
-GeckoEventListener,
-NativeEventListener,
-OnPreferenceChangeListener,
-OnSharedPreferenceChangeListener
+    extends AppCompatPreferenceActivity
+    implements BundleEventListener,
+               GeckoActivityStatus,
+               OnPreferenceChangeListener,
+               OnSharedPreferenceChangeListener
 {
     private static final String LOGTAG = "GeckoPreferences";
 
@@ -120,7 +119,7 @@ OnSharedPreferenceChangeListener
     public static final String NON_PREF_PREFIX = "android.not_a_preference.";
     public static final String INTENT_EXTRA_RESOURCES = "resource";
     public static final String PREFS_TRACKING_PROTECTION_PROMPT_SHOWN = NON_PREF_PREFIX + "trackingProtectionPromptShown";
-    public static String PREFS_HEALTHREPORT_UPLOAD_ENABLED = NON_PREF_PREFIX + "healthreport.uploadEnabled";
+    public static final String PREFS_HEALTHREPORT_UPLOAD_ENABLED = NON_PREF_PREFIX + "healthreport.uploadEnabled";
     public static final String PREFS_SYNC = NON_PREF_PREFIX + "sync";
 
     private static boolean sIsCharEncodingEnabled;
@@ -165,6 +164,9 @@ OnSharedPreferenceChangeListener
     public static final String PREFS_READ_PARTNER_CUSTOMIZATIONS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_customizations_provider";
     public static final String PREFS_READ_PARTNER_BOOKMARKS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_bookmarks_provider";
     public static final String PREFS_CUSTOM_TABS = NON_PREF_PREFIX + "customtabs";
+    public static final String PREFS_ACTIVITY_STREAM = NON_PREF_PREFIX + "activitystream";
+    public static final String PREFS_CATEGORY_EXPERIMENTAL_FEATURES = NON_PREF_PREFIX + "category_experimental";
+    public static final String PREFS_COMPACT_TABS = NON_PREF_PREFIX + "compact_tabs";
 
     private static final String ACTION_STUMBLER_UPLOAD_PREF = "STUMBLER_PREF";
 
@@ -222,13 +224,11 @@ OnSharedPreferenceChangeListener
         }
     }
     private void updateActionBarTitle(int title) {
-        if (Versions.feature14Plus) {
-            final String newTitle = getString(title);
-            if (newTitle != null) {
-                Log.v(LOGTAG, "Setting action bar title to " + newTitle);
+        final String newTitle = getString(title);
+        if (newTitle != null) {
+            Log.v(LOGTAG, "Setting action bar title to " + newTitle);
 
-                setTitle(newTitle);
-            }
+            setTitle(newTitle);
         }
     }
 
@@ -341,11 +341,9 @@ OnSharedPreferenceChangeListener
         // the correct Fragment resource.
         // Note: this seems to only be required for non-multipane devices, multipane
         // manages to automatically select the correct fragments.
-        if (Versions.feature11Plus) {
-            if (!getIntent().hasExtra(PreferenceActivity.EXTRA_SHOW_FRAGMENT)) {
-                // Set up the default fragment if there is no explicit fragment to show.
-                setupTopLevelFragmentIntent();
-            }
+        if (!getIntent().hasExtra(PreferenceActivity.EXTRA_SHOW_FRAGMENT)) {
+            // Set up the default fragment if there is no explicit fragment to show.
+            setupTopLevelFragmentIntent();
         }
 
         // We must call this before setTitle to avoid crashes. Most devices don't seem to care
@@ -354,7 +352,7 @@ OnSharedPreferenceChangeListener
         // likely other strange devices (other Asus devices, some Samsungs) could do the same.
         super.onCreate(savedInstanceState);
 
-        if (Versions.feature11Plus && onIsMultiPane()) {
+        if (onIsMultiPane()) {
             // So that Android doesn't put the fragment title (or nothing at
             // all) in the action bar.
             updateActionBarTitle(R.string.settings_title);
@@ -371,11 +369,7 @@ OnSharedPreferenceChangeListener
         // Use setResourceToOpen to specify these extras.
         Bundle intentExtras = getIntent().getExtras();
 
-        EventDispatcher.getInstance().registerGeckoThreadListener((GeckoEventListener) this,
-            "Sanitize:Finished");
-
-        EventDispatcher.getInstance().registerGeckoThreadListener((NativeEventListener) this,
-            "Snackbar:Show");
+        EventDispatcher.getInstance().registerUiThreadListener(this, "Sanitize:Finished");
 
         // Add handling for long-press click.
         // This is only for Android 3.0 and below (which use the long-press-context-menu paradigm).
@@ -509,11 +503,8 @@ OnSharedPreferenceChangeListener
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener) this,
-            "Sanitize:Finished");
 
-        EventDispatcher.getInstance().unregisterGeckoThreadListener((NativeEventListener) this,
-            "Snackbar:Show");
+        EventDispatcher.getInstance().unregisterUiThreadListener(this, "Sanitize:Finished");
 
         if (mPrefsRequest != null) {
             PrefsHelper.removeObserver(mPrefsRequest);
@@ -523,12 +514,12 @@ OnSharedPreferenceChangeListener
 
     @Override
     public void onPause() {
+        EventDispatcher.getInstance().unregisterUiThreadListener(this, "Snackbar:Show");
+
         // Symmetric with onResume.
-        if (Versions.feature11Plus) {
-            if (isMultiPane()) {
-                SharedPreferences prefs = GeckoSharedPrefs.forApp(this);
-                prefs.unregisterOnSharedPreferenceChangeListener(this);
-            }
+        if (isMultiPane()) {
+            SharedPreferences prefs = GeckoSharedPrefs.forApp(this);
+            prefs.unregisterOnSharedPreferenceChangeListener(this);
         }
 
         super.onPause();
@@ -542,18 +533,18 @@ OnSharedPreferenceChangeListener
     public void onResume() {
         super.onResume();
 
+        EventDispatcher.getInstance().registerUiThreadListener(this, "Snackbar:Show");
+
         if (getApplication() instanceof GeckoApplication) {
             ((GeckoApplication) getApplication()).onActivityResume(this);
         }
 
-        if (Versions.feature11Plus) {
-            // Watch prefs, otherwise we don't reliably get told when they change.
-            // See documentation for onSharedPreferenceChange for more.
-            // Inexplicably only needed on tablet.
-            if (isMultiPane()) {
-                SharedPreferences prefs = GeckoSharedPrefs.forApp(this);
-                prefs.registerOnSharedPreferenceChangeListener(this);
-            }
+        // Watch prefs, otherwise we don't reliably get told when they change.
+        // See documentation for onSharedPreferenceChange for more.
+        // Inexplicably only needed on tablet.
+        if (isMultiPane()) {
+            SharedPreferences prefs = GeckoSharedPrefs.forApp(this);
+            prefs.registerOnSharedPreferenceChangeListener(this);
         }
     }
 
@@ -617,28 +608,21 @@ OnSharedPreferenceChangeListener
     }
 
     @Override
-    public void handleMessage(String event, JSONObject message) {
-        try {
-            if (event.equals("Sanitize:Finished")) {
-                boolean success = message.getBoolean("success");
-                final int stringRes = success ? R.string.private_data_success : R.string.private_data_fail;
-
-                SnackbarBuilder.builder(GeckoPreferences.this)
-                        .message(stringRes)
-                        .duration(Snackbar.LENGTH_LONG)
-                        .buildAndShow();
-            }
-        } catch (Exception e) {
-            Log.e(LOGTAG, "Exception handling message \"" + event + "\":", e);
-        }
-    }
-
-    @Override
-    public void handleMessage(final String event, final NativeJSObject message, final EventCallback callback) {
+    public void handleMessage(final String event, final GeckoBundle message,
+                              final EventCallback callback) {
         if ("Snackbar:Show".equals(event)) {
             SnackbarBuilder.builder(this)
                     .fromEvent(message)
                     .callback(callback)
+                    .buildAndShow();
+
+        } else if ("Sanitize:Finished".equals(event)) {
+            final boolean success = message.getBoolean("success");
+            final int stringRes = success ? R.string.private_data_success : R.string.private_data_fail;
+
+            SnackbarBuilder.builder(this)
+                    .message(stringRes)
+                    .duration(Snackbar.LENGTH_LONG)
                     .buildAndShow();
         }
     }
@@ -694,6 +678,12 @@ OnSharedPreferenceChangeListener
                     preferences.removePreference(pref);
                     i--;
                     continue;
+                } else if (PREFS_CATEGORY_EXPERIMENTAL_FEATURES.equals(key)
+                        && !AppConstants.MOZ_ANDROID_ACTIVITY_STREAM
+                        && !AppConstants.MOZ_ANDROID_CUSTOM_TABS) {
+                    preferences.removePreference(pref);
+                    i--;
+                    continue;
                 }
                 setupPreferences((PreferenceGroup) pref, prefs);
             } else {
@@ -708,7 +698,7 @@ OnSharedPreferenceChangeListener
 
                 pref.setOnPreferenceChangeListener(this);
                 if (PREFS_UPDATER_AUTODOWNLOAD.equals(key)) {
-                    if (!AppConstants.MOZ_UPDATER) {
+                    if (!AppConstants.MOZ_UPDATER || ContextUtils.isInstalledFromGooglePlay(this)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
@@ -887,6 +877,10 @@ OnSharedPreferenceChangeListener
                         continue;
                     }
                 } else if (PREFS_CUSTOM_TABS.equals(key) && !AppConstants.MOZ_ANDROID_CUSTOM_TABS) {
+                    preferences.removePreference(pref);
+                    i--;
+                    continue;
+                } else if (PREFS_ACTIVITY_STREAM.equals(key) && !ActivityStream.isUserEligible(this)) {
                     preferences.removePreference(pref);
                     i--;
                     continue;
@@ -1200,6 +1194,13 @@ OnSharedPreferenceChangeListener
             }
         } else if (PREFS_NOTIFICATIONS_CONTENT.equals(prefName)) {
             FeedService.setup(this);
+        } else if (PREFS_ACTIVITY_STREAM.equals(prefName)) {
+            ThreadUtils.postDelayedToUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    GeckoAppShell.scheduleRestart();
+                }
+            }, 1000);
         } else if (HANDLERS.containsKey(prefName)) {
             PrefHandler handler = HANDLERS.get(prefName);
             handler.onChange(this, preference, newValue);

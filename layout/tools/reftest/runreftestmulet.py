@@ -126,7 +126,6 @@ class MuletReftest(RefTest):
         # Make sure we disable system updates
         prefs["app.update.enabled"] = False
         prefs["app.update.url"] = ""
-        prefs["app.update.url.override"] = ""
         # Disable webapp updates
         prefs["webapps.update.enabled"] = False
         # Disable tiles also
@@ -201,13 +200,4 @@ def run_test_harness(parser, options):
     if options.mulet and not options.profile:
         raise Exception("must specify --profile when specifying --mulet")
 
-    sys.exit(reftest.run_tests(options.tests, options))
-
-
-def run(**kwargs):
-    # Mach gives us kwargs; this is a way to turn them back into an
-    # options object
-    parser = reftestcommandline.B2GArgumentParser()
-    parser.set_defaults(**kwargs)
-    options = parser.parse_args(kwargs['tests'])
-    return run_test_harness(parser, options)
+    return reftest.run_tests(options.tests, options)

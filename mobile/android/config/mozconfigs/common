@@ -25,11 +25,6 @@ if [ ! -f /etc/redhat-release ] || [ "$(< /etc/redhat-release)" != "CentOS relea
     mk_add_options "export PATH=$PATH:$topsrcdir/java_home/bin"
 fi
 
-# Set the most aggressive settings for szip. Not the default because it's
-# much slower and we didn't want to slow down developers builds.
-# Has no effect when MOZ_ENABLE_SZIP is not set in mobile/android/confvars.sh.
-MOZ_SZIP_FLAGS="-D auto -f auto"
-
 ac_add_options --enable-elf-hack
 
 ANDROID_NDK_VERSION="r10e"
@@ -44,12 +39,8 @@ if [ -z "$NO_NDK" ]; then
     ac_add_options --with-android-gnu-compiler-version=4.9
 fi
 
-ac_add_options --with-android-version=9
 ac_add_options --with-system-zlib
 ac_add_options --enable-update-channel=${MOZ_UPDATE_CHANNEL}
-
-# Treat warnings as errors (modulo ALLOW_COMPILER_WARNINGS).
-ac_add_options --enable-warnings-as-errors
 
 ac_add_options --with-mozilla-api-keyfile=/builds/mozilla-fennec-geoloc-api.key
 

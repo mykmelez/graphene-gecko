@@ -46,7 +46,7 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "gfx2DGlue.h"
 
 #ifdef XP_WIN
@@ -235,6 +235,7 @@ nsComboboxControlFrame::nsComboboxControlFrame(nsStyleContext* aContext)
   , mDroppedDown(false)
   , mInRedisplayText(false)
   , mDelayedShowDropDown(false)
+  , mIsOpenInParentProcess(false)
 {
   REFLOW_COUNTER_INIT()
 }
@@ -382,13 +383,11 @@ public:
   explicit nsResizeDropdownAtFinalPosition(nsComboboxControlFrame* aFrame)
     : mFrame(aFrame)
   {
-    MOZ_COUNT_CTOR(nsResizeDropdownAtFinalPosition);
   }
 
 protected:
   ~nsResizeDropdownAtFinalPosition()
   {
-    MOZ_COUNT_DTOR(nsResizeDropdownAtFinalPosition);
   }
 
 public:
@@ -404,7 +403,7 @@ public:
     NS_RELEASE_THIS();
   }
 
-  NS_IMETHODIMP Run() override
+  NS_IMETHOD Run() override
   {
     if (mFrame.IsAlive()) {
       static_cast<nsComboboxControlFrame*>(mFrame.GetFrame())->
@@ -519,7 +518,7 @@ class nsAsyncRollup : public Runnable
 {
 public:
   explicit nsAsyncRollup(nsComboboxControlFrame* aFrame) : mFrame(aFrame) {}
-  NS_IMETHODIMP Run()
+  NS_IMETHOD Run() override
   {
     if (mFrame.IsAlive()) {
       static_cast<nsComboboxControlFrame*>(mFrame.GetFrame())
@@ -534,7 +533,7 @@ class nsAsyncResize : public Runnable
 {
 public:
   explicit nsAsyncResize(nsComboboxControlFrame* aFrame) : mFrame(aFrame) {}
-  NS_IMETHODIMP Run()
+  NS_IMETHOD Run() override
   {
     if (mFrame.IsAlive()) {
       nsComboboxControlFrame* combo =
@@ -1162,9 +1161,10 @@ nsComboboxControlFrame::HandleEvent(nsPresContext* aPresContext,
   // If we have style that affects how we are selected, feed event down to
   // nsFrame::HandleEvent so that selection takes place when appropriate.
   const nsStyleUserInterface* uiStyle = StyleUserInterface();
-  if (uiStyle->mUserInput == NS_STYLE_USER_INPUT_NONE || uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED)
+  if (uiStyle->mUserInput == StyleUserInput::None ||
+      uiStyle->mUserInput == StyleUserInput::Disabled) {
     return nsBlockFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
-
+  }
   return NS_OK;
 }
 

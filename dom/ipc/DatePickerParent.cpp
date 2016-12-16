@@ -8,7 +8,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIDocument.h"
 #include "nsIDOMWindow.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
 
@@ -64,18 +64,18 @@ DatePickerParent::CreateDatePicker()
   return NS_SUCCEEDED(mPicker->Init(window, mTitle, mInitialDate));
 }
 
-bool
+mozilla::ipc::IPCResult
 DatePickerParent::RecvOpen()
 {
   if (!CreateDatePicker()) {
     Unused << Send__delete__(this, mInitialDate);
-    return true;
+    return IPC_OK();
   }
 
   mCallback = new DatePickerShownCallback(this);
 
   mPicker->Open(mCallback);
-  return true;
+  return IPC_OK();
 };
 
 void

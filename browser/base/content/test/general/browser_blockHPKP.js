@@ -38,7 +38,7 @@ function test() {
   // non-builtin roots.
   Services.prefs.setIntPref(kpkpEnforcementPref, 2);
   Services.prefs.setBoolPref(khpkpPinninEnablePref, true);
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     Services.prefs.clearUserPref(kpkpEnforcementPref);
     Services.prefs.clearUserPref(khpkpPinninEnablePref);
     let uri = gIOService.newURI("https://" + kPinningDomain, null, null);
@@ -81,7 +81,7 @@ function errorPageLoaded() {
       return BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
     }).then(pinningRemovalLoaded);
   });
-};
+}
 
 // After the pinning information has been removed (successful load) proceed
 // to load again with the invalid pin domain.
@@ -89,7 +89,7 @@ function pinningRemovalLoaded() {
   BrowserTestUtils.loadURI(gBrowser.selectedBrowser, "https://" + kBadPinningDomain).then(function() {
     return BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
   }).then(badPinningPageLoaded);
-};
+}
 
 // Finally, we should successfully load
 // https://bad.include-subdomains.pinning-dynamic.example.com.
@@ -98,4 +98,4 @@ function badPinningPageLoaded() {
     ok(true, "load complete");
     finish();
   });
-};
+}

@@ -86,8 +86,8 @@ class ArgumentContainer():
 class MochitestArguments(ArgumentContainer):
     """General mochitest arguments."""
 
+    FLAVORS = ('a11y', 'browser', 'chrome', 'jetpack-addon', 'jetpack-package', 'plain')
     LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "FATAL")
-    LEVEL_STRING = ", ".join(LOG_LEVELS)
 
     args = [
         [["test_paths"],
@@ -96,6 +96,12 @@ class MochitestArguments(ArgumentContainer):
           "default": [],
           "help": "Test to run. Can be a single test file or a directory of tests "
                   "(to run recursively). If omitted, the entire suite is run.",
+          }],
+        [["-f", "--flavor"],
+         {"default": "plain",
+          "choices": FLAVORS,
+          "help": "Mochitest flavor to run, one of {}. Defaults to 'plain'.".format(FLAVORS),
+          "suppress": build_obj is not None,
           }],
         [["--keep-open"],
          {"nargs": "?",
@@ -182,13 +188,8 @@ class MochitestArguments(ArgumentContainer):
          {"dest": "consoleLevel",
           "choices": LOG_LEVELS,
           "default": "INFO",
-          "help": "One of %s to determine the level of console logging." % LEVEL_STRING,
-          "suppress": True,
-          }],
-        [["--chrome"],
-         {"action": "store_true",
-          "default": False,
-          "help": "Run chrome mochitests.",
+          "help": "One of {} to determine the level of console logging.".format(
+                  ', '.join(LOG_LEVELS)),
           "suppress": True,
           }],
         [["--bisect-chunk"],
@@ -207,37 +208,10 @@ class MochitestArguments(ArgumentContainer):
           "default": "",
           "help": "Stop running the test sequence at this test.",
           }],
-        [["--browser-chrome"],
-         {"action": "store_true",
-          "dest": "browserChrome",
-          "default": False,
-          "help": "run browser chrome Mochitests",
-          "suppress": True,
-          }],
         [["--subsuite"],
          {"default": None,
           "help": "Subsuite of tests to run. Unlike tags, subsuites also remove tests from "
                   "the default set. Only one can be specified at once.",
-          }],
-        [["--jetpack-package"],
-         {"action": "store_true",
-          "dest": "jetpackPackage",
-          "help": "Run jetpack package tests.",
-          "default": False,
-          "suppress": True,
-          }],
-        [["--jetpack-addon"],
-         {"action": "store_true",
-          "dest": "jetpackAddon",
-          "help": "Run jetpack addon tests.",
-          "default": False,
-          "suppress": True,
-          }],
-        [["--a11y"],
-         {"action": "store_true",
-          "help": "Run accessibility Mochitests.",
-          "default": False,
-          "suppress": True,
           }],
         [["--setenv"],
          {"action": "append",
@@ -592,8 +566,8 @@ class MochitestArguments(ArgumentContainer):
         # for test manifest parsing.
         mozinfo.update({"nested_oop": options.nested_oop})
 
-        # b2g and android don't use 'app' the same way, so skip validation
-        if parser.app not in ('b2g', 'android'):
+        # and android doesn't use 'app' the same way, so skip validation
+        if parser.app != 'android':
             if options.app is None:
                 if build_obj:
                     options.app = build_obj.get_binary_path()
@@ -815,179 +789,6 @@ class MochitestArguments(ArgumentContainer):
         return options
 
 
-class B2GArguments(ArgumentContainer):
-    """B2G specific arguments."""
-
-    args = [
-        [["--b2gpath"],
-         {"dest": "b2gPath",
-          "default": None,
-          "help": "Path to B2G repo or QEMU directory.",
-          "suppress": True,
-          }],
-        [["--emulator"],
-         {"default": None,
-          "help": "Architecture of emulator to use, x86 or arm",
-          "suppress": True,
-          }],
-        [["--wifi"],
-         {"default": False,
-          "help": "Devine wifi configuration for on device mochitest",
-          "suppress": True,
-          }],
-        [["--sdcard"],
-         {"default": "10MB",
-          "help": "Define size of sdcard: 1MB, 50MB...etc",
-          }],
-        [["--no-window"],
-         {"action": "store_true",
-          "dest": "noWindow",
-          "default": False,
-          "help": "Pass --no-window to the emulator",
-          }],
-        [["--adbpath"],
-         {"dest": "adbPath",
-          "default": None,
-          "help": "Path to adb binary.",
-          "suppress": True,
-          }],
-        [["--deviceIP"],
-         {"dest": "deviceIP",
-          "default": None,
-          "help": "IP address of remote device to test.",
-          "suppress": True,
-          }],
-        [["--devicePort"],
-         {"default": 20701,
-          "help": "port of remote device to test",
-          "suppress": True,
-          }],
-        [["--remote-logfile"],
-         {"dest": "remoteLogFile",
-          "default": None,
-          "help": "Name of log file on the device relative to the device root. "
-                  "PLEASE ONLY USE A FILENAME.",
-          "suppress": True,
-          }],
-        [["--remote-webserver"],
-         {"dest": "remoteWebServer",
-          "default": None,
-          "help": "IP address where the remote web server is hosted.",
-          "suppress": True,
-          }],
-        [["--http-port"],
-         {"dest": "httpPort",
-          "default": DEFAULT_PORTS['http'],
-          "help": "Port used for http on the remote web server.",
-          "suppress": True,
-          }],
-        [["--ssl-port"],
-         {"dest": "sslPort",
-          "default": DEFAULT_PORTS['https'],
-          "help": "Port used for https on the remote web server.",
-          "suppress": True,
-          }],
-        [["--gecko-path"],
-         {"dest": "geckoPath",
-          "default": None,
-          "help": "The path to a gecko distribution that should be installed on the emulator "
-                  "prior to test.",
-          "suppress": True,
-          }],
-        [["--logdir"],
-         {"dest": "logdir",
-          "default": None,
-          "help": "Directory to store log files.",
-          }],
-        [['--busybox'],
-         {"dest": 'busybox',
-          "default": None,
-          "help": "Path to busybox binary to install on device.",
-          }],
-        [['--profile-data-dir'],
-         {"dest": 'profile_data_dir',
-          "default": os.path.join(here, 'profile_data'),
-          "help": "Path to a directory containing preference and other data to be installed "
-                  "into the profile.",
-          "suppress": True,
-          }],
-    ]
-
-    defaults = {
-        'logFile': 'mochitest.log',
-        # Specialpowers is integrated with marionette for b2g,
-        # see marionette's jar.mn.
-        'extensionsToExclude': ['specialpowers'],
-        # mochijar doesn't get installed via marionette on android
-        'extensionsToInstall': [os.path.join(here, 'mochijar')],
-        # See dependencies of bug 1038943.
-        'defaultLeakThreshold': 5536,
-    }
-
-    def validate(self, parser, options, context):
-        """Validate b2g options."""
-
-        if options.remoteWebServer is None:
-            if os.name != "nt":
-                options.remoteWebServer = moznetwork.get_ip()
-            else:
-                parser.error(
-                    "You must specify a --remote-webserver=<ip address>")
-        options.webServer = options.remoteWebServer
-
-        if not options.b2gPath and hasattr(context, 'b2g_home'):
-            options.b2gPath = context.b2g_home
-
-        if hasattr(context, 'device_name') and not options.emulator:
-            if context.device_name.startswith('emulator'):
-                options.emulator = 'x86' if 'x86' in context.device_name else 'arm'
-
-        if options.geckoPath and not options.emulator:
-            parser.error(
-                "You must specify --emulator if you specify --gecko-path")
-
-        if options.logdir and not options.emulator:
-            parser.error("You must specify --emulator if you specify --logdir")
-        elif not options.logdir and options.emulator and build_obj:
-            options.logdir = os.path.join(
-                build_obj.topobjdir, '_tests', 'testing', 'mochitest')
-
-        if hasattr(context, 'xre_path'):
-            options.xrePath = context.xre_path
-
-        if not os.path.isdir(options.xrePath):
-            parser.error("--xre-path '%s' is not a directory" % options.xrePath)
-
-        xpcshell = os.path.join(options.xrePath, 'xpcshell')
-        if not os.access(xpcshell, os.F_OK):
-            parser.error('xpcshell not found at %s' % xpcshell)
-
-        if self.elf_arm(xpcshell):
-            parser.error('--xre-path points to an ARM version of xpcshell; it '
-                         'should instead point to a version that can run on '
-                         'your desktop')
-
-        if not options.httpdPath and build_obj:
-            options.httpdPath = os.path.join(
-                build_obj.topobjdir, '_tests', 'testing', 'mochitest')
-
-        # Bug 1071866 - B2G Mochitests do not always produce a leak log.
-        options.ignoreMissingLeaks.append("default")
-        # Bug 1070068 - Leak logging does not work for tab processes on B2G.
-        options.ignoreMissingLeaks.append("tab")
-
-        if options.pidFile != "":
-            f = open(options.pidFile, 'w')
-            f.write("%s" % os.getpid())
-            f.close()
-
-        return options
-
-    def elf_arm(self, filename):
-        data = open(filename, 'rb').read(20)
-        return data[:4] == "\x7fELF" and ord(data[18]) == 40  # EM_ARM
-
-
 class AndroidArguments(ArgumentContainer):
     """Android specific arguments."""
 
@@ -1013,6 +814,12 @@ class AndroidArguments(ArgumentContainer):
          {"choices": ["adb", "sut"],
           "default": "adb",
           "help": "The transport to use for communication with the device [default: adb].",
+          "suppress": True,
+          }],
+        [["--adbpath"],
+         {"dest": "adbPath",
+          "default": None,
+          "help": "Path to adb binary.",
           "suppress": True,
           }],
         [["--devicePort"],
@@ -1086,29 +893,22 @@ class AndroidArguments(ArgumentContainer):
         if build_obj:
             options.log_mach = '-'
 
+        device_args = {'deviceRoot': options.remoteTestRoot}
         if options.dm_trans == "adb":
+            device_args['adbPath'] = options.adbPath
             if options.deviceIP:
-                options.dm = DroidADB(
-                    options.deviceIP,
-                    options.devicePort,
-                    deviceRoot=options.remoteTestRoot)
+                device_args['host'] = options.deviceIP
+                device_args['port'] = options.devicePort
             elif options.deviceSerial:
-                options.dm = DroidADB(
-                    None,
-                    None,
-                    deviceSerial=options.deviceSerial,
-                    deviceRoot=options.remoteTestRoot)
-            else:
-                options.dm = DroidADB(deviceRoot=options.remoteTestRoot)
+                device_args['deviceSerial'] = options.deviceSerial
+            options.dm = DroidADB(**device_args)
         elif options.dm_trans == 'sut':
             if options.deviceIP is None:
                 parser.error(
                     "If --dm_trans = sut, you must provide a device IP")
-
-            options.dm = DroidSUT(
-                options.deviceIP,
-                options.devicePort,
-                deviceRoot=options.remoteTestRoot)
+            device_args['host'] = options.deviceIP
+            device_args['port'] = options.devicePort
+            options.dm = DroidSUT(**device_args)
 
         if not options.remoteTestRoot:
             options.remoteTestRoot = options.dm.deviceRoot
@@ -1187,7 +987,6 @@ class AndroidArguments(ArgumentContainer):
 
 container_map = {
     'generic': [MochitestArguments],
-    'b2g': [MochitestArguments, B2GArguments],
     'android': [MochitestArguments, AndroidArguments],
 }
 
@@ -1206,8 +1005,6 @@ class MochitestArgumentParser(ArgumentParser):
         if not self.app and build_obj:
             if conditions.is_android(build_obj):
                 self.app = 'android'
-            elif conditions.is_b2g(build_obj):
-                self.app = 'b2g'
         if not self.app:
             # platform can't be determined and app wasn't specified explicitly,
             # so just use generic arguments and hope for the best
@@ -1251,10 +1048,3 @@ class MochitestArgumentParser(ArgumentParser):
         for container in self.containers:
             args = container.validate(self, args, self.context)
         return args
-
-    def parse_args(self, *args, **kwargs):
-        return self.validate(ArgumentParser.parse_args(self, *args, **kwargs))
-
-    def parse_known_args(self, *args, **kwargs):
-        args, remainder = ArgumentParser.parse_known_args(self, *args, **kwargs)
-        return (self.validate(args), remainder)

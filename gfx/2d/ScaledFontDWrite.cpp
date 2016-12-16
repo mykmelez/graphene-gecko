@@ -6,6 +6,9 @@
 #include "DrawTargetD2D1.h"
 #include "ScaledFontDWrite.h"
 #include "PathD2D.h"
+#include "gfxFont.h"
+
+using namespace std;
 
 #ifdef USE_SKIA
 #include "PathSkia.h"
@@ -20,34 +23,10 @@
 #include "cairo-win32.h"
 #endif
 
+#include "HelpersWinFonts.h"
+
 namespace mozilla {
 namespace gfx {
-
-static BYTE
-GetSystemTextQuality()
-{
-  BOOL font_smoothing;
-  UINT smoothing_type;
-
-  if (!SystemParametersInfo(SPI_GETFONTSMOOTHING, 0, &font_smoothing, 0)) {
-    return DEFAULT_QUALITY;
-  }
-
-  if (font_smoothing) {
-      if (!SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE,
-                                0, &smoothing_type, 0)) {
-        return DEFAULT_QUALITY;
-      }
-
-      if (smoothing_type == FE_FONTSMOOTHINGCLEARTYPE) {
-        return CLEARTYPE_QUALITY;
-      }
-
-      return ANTIALIASED_QUALITY;
-  }
-
-  return DEFAULT_QUALITY;
-}
 
 #define GASP_TAG 0x70736167
 #define GASP_DOGRAY 0x2
@@ -96,6 +75,47 @@ DoGrayscale(IDWriteFontFace *aDWFace, Float ppem)
   return true;
 }
 
+static inline DWRITE_FONT_STRETCH
+DWriteFontStretchFromStretch(int16_t aStretch)
+{
+    switch (aStretch) {
+        case NS_FONT_STRETCH_ULTRA_CONDENSED:
+            return DWRITE_FONT_STRETCH_ULTRA_CONDENSED;
+        case NS_FONT_STRETCH_EXTRA_CONDENSED:
+            return DWRITE_FONT_STRETCH_EXTRA_CONDENSED;
+        case NS_FONT_STRETCH_CONDENSED:
+            return DWRITE_FONT_STRETCH_CONDENSED;
+        case NS_FONT_STRETCH_SEMI_CONDENSED:
+            return DWRITE_FONT_STRETCH_SEMI_CONDENSED;
+        case NS_FONT_STRETCH_NORMAL:
+            return DWRITE_FONT_STRETCH_NORMAL;
+        case NS_FONT_STRETCH_SEMI_EXPANDED:
+            return DWRITE_FONT_STRETCH_SEMI_EXPANDED;
+        case NS_FONT_STRETCH_EXPANDED:
+            return DWRITE_FONT_STRETCH_EXPANDED;
+        case NS_FONT_STRETCH_EXTRA_EXPANDED:
+            return DWRITE_FONT_STRETCH_EXTRA_EXPANDED;
+        case NS_FONT_STRETCH_ULTRA_EXPANDED:
+            return DWRITE_FONT_STRETCH_ULTRA_EXPANDED;
+        default:
+            return DWRITE_FONT_STRETCH_UNDEFINED;
+    }
+}
+
+ScaledFontDWrite::ScaledFontDWrite(IDWriteFontFace *aFontFace, Float aSize,
+                                   bool aUseEmbeddedBitmap, bool aForceGDIMode,
+                                   const gfxFontStyle* aStyle)
+    : ScaledFontBase(aSize)
+    , mFontFace(aFontFace)
+    , mUseEmbeddedBitmap(aUseEmbeddedBitmap)
+    , mForceGDIMode(aForceGDIMode)
+{
+  mStyle = SkFontStyle(aStyle->weight,
+                       DWriteFontStretchFromStretch(aStyle->stretch),
+                       aStyle->style == NS_FONT_STYLE_NORMAL ?
+                       SkFontStyle::kUpright_Slant : SkFontStyle::kItalic_Slant);
+}
+
 already_AddRefed<Path>
 ScaledFontDWrite::GetPathForGlyphs(const GlyphBuffer &aBuffer, const DrawTarget *aTarget)
 {
@@ -115,67 +135,6 @@ ScaledFontDWrite::GetPathForGlyphs(const GlyphBuffer &aBuffer, const DrawTarget 
 
 
 #ifdef USE_SKIA
-bool
-ScaledFontDWrite::DefaultToArialFont(IDWriteFontCollection* aSystemFonts)
-{
-  // If we can't find the same font face as we're given, fallback to arial
-  static const WCHAR fontFamilyName[] = L"Arial";
-
-  UINT32 fontIndex;
-  BOOL exists;
-  HRESULT hr = aSystemFonts->FindFamilyName(fontFamilyName, &fontIndex, &exists);
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get backup arial font font from system fonts. Code: " << hexa(hr);
-    return false;
-  }
-
-  hr = aSystemFonts->GetFontFamily(fontIndex, getter_AddRefs(mFontFamily));
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get font family for arial. Code: " << hexa(hr);
-    return false;
-  }
-
-  hr = mFontFamily->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL,
-                                         DWRITE_FONT_STRETCH_NORMAL,
-                                         DWRITE_FONT_STYLE_NORMAL,
-                                         getter_AddRefs(mFont));
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get a matching font for arial. Code: " << hexa(hr);
-    return false;
-  }
-
-  return true;
-}
-
-// This can happen if we have mixed backends which create DWrite
-// fonts in a mixed environment. e.g. a cairo content backend
-// but Skia canvas backend.
-bool
-ScaledFontDWrite::GetFontDataFromSystemFonts(IDWriteFactory* aFactory)
-{
-  MOZ_ASSERT(mFontFace);
-  RefPtr<IDWriteFontCollection> systemFonts;
-  HRESULT hr = aFactory->GetSystemFontCollection(getter_AddRefs(systemFonts));
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get system font collection from file data. Code: " << hexa(hr);
-    return false;
-  }
-
-  hr = systemFonts->GetFontFromFontFace(mFontFace, getter_AddRefs(mFont));
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get system font from font face. Code: " << hexa(hr);
-    return DefaultToArialFont(systemFonts);
-  }
-
-  hr = mFont->GetFontFamily(getter_AddRefs(mFontFamily));
-  if (FAILED(hr)) {
-    gfxCriticalNote << "Failed to get font family from font face. Code: " << hexa(hr);
-    return DefaultToArialFont(systemFonts);
-  }
-
-  return true;
-}
-
 SkTypeface*
 ScaledFontDWrite::GetSkTypeface()
 {
@@ -185,23 +144,18 @@ ScaledFontDWrite::GetSkTypeface()
       return nullptr;
     }
 
-    if (!mFont || !mFontFamily) {
-      if (!GetFontDataFromSystemFonts(factory)) {
-        return nullptr;
-      }
-    }
-
-    mTypeface = SkCreateTypefaceFromDWriteFont(factory, mFontFace, mFont, mFontFamily);
+    mTypeface = SkCreateTypefaceFromDWriteFont(factory, mFontFace, mStyle, mForceGDIMode);
   }
   return mTypeface;
 }
 #endif
 
 void
-ScaledFontDWrite::CopyGlyphsToBuilder(const GlyphBuffer &aBuffer, PathBuilder *aBuilder, BackendType aBackendType, const Matrix *aTransformHint)
+ScaledFontDWrite::CopyGlyphsToBuilder(const GlyphBuffer &aBuffer, PathBuilder *aBuilder, const Matrix *aTransformHint)
 {
-  if (aBackendType != BackendType::DIRECT2D && aBackendType != BackendType::DIRECT2D1_1) {
-    ScaledFontBase::CopyGlyphsToBuilder(aBuffer, aBuilder, aBackendType, aTransformHint);
+  BackendType backendType = aBuilder->GetBackendType();
+  if (backendType != BackendType::DIRECT2D && backendType != BackendType::DIRECT2D1_1) {
+    ScaledFontBase::CopyGlyphsToBuilder(aBuffer, aBuilder, aTransformHint);
     return;
   }
 
@@ -213,6 +167,28 @@ ScaledFontDWrite::CopyGlyphsToBuilder(const GlyphBuffer &aBuffer, PathBuilder *a
   }
 
   CopyGlyphsToSink(aBuffer, pathBuilderD2D->GetSink());
+}
+
+void
+ScaledFontDWrite::GetGlyphDesignMetrics(const uint16_t* aGlyphs, uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics)
+{
+  DWRITE_FONT_METRICS fontMetrics;
+  mFontFace->GetMetrics(&fontMetrics);
+
+  vector<DWRITE_GLYPH_METRICS> metrics(aNumGlyphs);
+  mFontFace->GetDesignGlyphMetrics(aGlyphs, aNumGlyphs, &metrics.front());
+
+  Float designUnitCorrection = 1.f / fontMetrics.designUnitsPerEm;
+
+  for (uint32_t i = 0; i < aNumGlyphs; i++) {
+    aGlyphMetrics[i].mXBearing = metrics[i].leftSideBearing * designUnitCorrection * mSize;
+    aGlyphMetrics[i].mXAdvance = metrics[i].advanceWidth * designUnitCorrection * mSize;
+    aGlyphMetrics[i].mYBearing = metrics[i].topSideBearing * designUnitCorrection * mSize;
+    aGlyphMetrics[i].mYAdvance = metrics[i].advanceHeight * designUnitCorrection * mSize;
+    aGlyphMetrics[i].mWidth = (metrics[i].advanceHeight - metrics[i].topSideBearing - metrics[i].bottomSideBearing) *
+                              designUnitCorrection * mSize;
+    aGlyphMetrics[i].mHeight = (metrics[i].topSideBearing - metrics[i].verticalOriginY) * designUnitCorrection * mSize;
+  }
 }
 
 void
@@ -291,19 +267,7 @@ ScaledFontDWrite::GetFontFileData(FontFileDataOutput aDataCallback, void *aBaton
 AntialiasMode
 ScaledFontDWrite::GetDefaultAAMode()
 {
-  AntialiasMode defaultMode = AntialiasMode::SUBPIXEL;
-
-  switch (GetSystemTextQuality()) {
-  case CLEARTYPE_QUALITY:
-    defaultMode = AntialiasMode::SUBPIXEL;
-    break;
-  case ANTIALIASED_QUALITY:
-    defaultMode = AntialiasMode::GRAY;
-    break;
-  case DEFAULT_QUALITY:
-    defaultMode = AntialiasMode::NONE;
-    break;
-  }
+  AntialiasMode defaultMode = GetSystemDefaultAAMode();
 
   if (defaultMode == AntialiasMode::GRAY) {
     if (!DoGrayscale(mFontFace, mSize)) {

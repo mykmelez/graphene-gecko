@@ -6,8 +6,8 @@
 
 #include "mozilla/ipc/SendStream.h"
 
-#include "mozilla/unused.h"
-#include "mozilla/dom/PContentChild.h"
+#include "mozilla/Unused.h"
+#include "mozilla/dom/nsIContentChild.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/workers/bindings/WorkerHolder.h"
 #include "mozilla/ipc/PBackgroundChild.h"
@@ -20,7 +20,8 @@
 namespace mozilla {
 namespace ipc {
 
-using mozilla::dom::PContentChild;
+using mozilla::dom::nsIContentChild;
+using mozilla::dom::workers::Canceling;
 using mozilla::dom::workers::GetCurrentThreadWorkerPrivate;
 using mozilla::dom::workers::Status;
 using mozilla::dom::workers::WorkerHolder;
@@ -48,7 +49,7 @@ private:
   virtual void
   ActorDestroy(ActorDestroyReason aReason) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvRequestClose(const nsresult& aRv) override;
 
   // WorkerHolder methods
@@ -184,7 +185,7 @@ SendStreamChildImpl::AddAsWorkerHolder(WorkerPrivate* aWorkerPrivate)
 {
   NS_ASSERT_OWNINGTHREAD(SendStreamChild);
   MOZ_ASSERT(aWorkerPrivate);
-  bool result = HoldWorker(aWorkerPrivate);
+  bool result = HoldWorker(aWorkerPrivate, Canceling);
   if (result) {
     mWorkerPrivate = aWorkerPrivate;
   }
@@ -212,12 +213,12 @@ SendStreamChildImpl::ActorDestroy(ActorDestroyReason aReason)
   }
 }
 
-bool
+mozilla::ipc::IPCResult
 SendStreamChildImpl::RecvRequestClose(const nsresult& aRv)
 {
   NS_ASSERT_OWNINGTHREAD(SendStreamChild);
   OnEnd(aRv);
-  return true;
+  return IPC_OK();
 }
 
 bool
@@ -358,7 +359,7 @@ IsBlocking(nsIAsyncInputStream* aInputStream)
 // static
 SendStreamChild*
 SendStreamChild::Create(nsIAsyncInputStream* aInputStream,
-                        PContentChild* aManager)
+                        nsIContentChild* aManager)
 {
   MOZ_ASSERT(aInputStream);
   MOZ_ASSERT(aManager);

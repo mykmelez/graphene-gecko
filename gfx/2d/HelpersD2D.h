@@ -595,6 +595,8 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
   //
   //
 
+  int Bpp = BytesPerPixel(aSurface->GetFormat());
+
   if (uploadRect.Contains(rect)) {
     // Extend mode is irrelevant, the displayed rect is completely contained
     // by the source bitmap.
@@ -626,7 +628,7 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
 
       // A partial upload will suffice.
       aRT->CreateBitmap(D2D1::SizeU(uint32_t(uploadRect.width), uint32_t(uploadRect.height)),
-                        mapping.GetData() + int(uploadRect.x) * 4 + int(uploadRect.y) * mapping.GetStride(),
+                        mapping.GetData() + int(uploadRect.x) * Bpp + int(uploadRect.y) * mapping.GetStride(),
                         mapping.GetStride(),
                         D2D1::BitmapProperties(D2DPixelFormat(aSurface->GetFormat())),
                         getter_AddRefs(bitmap));
@@ -636,8 +638,6 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
 
     return bitmap.forget();
   } else {
-    int Bpp = BytesPerPixel(aSurface->GetFormat());
-
     if (Bpp != 4) {
       // This shouldn't actually happen in practice!
       MOZ_ASSERT(false);
@@ -653,10 +653,10 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
       ImageHalfScaler scaler(mapping.GetData(), mapping.GetStride(), size);
 
       // Calculate the maximum width/height of the image post transform.
-      Point topRight = transform * Point(Float(size.width), 0);
-      Point topLeft = transform * Point(0, 0);
-      Point bottomRight = transform * Point(Float(size.width), Float(size.height));
-      Point bottomLeft = transform * Point(0, Float(size.height));
+      Point topRight = transform.TransformPoint(Point(Float(size.width), 0));
+      Point topLeft = transform.TransformPoint(Point(0, 0));
+      Point bottomRight = transform.TransformPoint(Point(Float(size.width), Float(size.height)));
+      Point bottomLeft = transform.TransformPoint(Point(0, Float(size.height)));
 
       IntSize scaleSize;
 

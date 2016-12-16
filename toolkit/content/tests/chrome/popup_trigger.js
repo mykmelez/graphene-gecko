@@ -51,7 +51,7 @@ var popupTests = [
     gExpectedTriggerNode = gIsMenu ? "notset" : gTrigger;
     synthesizeMouse(gTrigger, 4, 4, { });
   },
-  result: function (testname) {
+  result: function(testname) {
     gExpectedTriggerNode = null;
     // menus are the anchor but non-menus are opened at screen coordinates
     is(gMenuPopup.anchorNode, gIsMenu ? gTrigger : null, testname + " anchorNode");
@@ -88,16 +88,20 @@ var popupTests = [
 {
   // check that pressing cursor up wraps and highlights the last item
   testname: "cursor up wrap",
-  events: [ "DOMMenuItemInactive item1", "DOMMenuItemActive last" ],
+  events: function() {
+    // No wrapping on menus on Mac
+    return platformIsMac() ? [] : [ "DOMMenuItemInactive item1", "DOMMenuItemActive last" ]
+  },
   test: function() { synthesizeKey("VK_UP", { }); },
   result: function(testname) {
-    checkActive(gMenuPopup, "last", testname);
+    checkActive(gMenuPopup, platformIsMac() ? "item1" : "last", testname);
   }
 },
 {
   // check that pressing cursor down wraps and highlights the first item
   testname: "cursor down wrap",
-  events: [ "DOMMenuItemInactive last", "DOMMenuItemActive item1" ],
+  condition: function() { return !platformIsMac() },
+  events: ["DOMMenuItemInactive last", "DOMMenuItemActive item1" ],
   test: function() { synthesizeKey("VK_DOWN", { }); },
   result: function(testname) { checkActive(gMenuPopup, "item1", testname); }
 },
@@ -133,10 +137,10 @@ var popupTests = [
   events: function() {
     // On Windows, disabled items are included when navigating, but on
     // other platforms, disabled items are skipped over
-    if (navigator.platform.indexOf("Win") == 0)
+    if (navigator.platform.indexOf("Win") == 0) {
       return [ "DOMMenuItemInactive item1", "DOMMenuItemActive item2" ];
-    else
-      return [ "DOMMenuItemInactive item1", "DOMMenuItemActive amenu" ];
+    }
+    return [ "DOMMenuItemInactive item1", "DOMMenuItemActive amenu" ];
   },
   test: function() {
     document.getElementById("item2").disabled = true;
@@ -147,12 +151,12 @@ var popupTests = [
   // check cursor up when a disabled item exists in the menu
   testname: "cursor up disabled",
   events: function() {
-    if (navigator.platform.indexOf("Win") == 0)
+    if (navigator.platform.indexOf("Win") == 0) {
       return [ "DOMMenuItemInactive item2", "DOMMenuItemActive amenu",
                "DOMMenuItemInactive amenu", "DOMMenuItemActive item2",
                "DOMMenuItemInactive item2", "DOMMenuItemActive item1" ];
-    else
-      return [ "DOMMenuItemInactive amenu", "DOMMenuItemActive item1" ];
+    }
+    return [ "DOMMenuItemInactive amenu", "DOMMenuItemActive item1" ];
   },
   test: function() {
     if (navigator.platform.indexOf("Win") == 0)
@@ -305,7 +309,7 @@ var popupTests = [
   test: function() {
     gMenuPopup.openPopup(gTrigger, "other", 0, 0, false, false);
   },
-  result: function (testname) {
+  result: function(testname) {
     var triggerrect = gMenuPopup.getBoundingClientRect();
     var popuprect = gMenuPopup.getBoundingClientRect();
     is(Math.round(popuprect.left), triggerrect.left, testname + " x position ");
@@ -601,12 +605,12 @@ var popupTests = [
   // platforms
   testname: "menuitem with non accelerator disabled",
   events: function() {
-    if (navigator.platform.indexOf("Win") == 0)
+    if (navigator.platform.indexOf("Win") == 0) {
       return [ "DOMMenuItemInactive submenu", "DOMMenuItemActive other",
                "DOMMenuItemInactive other", "DOMMenuItemActive item1" ];
-    else
-      return [ "DOMMenuItemInactive submenu", "DOMMenuItemActive last",
-               "DOMMenuItemInactive last", "DOMMenuItemActive item1" ];
+    }
+    return [ "DOMMenuItemInactive submenu", "DOMMenuItemActive last",
+             "DOMMenuItemInactive last", "DOMMenuItemActive item1" ];
   },
   test: function() { synthesizeKey("O", { }); synthesizeKey("F", { }); },
   result: function(testname) {

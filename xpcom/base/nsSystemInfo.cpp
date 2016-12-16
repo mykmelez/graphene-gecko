@@ -12,6 +12,7 @@
 #include "prprf.h"
 #include "mozilla/SSE.h"
 #include "mozilla/arm.h"
+#include "mozilla/Sprintf.h"
 
 #ifdef XP_WIN
 #include <time.h>
@@ -625,7 +626,7 @@ nsSystemInfo::Init()
 #ifdef XP_WIN
   BOOL isWow64;
   BOOL gotWow64Value = IsWow64Process(GetCurrentProcess(), &isWow64);
-  NS_WARN_IF_FALSE(gotWow64Value, "IsWow64Process failed");
+  NS_WARNING_ASSERTION(gotWow64Value, "IsWow64Process failed");
   if (gotWow64Value) {
     rv = SetPropertyAsBool(NS_LITERAL_STRING("isWow64"), !!isWow64);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -703,9 +704,8 @@ nsSystemInfo::Init()
 #endif
 
   if (gtkver_len <= 0) {
-    gtkver_len = snprintf(gtkver, sizeof(gtkver), "GTK %u.%u.%u",
-                          gtk_major_version, gtk_minor_version,
-                          gtk_micro_version);
+    gtkver_len = SprintfLiteral(gtkver, "GTK %u.%u.%u", gtk_major_version,
+                                gtk_minor_version, gtk_micro_version);
   }
 
   nsAutoCString secondaryLibrary;
@@ -905,13 +905,13 @@ void
 nsSystemInfo::SetInt32Property(const nsAString& aPropertyName,
                                const int32_t aValue)
 {
-  NS_WARN_IF_FALSE(aValue > 0, "Unable to read system value");
+  NS_WARNING_ASSERTION(aValue > 0, "Unable to read system value");
   if (aValue > 0) {
 #ifdef DEBUG
     nsresult rv =
 #endif
       SetPropertyAsInt32(aPropertyName, aValue);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Unable to set property");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Unable to set property");
   }
 }
 
@@ -925,20 +925,20 @@ nsSystemInfo::SetUint32Property(const nsAString& aPropertyName,
   nsresult rv =
 #endif
     SetPropertyAsUint32(aPropertyName, aValue);
-  NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Unable to set property");
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Unable to set property");
 }
 
 void
 nsSystemInfo::SetUint64Property(const nsAString& aPropertyName,
                                 const uint64_t aValue)
 {
-  NS_WARN_IF_FALSE(aValue > 0, "Unable to read system value");
+  NS_WARNING_ASSERTION(aValue > 0, "Unable to read system value");
   if (aValue > 0) {
 #ifdef DEBUG
     nsresult rv =
 #endif
       SetPropertyAsUint64(aPropertyName, aValue);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Unable to set property");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Unable to set property");
   }
 }
 

@@ -36,11 +36,15 @@ add_task(function* mainTest() {
     EventUtils.sendMouseEvent({ type: "click" }, item);
     yield promiseSubviewShown(true);
 
-    // Click the Open button.  The alert blocked-download dialog should be
-    // shown.
-    let dialogPromise = promiseAlertDialogOpen("cancel");
-    DownloadsBlockedSubview.elements.openButton.click();
-    yield dialogPromise;
+    // Click the Open button.  The download should be unblocked and then opened,
+    // i.e., unblockAndOpenDownload() should be called on the item.  The panel
+    // should also be closed as a result, so wait for that too.
+    let unblockOpenPromise = promiseUnblockAndOpenDownloadCalled(item);
+    let hidePromise = promisePanelHidden();
+    EventUtils.synthesizeMouse(DownloadsBlockedSubview.elements.openButton,
+                               10, 10, {}, window);
+    yield unblockOpenPromise;
+    yield hidePromise;
 
     window.focus();
     yield SimpleTest.promiseFocus(window);
@@ -53,7 +57,8 @@ add_task(function* mainTest() {
 
     // Click the Remove button.  The panel should close and the item should be
     // removed from it.
-    DownloadsBlockedSubview.elements.deleteButton.click();
+    EventUtils.synthesizeMouse(DownloadsBlockedSubview.elements.deleteButton,
+                               10, 10, {}, window);
     yield promisePanelHidden();
     yield openPanel();
 
@@ -150,16 +155,29 @@ function makeDownload(verdict) {
 }
 
 function promiseSubviewShown(shown) {
+  // More terribleness, but I'm tired of fighting intermittent timeouts on try.
+  // Just poll for the subview and wait a second before resolving the promise.
   return new Promise(resolve => {
-    if (shown == DownloadsBlockedSubview.view.showingSubView) {
+    let interval = setInterval(() => {
+      if (shown == DownloadsBlockedSubview.view.showingSubView &&
+          !DownloadsBlockedSubview.view._transitioning) {
+        clearInterval(interval);
+        setTimeout(resolve, 1000);
+        return;
+      }
+    }, 0);
+  });
+}
+
+function promiseUnblockAndOpenDownloadCalled(item) {
+  return new Promise(resolve => {
+    let realFn = item._shell.unblockAndOpenDownload;
+    item._shell.unblockAndOpenDownload = () => {
+      item._shell.unblockAndOpenDownload = realFn;
       resolve();
-      return;
-    }
-    let event = shown ? "ViewShowing" : "ViewHiding";
-    let subview = DownloadsBlockedSubview.subview;
-    subview.addEventListener(event, function showing() {
-      subview.removeEventListener(event, showing);
-      resolve();
-    });
+      // unblockAndOpenDownload returns a promise (that's resolved when the file
+      // is opened).
+      return Promise.resolve();
+    };
   });
 }

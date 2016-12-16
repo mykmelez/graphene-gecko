@@ -5,7 +5,7 @@
 Components.utils.import("resource://gre/modules/LoadContextInfo.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
-//******** define a js object to implement nsITreeView
+// define a js object to implement nsITreeView
 function pageInfoTreeView(treeid, copycol)
 {
   // copycol is the index number for the column that we want to add to
@@ -188,10 +188,9 @@ gImageView.getCellText = function(row, column) {
   if (column.index == COL_IMAGE_SIZE) {
     if (value == -1) {
       return gStrings.unknown;
-    } else {
-      var kbSize = Number(Math.round(value / 1024 * 100) / 100);
-      return gBundle.getFormattedString("mediaFileSize", [kbSize]);
     }
+    var kbSize = Number(Math.round(value / 1024 * 100) / 100);
+    return gBundle.getFormattedString("mediaFileSize", [kbSize]);
   }
   return value || "";
 };
@@ -263,7 +262,7 @@ const CERTIFICATEDIALOGS_CONTRACTID = "@mozilla.org/nsCertificateDialogs;1"
 function getClipboardHelper() {
     try {
         return Components.classes["@mozilla.org/widget/clipboardhelper;1"].getService(Components.interfaces.nsIClipboardHelper);
-    } catch(e) {
+    } catch (e) {
         // do nothing, later code will handle the error
         return null;
     }
@@ -530,7 +529,7 @@ function openCacheEntry(key, cb)
 
 function makeGeneralTab(metaViewRows, docInfo)
 {
-  var title = (docInfo.title) ? gBundle.getFormattedString("pageTitle", [docInfo.title]) : gBundle.getString("noPageTitle");
+  var title = (docInfo.title) ? docInfo.title : gBundle.getString("noPageTitle");
   document.getElementById("titletext").value = title;
 
   var url = docInfo.location;
@@ -637,14 +636,14 @@ function addImage(imageViewRow)
   }
 }
 
-//******** Link Stuff
+// Link Stuff
 function openURL(target)
 {
   var url = target.parentNode.childNodes[2].value;
   window.open(url, "_blank", "chrome");
 }
 
-function onBeginLinkDrag(event,urlField,descField)
+function onBeginLinkDrag(event, urlField, descField)
 {
   if (event.originalTarget.localName != "treechildren")
     return;
@@ -669,7 +668,7 @@ function onBeginLinkDrag(event,urlField,descField)
   dt.setData("text/plain", url);
 }
 
-//******** Image Stuff
+// Image Stuff
 function getSelectedRows(tree)
 {
   var start = { };
@@ -726,9 +725,9 @@ function saveMedia()
   var tree = document.getElementById("imagetree");
   var rowArray = getSelectedRows(tree);
   if (rowArray.length == 1) {
-    var row = rowArray[0];
-    var item = gImageView.data[row][COL_IMAGE_NODE];
-    var url = gImageView.data[row][COL_IMAGE_ADDRESS];
+    let row = rowArray[0];
+    let item = gImageView.data[row][COL_IMAGE_NODE];
+    let url = gImageView.data[row][COL_IMAGE_ADDRESS];
 
     if (url) {
       var titleKey = "SaveImageTitle";
@@ -751,16 +750,16 @@ function saveMedia()
         };
 
         for (var i = 0; i < rowArray.length; i++) {
-          var v = rowArray[i];
-          var dir = aDirectory.clone();
-          var item = gImageView.data[v][COL_IMAGE_NODE];
-          var uriString = gImageView.data[v][COL_IMAGE_ADDRESS];
-          var uri = makeURI(uriString);
+          let v = rowArray[i];
+          let dir = aDirectory.clone();
+          let item = gImageView.data[v][COL_IMAGE_NODE];
+          let uriString = gImageView.data[v][COL_IMAGE_ADDRESS];
+          let uri = makeURI(uriString);
 
           try {
             uri.QueryInterface(Components.interfaces.nsIURL);
             dir.append(decodeURIComponent(uri.fileName));
-          } catch(ex) {
+          } catch (ex) {
             // data:/blob: uris
             // Supply a dummy filename, otherwise Download Manager
             // will try to delete the base directory on failure.
@@ -825,7 +824,6 @@ function onImageSelect()
 // Makes the media preview (image, video, etc) for the selected row on the media tab.
 function makePreview(row)
 {
-  var imageTree = document.getElementById("imagetree");
   var item = gImageView.data[row][COL_IMAGE_NODE];
   var url = gImageView.data[row][COL_IMAGE_ADDRESS];
   var isBG = gImageView.data[row][COL_IMAGE_BG];
@@ -1006,7 +1004,7 @@ function makeBlockImage(url)
 }
 
 var imagePermissionObserver = {
-  observe: function (aSubject, aTopic, aData)
+  observe: function(aSubject, aTopic, aData)
   {
     if (document.getElementById("mediaPreviewBox").collapsed)
       return;
@@ -1016,7 +1014,6 @@ var imagePermissionObserver = {
       if (permission.type == "image") {
         var imageTree = document.getElementById("imagetree");
         var row = getSelectedRow(imageTree);
-        var item = gImageView.data[row][COL_IMAGE_NODE];
         var url = gImageView.data[row][COL_IMAGE_ADDRESS];
         if (permission.matchesURI(makeURI(url), true)) {
           makeBlockImage(url);
@@ -1054,18 +1051,16 @@ function formatNumber(number)
 
 function formatDate(datestr, unknown)
 {
-  // scriptable date formatter, for pretty printing dates
-  var dateService = Components.classes["@mozilla.org/intl/scriptabledateformat;1"]
-                              .getService(Components.interfaces.nsIScriptableDateFormat);
-
   var date = new Date(datestr);
   if (!date.valueOf())
     return unknown;
 
-  return dateService.FormatDateTime("", dateService.dateFormatLong,
-                                    dateService.timeFormatSeconds,
-                                    date.getFullYear(), date.getMonth()+1, date.getDate(),
-                                    date.getHours(), date.getMinutes(), date.getSeconds());
+  const locale = Components.classes["@mozilla.org/chrome/chrome-registry;1"]
+                 .getService(Components.interfaces.nsIXULChromeRegistry)
+                 .getSelectedLocale("global", true);
+  const dtOptions = { year: 'numeric', month: 'long', day: 'numeric',
+                      hour: 'numeric', minute: 'numeric', second: 'numeric' };
+  return date.toLocaleString(locale, dtOptions);
 }
 
 function doCopy()

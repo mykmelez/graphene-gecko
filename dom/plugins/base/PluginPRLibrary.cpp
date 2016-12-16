@@ -279,6 +279,8 @@ PluginPRLibrary::IsRemoteDrawingCoreAnimation(NPP instance, bool *aDrawing)
   *aDrawing = false; 
   return NS_OK;
 }
+#endif
+#if defined(XP_MACOSX) || defined(XP_WIN)
 nsresult
 PluginPRLibrary::ContentsScaleFactorChanged(NPP instance, double aContentsScaleFactor)
 {
@@ -317,7 +319,7 @@ PluginPRLibrary::BeginUpdateBackground(NPP instance, const nsIntRect&,
 nsresult
 PluginPRLibrary::EndUpdateBackground(NPP instance, const nsIntRect&)
 {
-  NS_RUNTIMEABORT("This should never be called");
+  MOZ_CRASH("This should never be called");
   return NS_ERROR_NOT_AVAILABLE;
 }
 

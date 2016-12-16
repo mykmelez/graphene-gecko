@@ -25,7 +25,7 @@
 #include "nsXPCOMCIDInternal.h"
 
 #include "mozilla/LookAndFeel.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "nsICommandLine.h"
 #include "nsILocaleService.h"
@@ -224,7 +224,7 @@ nsChromeRegistryChrome::IsLocaleRTL(const nsACString& package, bool *aResult)
   *aResult = false;
 
   nsAutoCString locale;
-  GetSelectedLocale(package, locale);
+  GetSelectedLocale(package, false, locale);
   if (locale.Length() < 2)
     return NS_OK;
 
@@ -234,6 +234,7 @@ nsChromeRegistryChrome::IsLocaleRTL(const nsACString& package, bool *aResult)
 
 nsresult
 nsChromeRegistryChrome::GetSelectedLocale(const nsACString& aPackage,
+                                          bool aAsBCP47,
                                           nsACString& aLocale)
 {
   nsCString realpackage;
@@ -247,6 +248,10 @@ nsChromeRegistryChrome::GetSelectedLocale(const nsACString& aPackage,
   aLocale = entry->locales.GetSelected(mSelectedLocale, nsProviderArray::LOCALE);
   if (aLocale.IsEmpty())
     return NS_ERROR_FAILURE;
+
+  if (aAsBCP47) {
+    SanitizeForBCP47(aLocale);
+  }
 
   return NS_OK;
 }
@@ -426,7 +431,8 @@ nsChromeRegistryChrome::SendRegisteredChrome(
 
     nsCOMPtr<nsIResProtocolHandler> irph (do_QueryInterface(ph));
     nsResProtocolHandler* rph = static_cast<nsResProtocolHandler*>(irph.get());
-    rph->CollectSubstitutions(resources);
+    rv = rph->CollectSubstitutions(resources);
+    NS_ENSURE_SUCCESS_VOID(rv);
   }
 
   for (auto iter = mOverrideTable.Iter(); !iter.Done(); iter.Next()) {
@@ -453,7 +459,8 @@ nsChromeRegistryChrome::SendRegisteredChrome(
       DebugOnly<bool> success =
         parents[i]->SendRegisterChrome(packages, resources, overrides,
                                        mSelectedLocale, true);
-      NS_WARN_IF_FALSE(success, "couldn't reset a child's registered chrome");
+      NS_WARNING_ASSERTION(success,
+                           "couldn't reset a child's registered chrome");
     }
   }
 }

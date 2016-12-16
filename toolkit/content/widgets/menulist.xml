@@ -438,7 +438,7 @@
             if (val)
               val.setAttribute('selected', 'true');
 
-            //Do NOT change the "value", which is owned by inputField
+            // Do NOT change the "value", which is owned by inputField
             return val;
           ]]>
         </body>
@@ -541,7 +541,7 @@
     <handlers>
       <handler event="focus" phase="capturing">
         <![CDATA[
-          this.setAttribute('focused','true');
+          this.setAttribute('focused', 'true');
         ]]>
       </handler>
 

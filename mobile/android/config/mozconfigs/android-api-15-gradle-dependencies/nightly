@@ -24,6 +24,8 @@ export GRADLE_MAVEN_REPOSITORY="http://localhost:8081/nexus/content/repositories
 ac_add_options --disable-compile-environment
 unset HOST_CC
 unset HOST_CXX
+unset RUSTC
+unset CARGO
 
 ac_add_options --disable-tests
 
@@ -41,7 +43,5 @@ STRIP_FLAGS="--strip-debug"
 
 export MOZILLA_OFFICIAL=1
 export MOZ_TELEMETRY_REPORTING=1
-
-MOZ_ANDROID_GECKOLIBS_AAR=1
 
 . "$topsrcdir/mobile/android/config/mozconfigs/common.override"

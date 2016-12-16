@@ -105,7 +105,7 @@
     function promiseEnterStringIntoFindField(str) {
       let promise = promiseFindResult(str);
       for (let i = 0; i < str.length; i++) {
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, str.charCodeAt(i));
         gFindBar._findField.inputField.dispatchEvent(event);
@@ -114,7 +114,7 @@
     }
   ]]></script>
   <textbox id="textbox"/>
-  <browser type="content-primary" flex="1" id="content" src="about:blank"/>
-  <browser type="content-primary" flex="1" id="content-remote" remote="true" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content-remote" remote="true" src="about:blank"/>
   <findbar id="FindToolbar" browserid="content"/>
 </window>

@@ -124,11 +124,28 @@ GainNode::GainNode(AudioContext* aContext)
 {
   GainNodeEngine* engine = new GainNodeEngine(this, aContext->Destination());
   mStream = AudioNodeStream::Create(aContext, engine,
-                                    AudioNodeStream::NO_STREAM_FLAGS);
+                                    AudioNodeStream::NO_STREAM_FLAGS,
+                                    aContext->Graph());
 }
 
-GainNode::~GainNode()
+/* static */ already_AddRefed<GainNode>
+GainNode::Create(AudioContext& aAudioContext,
+                 const GainOptions& aOptions,
+                 ErrorResult& aRv)
 {
+  if (aAudioContext.CheckClosed(aRv)) {
+    return nullptr;
+  }
+
+  RefPtr<GainNode> audioNode = new GainNode(&aAudioContext);
+
+  audioNode->Initialize(aOptions, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  audioNode->Gain()->SetValue(aOptions.mGain);
+  return audioNode.forget();
 }
 
 size_t

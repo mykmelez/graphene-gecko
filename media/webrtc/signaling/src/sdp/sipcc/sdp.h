@@ -49,6 +49,9 @@
 #define SDP_SDESCRIPTIONS_KEY_SIZE_UNKNOWN      0
 #define SDP_SRTP_CRYPTO_SELECTION_FLAGS_UNKNOWN 0
 
+/* Max number of fmtp redundant encodings */
+#define SDP_FMTP_MAX_REDUNDANT_ENCODINGS 128
+
 /*
  * SRTP_CONTEXT_SET_*
  *  Set a SRTP Context field flag
@@ -709,6 +712,18 @@ typedef struct sdp_fmtp {
     /* H.263 codec requires annex K,N and P to have values */
     uint16_t                       annex_k_val;
     uint16_t                       annex_n_val;
+
+    /* RFC 5109 Section 4.2 for specifying redundant encodings */
+    uint8_t              redundant_encodings[SDP_FMTP_MAX_REDUNDANT_ENCODINGS];
+
+    /* RFC 2833 Section 3.9 (4733) for specifying support DTMF tones:
+       The list of values consists of comma-separated elements, which
+       can be either a single decimal number or two decimal numbers
+       separated by a hyphen (dash), where the second number is larger
+       than the first. No whitespace is allowed between numbers or
+       hyphens. The list does not have to be sorted.
+     */
+    char                 dtmf_tones[SDP_MAX_STRING_LEN+1];
 
     /* Annex P can take one or more values in the range 1-4 . e.g P=1,3 */
     uint16_t                       annex_p_val_picture_resize; /* 1 = four; 2 = sixteenth */

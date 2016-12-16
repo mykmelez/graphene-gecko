@@ -53,11 +53,13 @@ public:
   static already_AddRefed<nsNullPrincipal> CreateWithInheritedAttributes(nsIDocShell* aDocShell);
 
   static already_AddRefed<nsNullPrincipal>
-  Create(const mozilla::PrincipalOriginAttributes& aOriginAttributes = mozilla::PrincipalOriginAttributes());
+  Create(const mozilla::PrincipalOriginAttributes& aOriginAttributes = mozilla::PrincipalOriginAttributes(),
+         nsIURI* aURI = nullptr);
 
-  nsresult Init(const mozilla::PrincipalOriginAttributes& aOriginAttributes = mozilla::PrincipalOriginAttributes());
+  nsresult Init(const mozilla::PrincipalOriginAttributes& aOriginAttributes = mozilla::PrincipalOriginAttributes(),
+                nsIURI* aURI = nullptr);
 
-  virtual void GetScriptLocation(nsACString &aStr) override;
+  virtual nsresult GetScriptLocation(nsACString &aStr) override;
 
   PrincipalKind Kind() override { return eNullPrincipal; }
 

@@ -18,7 +18,7 @@
 #include "mozilla/CondVar.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/ErrorNames.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/quota/QuotaObject.h"
 
 #include "mozIStorageAggregateFunction.h"
@@ -58,8 +58,10 @@ mozilla::LazyLogModule gStorageLog("mozStorage");
 #define CHECK_MAINTHREAD_ABUSE() \
   do { \
     nsCOMPtr<nsIThread> mainThread = do_GetMainThread(); \
-    NS_WARN_IF_FALSE(threadOpenedOn == mainThread || !NS_IsMainThread(), \
-               "Using Storage synchronous API on main-thread, but the connection was opened on another thread."); \
+    NS_WARNING_ASSERTION( \
+      threadOpenedOn == mainThread || !NS_IsMainThread(), \
+      "Using Storage synchronous API on main-thread, but the connection was " \
+      "opened on another thread."); \
   } while(0)
 #else
 #define CHECK_MAINTHREAD_ABUSE() do { /* Nothing */ } while(0)
@@ -192,10 +194,39 @@ Module gModules[] = {
 ////////////////////////////////////////////////////////////////////////////////
 //// Local Functions
 
-void tracefunc (void *aClosure, const char *aStmt)
+int tracefunc (unsigned aReason, void *aClosure, void *aP, void *aX)
 {
-  MOZ_LOG(gStorageLog, LogLevel::Debug, ("sqlite3_trace on %p for '%s'", aClosure,
-                                     aStmt));
+  switch (aReason) {
+    case SQLITE_TRACE_STMT: {
+      // aP is a pointer to the prepared statement.
+      sqlite3_stmt* stmt = static_cast<sqlite3_stmt*>(aP);
+      // aX is a pointer to a string containing the unexpanded SQL or a comment,
+      // starting with "--"" in case of a trigger.
+      char* expanded = static_cast<char*>(aX);
+      // Simulate what sqlite_trace was doing.
+      if (!::strncmp(expanded, "--", 2)) {
+        MOZ_LOG(gStorageLog, LogLevel::Debug,
+          ("TRACE_STMT on %p: '%s'", aClosure, expanded));
+      } else {
+        char* sql = ::sqlite3_expanded_sql(stmt);
+        MOZ_LOG(gStorageLog, LogLevel::Debug,
+          ("TRACE_STMT on %p: '%s'", aClosure, sql));
+        ::sqlite3_free(sql);
+      }
+      break;
+    }
+    case SQLITE_TRACE_PROFILE: {
+      // aX is pointer to a 64bit integer containing nanoseconds it took to
+      // execute the last command.
+      sqlite_int64 time = *(static_cast<sqlite_int64*>(aX)) / 1000000;
+      if (time > 0) {
+        MOZ_LOG(gStorageLog, LogLevel::Debug,
+          ("TRACE_TIME on %p: %dms", aClosure, time));
+      }
+      break;
+    }
+  }
+  return 0;
 }
 
 void
@@ -358,7 +389,7 @@ public:
   {
   }
 
-  NS_METHOD Run()
+  NS_IMETHOD Run() override
   {
 #ifdef DEBUG
     // This code is executed on the background thread
@@ -384,7 +415,7 @@ public:
     return NS_OK;
   }
 
-  ~AsyncCloseConnection() {
+  ~AsyncCloseConnection() override {
     NS_ReleaseOnMainThread(mConnection.forget());
     NS_ReleaseOnMainThread(mCallbackEvent.forget());
   }
@@ -423,8 +454,8 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
   }
 
-  NS_IMETHOD Run() {
-    MOZ_ASSERT (NS_GetCurrentThread() == mClone->getAsyncExecutionTarget());
+  NS_IMETHOD Run() override {
+    MOZ_ASSERT (NS_GetCurrentThread() == mConnection->getAsyncExecutionTarget());
 
     nsresult rv = mConnection->initializeClone(mClone, mReadOnly);
     if (NS_FAILED(rv)) {
@@ -442,7 +473,7 @@ private:
     return mClone->threadOpenedOn->Dispatch(event, NS_DISPATCH_NORMAL);
   }
 
-  ~AsyncInitializeClone() {
+  ~AsyncInitializeClone() override {
     nsCOMPtr<nsIThread> thread;
     DebugOnly<nsresult> rv = NS_GetMainThread(getter_AddRefs(thread));
     MOZ_ASSERT(NS_SUCCEEDED(rv));
@@ -470,7 +501,8 @@ private:
 
 Connection::Connection(Service *aService,
                        int aFlags,
-                       bool aAsyncOnly)
+                       bool aAsyncOnly,
+                       bool aIgnoreLockingMode)
 : sharedAsyncExecutionMutex("Connection::sharedAsyncExecutionMutex")
 , sharedDBMutex("Connection::sharedDBMutex")
 , threadOpenedOn(do_GetCurrentThread())
@@ -483,9 +515,12 @@ Connection::Connection(Service *aService,
 , mTransactionInProgress(false)
 , mProgressHandler(nullptr)
 , mFlags(aFlags)
+, mIgnoreLockingMode(aIgnoreLockingMode)
 , mStorageService(aService)
 , mAsyncOnly(aAsyncOnly)
 {
+  MOZ_ASSERT(!mIgnoreLockingMode || mFlags & SQLITE_OPEN_READONLY,
+             "Can't ignore locking for a non-readonly connection!");
   mStorageService->registerConnection(this);
 }
 
@@ -575,6 +610,7 @@ nsresult
 Connection::initialize()
 {
   NS_ASSERTION (!mDBConn, "Initialize called on already opened database!");
+  MOZ_ASSERT(!mIgnoreLockingMode, "Can't ignore locking on an in-memory db.");
   PROFILER_LABEL("mozStorageConnection", "initialize",
     js::ProfileEntry::Category::STORAGE);
 
@@ -608,8 +644,15 @@ Connection::initialize(nsIFile *aDatabaseFile)
   nsresult rv = aDatabaseFile->GetPath(path);
   NS_ENSURE_SUCCESS(rv, rv);
 
+#ifdef XP_WIN
+  static const char* sIgnoreLockingVFS = "win32-none";
+#else
+  static const char* sIgnoreLockingVFS = "unix-none";
+#endif
+  const char* vfs = mIgnoreLockingMode ? sIgnoreLockingVFS : nullptr;
+
   int srv = ::sqlite3_open_v2(NS_ConvertUTF16toUTF8(path).get(), &mDBConn,
-                              mFlags, nullptr);
+                              mFlags, vfs);
   if (srv != SQLITE_OK) {
     mDBConn = nullptr;
     return convertResultCode(srv);
@@ -687,7 +730,9 @@ Connection::initializeInternal()
   // SQLite tracing can slow down queries (especially long queries)
   // significantly. Don't trace unless the user is actively monitoring SQLite.
   if (MOZ_LOG_TEST(gStorageLog, LogLevel::Debug)) {
-    ::sqlite3_trace(mDBConn, tracefunc, this);
+    ::sqlite3_trace_v2(mDBConn,
+                       SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE,
+                       tracefunc, this);
 
     MOZ_LOG(gStorageLog, LogLevel::Debug, ("Opening connection to '%s' (%p)",
                                         mTelemetryFilename.get(), this));
@@ -716,6 +761,10 @@ Connection::initializeInternal()
     mDBConn = nullptr;
     return convertResultCode(srv);
   }
+
+#if defined(MOZ_MEMORY_TEMP_STORE_PRAGMA)
+  (void)ExecuteSimpleSQL(NS_LITERAL_CSTRING("PRAGMA temp_store = 2;"));
+#endif
 
   // Register our built-in SQL functions.
   srv = registerFunctions(mDBConn);
@@ -1318,7 +1367,10 @@ Connection::AsyncClone(bool aReadOnly,
 
   RefPtr<AsyncInitializeClone> initEvent =
     new AsyncInitializeClone(this, clone, aReadOnly, aCallback);
-  nsCOMPtr<nsIEventTarget> target = clone->getAsyncExecutionTarget();
+  // Dispatch to our async thread, since the originating connection must remain
+  // valid and open for the whole cloning process.  This also ensures we are
+  // properly serialized with a `close` operation, rather than race with it.
+  nsCOMPtr<nsIEventTarget> target = getAsyncExecutionTarget();
   if (!target) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -1367,15 +1419,15 @@ Connection::initializeClone(Connection* aClone, bool aReadOnly)
     "wal_autocheckpoint",
     "busy_timeout"
   };
-  for (uint32_t i = 0; i < ArrayLength(pragmas); ++i) {
+  for (auto& pragma : pragmas) {
     // Read-only connections just need cache_size and temp_store pragmas.
-    if (aReadOnly && ::strcmp(pragmas[i], "cache_size") != 0 &&
-                     ::strcmp(pragmas[i], "temp_store") != 0) {
+    if (aReadOnly && ::strcmp(pragma, "cache_size") != 0 &&
+                     ::strcmp(pragma, "temp_store") != 0) {
       continue;
     }
 
     nsAutoCString pragmaQuery("PRAGMA ");
-    pragmaQuery.Append(pragmas[i]);
+    pragmaQuery.Append(pragma);
     nsCOMPtr<mozIStorageStatement> stmt;
     rv = CreateStatement(pragmaQuery, getter_AddRefs(stmt));
     MOZ_ASSERT(NS_SUCCEEDED(rv));
@@ -1929,8 +1981,8 @@ Connection::EnableModule(const nsACString& aModuleName)
 {
   if (!mDBConn) return NS_ERROR_NOT_INITIALIZED;
 
-  for (size_t i = 0; i < ArrayLength(gModules); i++) {
-    struct Module* m = &gModules[i];
+  for (auto& gModule : gModules) {
+    struct Module* m = &gModule;
     if (aModuleName.Equals(m->name)) {
       int srv = m->registerFunc(mDBConn, m->name);
       if (srv != SQLITE_OK)

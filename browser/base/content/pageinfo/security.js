@@ -15,15 +15,12 @@ var security = {
   },
 
   // Display the server certificate (static)
-  viewCert : function () {
+  viewCert : function() {
     var cert = security._cert;
     viewCertHelper(window, cert);
   },
 
   _getSecurityInfo : function() {
-    const nsIX509Cert = Components.interfaces.nsIX509Cert;
-    const nsIX509CertDB = Components.interfaces.nsIX509CertDB;
-    const nsX509CertDB = "@mozilla.org/security/x509certdb;1";
     const nsISSLStatusProvider = Components.interfaces.nsISSLStatusProvider;
     const nsISSLStatus = Components.interfaces.nsISSLStatus;
 
@@ -65,7 +62,8 @@ var security = {
         isBroken : isBroken,
         isMixed : isMixed,
         isEV : isEV,
-        cert : cert
+        cert : cert,
+        certificateTransparency : undefined
       };
 
       var version;
@@ -95,21 +93,41 @@ var security = {
           break;
       }
 
-      return retval;
-    } else {
-      return {
-        hostName : hostName,
-        cAName : "",
-        encryptionAlgorithm : "",
-        encryptionStrength : 0,
-        version: "",
-        isBroken : isBroken,
-        isMixed : isMixed,
-        isEV : isEV,
-        cert : null
+      // Select status text to display for Certificate Transparency.
+      switch (status.certificateTransparencyStatus) {
+        case nsISSLStatus.CERTIFICATE_TRANSPARENCY_NOT_APPLICABLE:
+          // CT compliance checks were not performed,
+          // do not display any status text.
+          retval.certificateTransparency = null;
+          break;
+        case nsISSLStatus.CERTIFICATE_TRANSPARENCY_NONE:
+          retval.certificateTransparency = "None";
+          break;
+        case nsISSLStatus.CERTIFICATE_TRANSPARENCY_OK:
+          retval.certificateTransparency = "OK";
+          break;
+        case nsISSLStatus.CERTIFICATE_TRANSPARENCY_UNKNOWN_LOG:
+          retval.certificateTransparency = "UnknownLog";
+          break;
+        case nsISSLStatus.CERTIFICATE_TRANSPARENCY_INVALID:
+          retval.certificateTransparency = "Invalid";
+          break;
+      }
 
-      };
+      return retval;
     }
+    return {
+      hostName : hostName,
+      cAName : "",
+      encryptionAlgorithm : "",
+      encryptionStrength : 0,
+      version: "",
+      isBroken : isBroken,
+      isMixed : isMixed,
+      isEV : isEV,
+      cert : null,
+      certificateTransparency : null
+    };
   },
 
   // Find the secureBrowserUI object (if present)
@@ -178,9 +196,7 @@ function securityOnLoad(uri, windowInfo) {
     document.getElementById("securityTab").hidden = true;
     return;
   }
-  else {
-    document.getElementById("securityTab").hidden = false;
-  }
+  document.getElementById("securityTab").hidden = false;
 
   const pageInfoBundle = document.getElementById("pageinfobundle");
 
@@ -236,7 +252,7 @@ function securityOnLoad(uri, windowInfo) {
           realmHasPasswords(uri) ? yesStr : noStr);
 
   var visitCount = previousVisitCount(info.hostName);
-  if(visitCount > 1) {
+  if (visitCount > 1) {
     setText("security-privacy-history-value",
             pageInfoBundle.getFormattedString("securityNVisits", [visitCount.toLocaleString()]));
   }
@@ -287,6 +303,16 @@ function securityOnLoad(uri, windowInfo) {
   setText("security-technical-shortform", hdr);
   setText("security-technical-longform1", msg1);
   setText("security-technical-longform2", msg2);
+
+  const ctStatus =
+    document.getElementById("security-technical-certificate-transparency");
+  if (info.certificateTransparency) {
+    ctStatus.hidden = false;
+    ctStatus.value = pkiBundle.getString(
+      "pageInfo_CertificateTransparency_" + info.certificateTransparency);
+  } else {
+    ctStatus.hidden = true;
+  }
 }
 
 function setText(id, value)

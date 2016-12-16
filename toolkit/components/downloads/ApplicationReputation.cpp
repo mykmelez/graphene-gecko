@@ -7,7 +7,7 @@
 // https://wiki.mozilla.org/Security/Features/Application_Reputation_Design_Doc
 // for a description of Chrome's implementation of this feature.
 #include "ApplicationReputation.h"
-#include "csd.pb.h"
+#include "chrome/common/safe_browsing/csd.pb.h"
 
 #include "nsIArray.h"
 #include "nsIApplicationReputation.h"
@@ -27,6 +27,7 @@
 #include "nsIX509CertDB.h"
 #include "nsIX509CertList.h"
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ErrorNames.h"
 #include "mozilla/LoadContext.h"
@@ -51,7 +52,9 @@
 #include "nsILoadInfo.h"
 #include "nsContentUtils.h"
 
+using mozilla::ArrayLength;
 using mozilla::BasePrincipal;
+using mozilla::DocShellOriginAttributes;
 using mozilla::PrincipalOriginAttributes;
 using mozilla::Preferences;
 using mozilla::TimeStamp;
@@ -89,13 +92,15 @@ class PendingDBLookup;
 // created by ApplicationReputationService, it is guaranteed to call mCallback.
 // This class is private to ApplicationReputationService.
 class PendingLookup final : public nsIStreamListener,
-                            public nsITimerCallback
+                            public nsITimerCallback,
+                            public nsIObserver
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSIOBSERVER
 
   // Constructor and destructor.
   PendingLookup(nsIApplicationReputationQuery* aQuery,
@@ -367,7 +372,8 @@ PendingDBLookup::HandleEvent(const nsACString& tables)
 
 NS_IMPL_ISUPPORTS(PendingLookup,
                   nsIStreamListener,
-                  nsIRequestObserver)
+                  nsIRequestObserver,
+                  nsIObserver)
 
 PendingLookup::PendingLookup(nsIApplicationReputationQuery* aQuery,
                              nsIApplicationReputationCallback* aCallback) :
@@ -384,6 +390,292 @@ PendingLookup::~PendingLookup()
   LOG(("Destroying pending lookup [this = %p]", this));
 }
 
+static const char16_t* kBinaryFileExtensions[] = {
+    // Extracted from the "File Type Policies" Chrome extension
+    //u".001",
+    //u".7z",
+    //u".ace",
+    //u".action", // Mac script
+    //u".ad", // Windows
+    u".ade", // MS Access
+    u".adp", // MS Access
+    u".apk", // Android package
+    u".app", // Executable application
+    u".application", // MS ClickOnce
+    u".appref-ms", // MS ClickOnce
+    //u".arc",
+    //u".arj",
+    u".as", // Mac archive
+    u".asp", // Windows Server script
+    u".asx", // Windows Media Player
+    //u".b64",
+    //u".balz",
+    u".bas", // Basic script
+    u".bash", // Linux shell
+    u".bat", // Windows shell
+    //u".bhx",
+    //u".bin",
+    u".bz", // Linux archive (bzip)
+    u".bz2", // Linux archive (bzip2)
+    u".bzip2", // Linux archive (bzip2)
+    u".cab", // Windows archive
+    u".cdr", // Mac disk image
+    u".cfg", // Windows
+    u".chi", // Windows Help
+    u".chm", // Windows Help
+    u".class", // Java
+    u".cmd", // Windows executable
+    u".com", // Windows executable
+    u".command", // Mac script
+    u".cpgz", // Mac archive
+    //u".cpio",
+    u".cpl", // Windows executable
+    u".crt", // Windows signed certificate
+    u".crx", // Chrome extensions
+    u".csh", // Linux shell
+    u".dart", // Mac disk image
+    u".dc42", // Apple DiskCopy Image
+    u".deb", // Linux package
+    u".dex", // Android
+    u".diskcopy42", // Apple DiskCopy Image
+    u".dll", // Windows executable
+    u".dmg", // Mac disk image
+    u".dmgpart", // Mac disk image
+    //u".docb", // MS Office
+    //u".docm", // MS Word
+    //u".docx", // MS Word
+    //u".dotm", // MS Word
+    //u".dott", // MS Office
+    u".drv", // Windows driver
+    u".dvdr", // Mac Disk image
+    u".efi", // Firmware
+    u".eml", // MS Outlook
+    u".exe", // Windows executable
+    //u".fat",
+    u".fon", // Windows font
+    u".fxp", // MS FoxPro
+    u".gadget", // Windows
+    u".grp", // Windows
+    u".gz", // Linux archive (gzip)
+    u".gzip", // Linux archive (gzip)
+    u".hfs", // Mac disk image
+    u".hlp", // Windows Help
+    u".hqx", // Mac archive
+    u".hta", // HTML trusted application
+    u".htt", // MS HTML template
+    u".img", // Mac disk image
+    u".imgpart", // Mac disk image
+    u".inf", // Windows installer
+    u".ini", // Generic config file
+    u".ins", // IIS config
+    //u".inx", // InstallShield
+    u".iso", // CD image
+    u".isp", // IIS config
+    //u".isu", // InstallShield
+    u".jar", // Java
+    u".jnlp", // Java
+    //u".job", // Windows
+    u".js", // JavaScript script
+    u".jse", // JScript
+    u".ksh", // Linux shell
+    //u".lha",
+    u".lnk", // Windows
+    u".local", // Windows
+    //u".lpaq1",
+    //u".lpaq5",
+    //u".lpaq8",
+    //u".lzh",
+    //u".lzma",
+    u".mad", // MS Access
+    u".maf", // MS Access
+    u".mag", // MS Access
+    u".mam", // MS Access
+    u".manifest", // Windows
+    u".maq", // MS Access
+    u".mar", // MS Access
+    u".mas", // MS Access
+    u".mat", // MS Access
+    u".mau", // Media attachment
+    u".mav", // MS Access
+    u".maw", // MS Access
+    u".mda", // MS Access
+    u".mdb", // MS Access
+    u".mde", // MS Access
+    u".mdt", // MS Access
+    u".mdw", // MS Access
+    u".mdz", // MS Access
+    u".mht", // MS HTML
+    u".mhtml", // MS HTML
+    u".mim", // MS Mail
+    u".mmc", // MS Office
+    u".mof", // Windows
+    u".mpkg", // Mac installer
+    u".msc", // Windows executable
+    u".msg", // MS Outlook
+    u".msh", // Windows shell
+    u".msh1", // Windows shell
+    u".msh1xml", // Windows shell
+    u".msh2", // Windows shell
+    u".msh2xml", // Windows shell
+    u".mshxml", // Windows
+    u".msi", // Windows installer
+    u".msp", // Windows installer
+    u".mst", // Windows installer
+    u".ndif", // Mac disk image
+    //u".ntfs", // 7z
+    u".ocx", // ActiveX
+    u".ops", // MS Office
+    //u".out", // Linux binary
+    //u".paf", // PortableApps package
+    //u".paq8f",
+    //u".paq8jd",
+    //u".paq8l",
+    //u".paq8o",
+    u".partial", // Downloads
+    u".pax", // Mac archive
+    u".pcd", // Microsoft Visual Test
+    u".pdf", // Adobe Acrobat
+    //u".pea",
+    u".pet", // Linux package
+    u".pif", // Windows
+    u".pkg", // Mac installer
+    u".pl", // Perl script
+    u".plg", // MS Visual Studio
+    //u".potx", // MS PowerPoint
+    //u".ppam", // MS PowerPoint
+    //u".ppsx", // MS PowerPoint
+    //u".pptm", // MS PowerPoint
+    //u".pptx", // MS PowerPoint
+    u".prf", // MS Outlook
+    u".prg", // Windows
+    u".ps1", // Windows shell
+    u".ps1xml", // Windows shell
+    u".ps2", // Windows shell
+    u".ps2xml", // Windows shell
+    u".psc1", // Windows shell
+    u".psc2", // Windows shell
+    u".pst", // MS Outlook
+    u".pup", // Linux package
+    u".py", // Python script
+    u".pyc", // Python binary
+    u".pyw", // Python GUI
+    //u".quad",
+    //u".r00",
+    //u".r01",
+    //u".r02",
+    //u".r03",
+    //u".r04",
+    //u".r05",
+    //u".r06",
+    //u".r07",
+    //u".r08",
+    //u".r09",
+    //u".r10",
+    //u".r11",
+    //u".r12",
+    //u".r13",
+    //u".r14",
+    //u".r15",
+    //u".r16",
+    //u".r17",
+    //u".r18",
+    //u".r19",
+    //u".r20",
+    //u".r21",
+    //u".r22",
+    //u".r23",
+    //u".r24",
+    //u".r25",
+    //u".r26",
+    //u".r27",
+    //u".r28",
+    //u".r29",
+    //u".rar",
+    u".rb", // Ruby script
+    u".reg", // Windows Registry
+    u".rels", // MS Office
+    //u".rgs", // Windows Registry
+    u".rpm", // Linux package
+    //u".rtf", // MS Office
+    //u".run", // Linux shell
+    u".scf", // Windows shell
+    u".scr", // Windows
+    u".sct", // Windows shell
+    u".search-ms", // Windows
+    u".sh", // Linux shell
+    u".shar", // Linux shell
+    u".shb", // Windows
+    u".shs", // Windows shell
+    //u".sldm", // MS PowerPoint
+    //u".sldx", // MS PowerPoint
+    u".slp", // Linux package
+    u".smi", // Mac disk image
+    u".sparsebundle", // Mac disk image
+    u".sparseimage", // Mac disk image
+    u".spl", // Adobe Flash
+    //u".squashfs",
+    u".svg",
+    u".swf", // Adobe Flash
+    u".swm", // Windows Imaging
+    u".sys", // Windows
+    u".tar", // Linux archive
+    u".taz", // Linux archive (bzip2)
+    u".tbz", // Linux archive (bzip2)
+    u".tbz2", // Linux archive (bzip2)
+    u".tcsh", // Linux shell
+    u".tgz", // Linux archive (gzip)
+    //u".toast", // Roxio disk image
+    //u".torrent", // Bittorrent
+    u".tpz", // Linux archive (gzip)
+    u".txz", // Linux archive (xz)
+    u".tz", // Linux archive (gzip)
+    //u".u3p", // U3 Smart Apps
+    u".udf", // MS Excel
+    u".udif", // Mac disk image
+    u".url", // Windows
+    //u".uu",
+    //u".uue",
+    u".vb", // Visual Basic script
+    u".vbe", // Visual Basic script
+    u".vbs", // Visual Basic script
+    //u".vbscript", // Visual Basic script
+    u".vhd", // Windows virtual hard drive
+    u".vhdx", // Windows virtual hard drive
+    u".vmdk", // VMware virtual disk
+    u".vsd", // MS Visio
+    u".vsmacros", // MS Visual Studio
+    u".vss", // MS Visio
+    u".vst", // MS Visio
+    u".vsw", // MS Visio
+    u".website",  // Windows
+    u".wim", // Windows Imaging
+    //u".workflow", // Mac Automator
+    //u".wrc", // FreeArc archive
+    u".ws", // Windows script
+    u".wsc", // Windows script
+    u".wsf", // Windows script
+    u".wsh", // Windows script
+    u".xar", // MS Excel
+    u".xbap", // XAML Browser Application
+    u".xip", // Mac archive
+    //u".xlsm", // MS Excel
+    //u".xlsx", // MS Excel
+    //u".xltm", // MS Excel
+    //u".xltx", // MS Excel
+    u".xml",
+    u".xnk", // MS Exchange
+    u".xrm-ms", // Windows
+    u".xsl", // XML Stylesheet
+    //u".xxe",
+    u".xz", // Linux archive (xz)
+    u".z", // InstallShield
+#ifdef XP_WIN // disable on Mac/Linux, see 1167493
+    u".zip", // Generic archive
+#endif
+    u".zipx", // WinZip
+    //u".zpaq",
+};
+
 bool
 PendingLookup::IsBinaryFile()
 {
@@ -395,48 +687,44 @@ PendingLookup::IsBinaryFile()
   }
   LOG(("Suggested filename: %s [this = %p]",
        NS_ConvertUTF16toUTF8(fileName).get(), this));
-  return
-    // From https://code.google.com/p/chromium/codesearch#chromium/src/chrome/common/safe_browsing/download_protection_util.cc&l=14
-    // Archives _may_ contain binaries
-#ifdef XP_WIN // disable on Mac/Linux, see 1167493
-    StringEndsWith(fileName, NS_LITERAL_STRING(".zip")) ||
-#endif
-    // Android extensions
-    StringEndsWith(fileName, NS_LITERAL_STRING(".apk")) ||
-    // Windows extensions
-    StringEndsWith(fileName, NS_LITERAL_STRING(".bas")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".bat")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".cab")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".cmd")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".com")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".exe")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".hta")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".msi")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".pif")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".reg")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".scr")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".vb")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".vbs")) ||
-    // Mac extensions
-    StringEndsWith(fileName, NS_LITERAL_STRING(".app")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".dmg")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".osx")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".pkg"));
+
+  for (size_t i = 0; i < ArrayLength(kBinaryFileExtensions); ++i) {
+    if (StringEndsWith(fileName, nsDependentString(kBinaryFileExtensions[i]))) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 ClientDownloadRequest::DownloadType
 PendingLookup::GetDownloadType(const nsAString& aFilename) {
   MOZ_ASSERT(IsBinaryFile());
 
-  // From https://code.google.com/p/chromium/codesearch#chromium/src/chrome/common/safe_browsing/download_protection_util.cc&l=46
+  // From https://cs.chromium.org/chromium/src/chrome/common/safe_browsing/download_protection_util.cc?l=17
   if (StringEndsWith(aFilename, NS_LITERAL_STRING(".zip"))) {
     return ClientDownloadRequest::ZIPPED_EXECUTABLE;
   } else if (StringEndsWith(aFilename, NS_LITERAL_STRING(".apk"))) {
     return ClientDownloadRequest::ANDROID_APK;
   } else if (StringEndsWith(aFilename, NS_LITERAL_STRING(".app")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".cdr")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".dart")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".dc42")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".diskcopy42")) ||
              StringEndsWith(aFilename, NS_LITERAL_STRING(".dmg")) ||
-             StringEndsWith(aFilename, NS_LITERAL_STRING(".osx")) ||
-             StringEndsWith(aFilename, NS_LITERAL_STRING(".pkg"))) {
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".dmgpart")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".dvdr")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".img")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".imgpart")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".iso")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".mpkg")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".ndif")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".pkg")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".smi")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".sparsebundle")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".sparseimage")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".toast")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".udif"))) {
     return ClientDownloadRequest::MAC_EXECUTABLE;
   }
 
@@ -996,6 +1284,7 @@ PendingLookup::SendRemoteQueryInternal()
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel, &rv));
   NS_ENSURE_SUCCESS(rv, rv);
+  mozilla::Unused << httpChannel;
 
   // Upload the protobuf to the application reputation service.
   nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(mChannel, &rv);
@@ -1008,8 +1297,9 @@ PendingLookup::SendRemoteQueryInternal()
 
   // Set the Safebrowsing cookie jar, so that the regular Google cookie is not
   // sent with this request. See bug 897516.
-  nsCOMPtr<nsIInterfaceRequestor> loadContext =
-    new mozilla::LoadContext(NECKO_SAFEBROWSING_APP_ID);
+  DocShellOriginAttributes attrs;
+  attrs.mAppId = NECKO_SAFEBROWSING_APP_ID;
+  nsCOMPtr<nsIInterfaceRequestor> loadContext = new mozilla::LoadContext(attrs);
   rv = mChannel->SetNotificationCallbacks(loadContext);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1035,9 +1325,27 @@ PendingLookup::Notify(nsITimer* aTimer)
   return NS_OK;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// nsIObserver implementation
+NS_IMETHODIMP
+PendingLookup::Observe(nsISupports *aSubject, const char *aTopic,
+                       const char16_t *aData)
+{
+  if (!strcmp(aTopic, "quit-application")) {
+    if (mTimeoutTimer) {
+      mTimeoutTimer->Cancel();
+      mTimeoutTimer = nullptr;
+    }
+    if (mChannel) {
+      mChannel->Cancel(NS_ERROR_ABORT);
+    }
+  }
+  return NS_OK;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //// nsIStreamListener
-static NS_METHOD
+static nsresult
 AppendSegmentToString(nsIInputStream* inputStream,
                       void *closure,
                       const char *rawSegment,
@@ -1232,5 +1540,13 @@ nsresult ApplicationReputationService::QueryReputationInternal(
   RefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
   NS_ENSURE_STATE(lookup);
 
+  // Add an observer for shutdown
+  nsCOMPtr<nsIObserverService> observerService =
+    mozilla::services::GetObserverService();
+  if (!observerService) {
+    return NS_ERROR_FAILURE;
+  }
+
+  observerService->AddObserver(lookup, "quit-application", false);
   return lookup->StartLookup();
 }

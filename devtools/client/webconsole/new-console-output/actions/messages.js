@@ -9,18 +9,36 @@
 const {
   prepareMessage
 } = require("devtools/client/webconsole/new-console-output/utils/messages");
-
+const { IdGenerator } = require("devtools/client/webconsole/new-console-output/utils/id-generator");
+const { batchActions } = require("devtools/client/webconsole/new-console-output/actions/enhancers");
 const {
   MESSAGE_ADD,
   MESSAGES_CLEAR,
+  MESSAGE_OPEN,
+  MESSAGE_CLOSE,
+  MESSAGE_TYPE,
+  MESSAGE_TABLE_RECEIVE,
 } = require("../constants");
 
-function messageAdd(packet) {
-  let message = prepareMessage(packet);
-  return {
+const defaultIdGenerator = new IdGenerator();
+
+function messageAdd(packet, idGenerator = null) {
+  if (idGenerator == null) {
+    idGenerator = defaultIdGenerator;
+  }
+  let message = prepareMessage(packet, idGenerator);
+  const addMessageAction = {
     type: MESSAGE_ADD,
     message
   };
+
+  if (message.type === MESSAGE_TYPE.CLEAR) {
+    return batchActions([
+      messagesClear(),
+      addMessageAction,
+    ]);
+  }
+  return addMessageAction;
 }
 
 function messagesClear() {
@@ -29,5 +47,53 @@ function messagesClear() {
   };
 }
 
-exports.messageAdd = messageAdd;
-exports.messagesClear = messagesClear;
+function messageOpen(id) {
+  return {
+    type: MESSAGE_OPEN,
+    id
+  };
+}
+
+function messageClose(id) {
+  return {
+    type: MESSAGE_CLOSE,
+    id
+  };
+}
+
+function messageTableDataGet(id, client, dataType) {
+  return (dispatch) => {
+    let fetchObjectActorData;
+    if (["Map", "WeakMap", "Set", "WeakSet"].includes(dataType)) {
+      fetchObjectActorData = (cb) => client.enumEntries(cb);
+    } else {
+      fetchObjectActorData = (cb) => client.enumProperties({
+        ignoreNonIndexedProperties: dataType === "Array"
+      }, cb);
+    }
+
+    fetchObjectActorData(enumResponse => {
+      const {iterator} = enumResponse;
+      iterator.slice(0, iterator.count, sliceResponse => {
+        let {ownProperties} = sliceResponse;
+        dispatch(messageTableDataReceive(id, ownProperties));
+      });
+    });
+  };
+}
+
+function messageTableDataReceive(id, data) {
+  return {
+    type: MESSAGE_TABLE_RECEIVE,
+    id,
+    data
+  };
+}
+
+module.exports = {
+  messageAdd,
+  messagesClear,
+  messageOpen,
+  messageClose,
+  messageTableDataGet,
+};

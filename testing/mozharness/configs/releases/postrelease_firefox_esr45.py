@@ -11,8 +11,11 @@ config = {
         "dest": "mozilla-esr45",
         "vcs": "hg",
     },
+    "vcs_share_base": "/builds/hg-shared",
     "push_dest": "ssh://hg.mozilla.org/releases/mozilla-esr45",
     "ignore_no_changes": True,
     "ssh_user": "ffxbld",
     "ssh_key": "~/.ssh/ffxbld_rsa",
+    "ship_it_root": "https://ship-it.mozilla.org",
+    "ship_it_username":  "ffxbld",
 }

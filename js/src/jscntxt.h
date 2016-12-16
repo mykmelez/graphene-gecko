@@ -11,7 +11,9 @@
 
 #include "mozilla/MemoryReporting.h"
 
+#include "js/CharacterEncoding.h"
 #include "js/GCVector.h"
+#include "js/Result.h"
 #include "js/Vector.h"
 #include "vm/Caches.h"
 #include "vm/Runtime.h"
@@ -66,7 +68,7 @@ TraceCycleDetectionSet(JSTracer* trc, AutoCycleDetector::Set& set);
 
 struct AutoResolving;
 
-namespace frontend { struct CompileError; }
+namespace frontend { class CompileError; }
 
 /*
  * Execution Context Overview:
@@ -99,14 +101,13 @@ class ExclusiveContext : public ContextFriendFields,
     friend struct StackBaseShape;
     friend void JSScript::initCompartment(ExclusiveContext* cx);
     friend class jit::JitContext;
-    friend class Activation;
+
+    // runtime_ is private to hide it from JSContext. JSContext inherits from
+    // JSRuntime, so it's more efficient to use the base class.
+    JSRuntime* const runtime_;
 
     // The thread on which this context is running, if this is not a JSContext.
     HelperThread* helperThread_;
-
-    // Hide runtime_ from JSContext. JSContext inherits from JSRuntime, so it's
-    // more efficient to use |this|.
-    using ContextFriendFields::runtime_;
 
   public:
     enum ContextKind {
@@ -163,6 +164,10 @@ class ExclusiveContext : public ContextFriendFields,
         return options_;
     }
 
+    bool runtimeMatches(JSRuntime* rt) const {
+        return runtime_ == rt;
+    }
+
   protected:
     js::gc::ArenaLists* arenas_;
 
@@ -212,11 +217,12 @@ class ExclusiveContext : public ContextFriendFields,
     const JS::AsmJSCacheOps& asmJSCacheOps() { return runtime_->asmJSCacheOps; }
     PropertyName* emptyString() { return runtime_->emptyString; }
     FreeOp* defaultFreeOp() { return runtime_->defaultFreeOp(); }
-    void* runtimeAddressForJit() { return runtime_; }
+    void* contextAddressForJit() { return runtime_->unsafeContextFromAnyThread(); }
     void* runtimeAddressOfInterruptUint32() { return runtime_->addressOfInterruptUint32(); }
-    void* stackLimitAddress(StackKind kind) { return &runtime_->mainThread.nativeStackLimit[kind]; }
+    void* stackLimitAddress(StackKind kind) { return &nativeStackLimit[kind]; }
     void* stackLimitAddressForJitCode(StackKind kind);
-    uintptr_t stackLimit(StackKind kind) { return runtime_->mainThread.nativeStackLimit[kind]; }
+    uintptr_t stackLimit(StackKind kind) { return nativeStackLimit[kind]; }
+    uintptr_t stackLimitForJitCode(StackKind kind);
     size_t gcSystemPageSize() { return gc::SystemPageSize(); }
     bool jitSupportsFloatingPoint() const { return runtime_->jitSupportsFloatingPoint; }
     bool jitSupportsUnalignedAccesses() const { return runtime_->jitSupportsUnalignedAccesses; }
@@ -226,6 +232,10 @@ class ExclusiveContext : public ContextFriendFields,
     // Thread local data that may be accessed freely.
     DtoaState* dtoaState() {
         return perThreadData->dtoaState;
+    }
+
+    frontend::NameCollectionPool& frontendCollectionPool() {
+        return perThreadData->frontendCollectionPool;
     }
 
     /*
@@ -245,7 +255,9 @@ class ExclusiveContext : public ContextFriendFields,
      */
   protected:
     unsigned            enterCompartmentDepth_;
-    inline void setCompartment(JSCompartment* comp);
+
+    inline void setCompartment(JSCompartment* comp,
+                               const js::AutoLockForExclusiveAccess* maybeLock = nullptr);
   public:
     bool hasEnteredCompartment() const {
         return enterCompartmentDepth_ > 0;
@@ -256,9 +268,13 @@ class ExclusiveContext : public ContextFriendFields,
     }
 #endif
 
-    inline void enterCompartment(JSCompartment* c);
+    // If |c| or |oldCompartment| is the atoms compartment, the
+    // |exclusiveAccessLock| must be held.
+    inline void enterCompartment(JSCompartment* c,
+                                 const js::AutoLockForExclusiveAccess* maybeLock = nullptr);
     inline void enterNullCompartment();
-    inline void leaveCompartment(JSCompartment* oldCompartment);
+    inline void leaveCompartment(JSCompartment* oldCompartment,
+                                 const js::AutoLockForExclusiveAccess* maybeLock = nullptr);
 
     void setHelperThread(HelperThread* helperThread);
     HelperThread* helperThread() const { return helperThread_; }
@@ -266,8 +282,6 @@ class ExclusiveContext : public ContextFriendFields,
     // Threads with an ExclusiveContext may freely access any data in their
     // compartment and zone.
     JSCompartment* compartment() const {
-        MOZ_ASSERT_IF(runtime_->isAtomsCompartment(compartment_),
-                      runtime_->currentThreadHasExclusiveAccess());
         return compartment_;
     }
     JS::Zone* zone() const {
@@ -284,9 +298,6 @@ class ExclusiveContext : public ContextFriendFields,
     inline js::Handle<js::GlobalObject*> global() const;
 
     // Methods to access runtime data that must be protected by locks.
-    frontend::ParseMapPool& parseMapPool(AutoLockForExclusiveAccess& lock) {
-        return runtime_->parseMapPool(lock);
-    }
     AtomSet& atoms(js::AutoLockForExclusiveAccess& lock) {
         return runtime_->atoms(lock);
     }
@@ -304,6 +315,30 @@ class ExclusiveContext : public ContextFriendFields,
     bool addPendingCompileError(frontend::CompileError** err);
     void addPendingOverRecursed();
     void addPendingOutOfMemory();
+
+  private:
+    static JS::Error reportedError;
+    static JS::OOM reportedOOM;
+
+  public:
+    inline JS::Result<> boolToResult(bool ok);
+
+    /**
+     * Intentionally awkward signpost method that is stationed on the
+     * boundary between Result-using and non-Result-using code.
+     */
+    template <typename V, typename E>
+    bool resultToBool(JS::Result<V, E> result) {
+        return result.isOk();
+    }
+
+    template <typename V, typename E>
+    V* resultToPtr(JS::Result<V*, E> result) {
+        return result.isOk() ? result.unwrap() : nullptr;
+    }
+
+    mozilla::GenericErrorResult<JS::OOM&> alreadyReportedOOM();
+    mozilla::GenericErrorResult<JS::Error&> alreadyReportedError();
 };
 
 void ReportOverRecursed(JSContext* cx, unsigned errorNumber);
@@ -339,6 +374,9 @@ struct JSContext : public js::ExclusiveContext,
 
     static size_t offsetOfActivation() {
         return offsetof(JSContext, activation_);
+    }
+    static size_t offsetOfWasmActivation() {
+        return offsetof(JSContext, wasmActivationStack_);
     }
     static size_t offsetOfProfilingActivation() {
         return offsetof(JSContext, profilingActivation_);
@@ -385,6 +423,8 @@ struct JSContext : public js::ExclusiveContext,
     /* Client opaque pointer. */
     void* data;
 
+    void resetJitStackLimit();
+
   public:
 
     /*
@@ -396,6 +436,8 @@ struct JSContext : public js::ExclusiveContext,
      * Note: if this ever shows up in a profile, just add caching!
      */
     JSVersion findVersion() const;
+
+    void initJitStackLimit();
 
     JS::ContextOptions& options() {
         return options_;
@@ -411,8 +453,27 @@ struct JSContext : public js::ExclusiveContext,
 
     void updateJITEnabled();
 
-    /* Whether this context has JS frames on the stack. */
-    bool currentlyRunning() const;
+    /*
+     * Youngest frame of a saved stack that will be picked up as an async stack
+     * by any new Activation, and is nullptr when no async stack should be used.
+     *
+     * The JS::AutoSetAsyncStackForNewCalls class can be used to set this.
+     *
+     * New activations will reset this to nullptr on construction after getting
+     * the current value, and will restore the previous value on destruction.
+     */
+    JS::PersistentRooted<js::SavedFrame*> asyncStackForNewActivations;
+
+    /*
+     * Value of asyncCause to be attached to asyncStackForNewActivations.
+     */
+    const char* asyncCauseForNewActivations;
+
+    /*
+     * True if the async call was explicitly requested, e.g. via
+     * callFunctionWithAsyncStack.
+     */
+    bool asyncCallIsExplicit;
 
     bool currentlyRunningInInterpreter() const {
         return activation()->isInterpreter();
@@ -446,11 +507,11 @@ struct JSContext : public js::ExclusiveContext,
     }
 
     void minorGC(JS::gcreason::Reason reason) {
-        gc.minorGC(this, reason);
+        gc.minorGC(reason);
     }
 
   public:
-    bool isExceptionPending() {
+    bool isExceptionPending() const {
         return throwing;
     }
 
@@ -461,7 +522,7 @@ struct JSContext : public js::ExclusiveContext,
     bool isThrowingDebuggeeWouldRun();
     bool isClosingGenerator();
 
-    void setPendingException(js::Value v);
+    void setPendingException(const js::Value& v);
 
     void clearPendingException() {
         throwing = false;
@@ -482,7 +543,7 @@ struct JSContext : public js::ExclusiveContext,
 
     JS_FRIEND_API(size_t) sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
-    void mark(JSTracer* trc);
+    void trace(JSTracer* trc);
 
   private:
     /*
@@ -495,6 +556,17 @@ struct JSContext : public js::ExclusiveContext,
 }; /* struct JSContext */
 
 namespace js {
+
+inline JS::Result<>
+ExclusiveContext::boolToResult(bool ok)
+{
+    if (MOZ_LIKELY(ok)) {
+        MOZ_ASSERT_IF(isJSContext(), !asJSContext()->isExceptionPending());
+        MOZ_ASSERT_IF(isJSContext(), !asJSContext()->isPropagatingForcedReturn());
+        return JS::Ok();
+    }
+    return JS::Result<>(reportedError);
+}
 
 struct MOZ_RAII AutoResolving {
   public:
@@ -544,7 +616,9 @@ DestroyContext(JSContext* cx);
 
 enum ErrorArgumentsType {
     ArgumentsAreUnicode,
-    ArgumentsAreASCII
+    ArgumentsAreASCII,
+    ArgumentsAreLatin1,
+    ArgumentsAreUTF8
 };
 
 /*
@@ -558,7 +632,8 @@ SelfHostedFunction(JSContext* cx, HandlePropertyName propName);
 
 #ifdef va_start
 extern bool
-ReportErrorVA(JSContext* cx, unsigned flags, const char* format, va_list ap);
+ReportErrorVA(JSContext* cx, unsigned flags, const char* format,
+              ErrorArgumentsType argumentsType, va_list ap);
 
 extern bool
 ReportErrorNumberVA(JSContext* cx, unsigned flags, JSErrorCallback callback,
@@ -574,28 +649,29 @@ ReportErrorNumberUCArray(JSContext* cx, unsigned flags, JSErrorCallback callback
 extern bool
 ExpandErrorArgumentsVA(ExclusiveContext* cx, JSErrorCallback callback,
                        void* userRef, const unsigned errorNumber,
-                       char** message, ErrorArgumentsType argumentsType,
+                       const char16_t** messageArgs,
+                       ErrorArgumentsType argumentsType,
                        JSErrorReport* reportp, va_list ap);
 
 /* |callee| requires a usage string provided by JS_DefineFunctionsWithHelp. */
 extern void
-ReportUsageError(JSContext* cx, HandleObject callee, const char* msg);
+ReportUsageErrorASCII(JSContext* cx, HandleObject callee, const char* msg);
 
 /*
  * Prints a full report and returns true if the given report is non-nullptr
  * and the report doesn't have the JSREPORT_WARNING flag set or reportWarnings
  * is true.
- * Returns false otherwise, printing just the message if the report is nullptr.
+ * Returns false otherwise.
  */
 extern bool
-PrintError(JSContext* cx, FILE* file, const char* message, JSErrorReport* report,
-           bool reportWarnings);
+PrintError(JSContext* cx, FILE* file, JS::ConstUTF8CharsZ toStringResult,
+           JSErrorReport* report, bool reportWarnings);
 
 /*
  * Send a JSErrorReport to the warningReporter callback.
  */
 void
-CallWarningReporter(JSContext* cx, const char* message, JSErrorReport* report);
+CallWarningReporter(JSContext* cx, JSErrorReport* report);
 
 extern bool
 ReportIsNotDefined(JSContext* cx, HandlePropertyName name);
@@ -741,11 +817,7 @@ class MOZ_RAII AutoLockForExclusiveAccess
     void init(JSRuntime* rt) {
         runtime = rt;
         if (runtime->numExclusiveThreads) {
-            runtime->assertCanLock(ExclusiveAccessLock);
             runtime->exclusiveAccessLock.lock();
-#ifdef DEBUG
-            runtime->exclusiveAccessOwner = PR_GetCurrentThread();
-#endif
         } else {
             MOZ_ASSERT(!runtime->mainThreadHasExclusiveAccess);
 #ifdef DEBUG
@@ -769,10 +841,6 @@ class MOZ_RAII AutoLockForExclusiveAccess
     }
     ~AutoLockForExclusiveAccess() {
         if (runtime->numExclusiveThreads) {
-#ifdef DEBUG
-            MOZ_ASSERT(runtime->exclusiveAccessOwner == PR_GetCurrentThread());
-            runtime->exclusiveAccessOwner = nullptr;
-#endif
             runtime->exclusiveAccessLock.unlock();
         } else {
             MOZ_ASSERT(runtime->mainThreadHasExclusiveAccess);
@@ -784,6 +852,19 @@ class MOZ_RAII AutoLockForExclusiveAccess
 
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
+
+/*
+ * ExclusiveContext variants of encoding functions, for off-main-thread use.
+ * Refer to CharacterEncoding.h for details.
+ */
+extern JS::TwoByteCharsZ
+LossyUTF8CharsToNewTwoByteCharsZ(ExclusiveContext* cx, const JS::UTF8Chars utf8, size_t* outlen);
+
+extern JS::TwoByteCharsZ
+LossyUTF8CharsToNewTwoByteCharsZ(ExclusiveContext* cx, const JS::ConstUTF8CharsZ& utf8, size_t* outlen);
+
+extern JS::Latin1CharsZ
+LossyUTF8CharsToNewLatin1CharsZ(ExclusiveContext* cx, const JS::UTF8Chars utf8, size_t* outlen);
 
 } /* namespace js */
 

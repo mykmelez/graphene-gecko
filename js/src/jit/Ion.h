@@ -99,7 +99,7 @@ MethodStatus CanEnterUsingFastInvoke(JSContext* cx, HandleScript script, uint32_
 
 MethodStatus
 Recompile(JSContext* cx, HandleScript script, BaselineFrame* osrFrame, jsbytecode* osrPc,
-          bool constructing, bool force);
+          bool force);
 
 enum JitExecStatus
 {
@@ -153,9 +153,8 @@ CodeGenerator* GenerateCode(MIRGenerator* mir, LIRGraph* lir);
 CodeGenerator* CompileBackEnd(MIRGenerator* mir);
 
 void AttachFinishedCompilations(JSContext* cx);
-void FinishOffThreadBuilder(JSRuntime* runtime, IonBuilder* builder);
-void StopAllOffThreadCompilations(Zone* zone);
-void StopAllOffThreadCompilations(JSCompartment* comp);
+void FinishOffThreadBuilder(JSRuntime* runtime, IonBuilder* builder,
+                            const AutoLockHelperThreadState& lock);
 
 void LinkIonScript(JSContext* cx, HandleScript calleescript);
 uint8_t* LazyLinkTopActivation(JSContext* cx);

@@ -5,6 +5,7 @@ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
+var Cu = Components.utils;
 
 /**
  * Dummy nsIAutoCompleteInput source that returns
@@ -84,11 +85,6 @@ AutoCompleteResultBase.prototype = {
 
   defaultIndex: -1,
 
-  _typeAheadResult: false,
-  get typeAheadResult() {
-    return this._typeAheadResult;
-  },
-
   get matchCount() {
     return this._values.length;
   },
@@ -117,7 +113,7 @@ AutoCompleteResultBase.prototype = {
     return this._finalCompleteValues[aIndex] || this._values[aIndex];
   },
 
-  removeValueAt: function (aRowIndex, aRemoveFromDb) {},
+  removeValueAt: function(aRowIndex, aRemoveFromDb) {},
 
   // nsISupports implementation
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompleteResult])

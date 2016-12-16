@@ -104,7 +104,7 @@ def create_parser(mach_interface=False):
                  " Currently used for xperf only.")
     add_arg('--noShutdown', dest='shutdown', action='store_true',
             help="Record time browser takes to shutdown after testing")
-    add_arg('--setPref', action='append', default=[], dest="extraPrefs",
+    add_arg('--setpref', action='append', default=[], dest="extraPrefs",
             metavar="PREF=VALUE",
             help="defines an extra user preference")
     add_arg('--webServer', dest='webserver',
@@ -127,6 +127,8 @@ def create_parser(mach_interface=False):
                  ' the manifest')
     add_arg('--tpdelay', type=int,
             help="length of the pageloader delay")
+    add_arg('--no-download', action="store_true", dest="no_download",
+            help="Do not download the talos test pagesets")
     add_arg('--sourcestamp',
             help='Specify the hg revision or sourcestamp for the changeset'
                  ' we are testing.  This will use the value found in'

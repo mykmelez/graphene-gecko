@@ -21,7 +21,7 @@
 #include "nsReadLine.h"
 #include "nsIClassInfoImpl.h"
 #include "mozilla/ipc/InputStreamUtils.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/FileUtils.h"
 #include "nsNetCID.h"
 #include "nsXULAppAPI.h"
@@ -32,6 +32,9 @@ typedef mozilla::ipc::FileDescriptor::PlatformHandleType FileHandleType;
 
 using namespace mozilla::ipc;
 using mozilla::DebugOnly;
+using mozilla::Maybe;
+using mozilla::Nothing;
+using mozilla::Some;
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsFileStreamBase
@@ -161,6 +164,22 @@ nsFileStreamBase::GetLastModified(int64_t* _retval)
         *_retval = modTime / int64_t(PR_USEC_PER_MSEC);
     }
 
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFileStreamBase::GetFileDescriptor(PRFileDesc** _retval)
+{
+    nsresult rv = DoPendingOpen();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    if (!mFD) {
+        return NS_BASE_STREAM_CLOSED;
+    }
+
+    *_retval = mFD;
     return NS_OK;
 }
 
@@ -579,7 +598,7 @@ nsFileInputStream::Serialize(InputStreamParams& aParams,
 {
     FileInputStreamParams params;
 
-    if (mFD) {
+    if (NS_SUCCEEDED(DoPendingOpen()) && mFD) {
         FileHandleType fd = FileHandleType(PR_FileDesc2NativeHandle(mFD));
         NS_ASSERTION(fd, "This should never be null!");
 
@@ -629,7 +648,8 @@ nsFileInputStream::Deserialize(const InputStreamParams& aParams,
     FileDescriptor fd;
     if (fileDescriptorIndex < aFileDescriptors.Length()) {
         fd = aFileDescriptors[fileDescriptorIndex];
-        NS_WARN_IF_FALSE(fd.IsValid(), "Received an invalid file descriptor!");
+        NS_WARNING_ASSERTION(fd.IsValid(),
+                             "Received an invalid file descriptor!");
     } else {
         NS_WARNING("Received a bad file descriptor index!");
     }
@@ -659,6 +679,12 @@ nsFileInputStream::Deserialize(const InputStreamParams& aParams,
     mIOFlags = params.ioFlags();
 
     return true;
+}
+
+Maybe<uint64_t>
+nsFileInputStream::ExpectedSerializedLength()
+{
+    return Nothing();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -858,6 +884,13 @@ nsPartialFileInputStream::Deserialize(
     // XXX This is so broken. Main thread IO alert.
     return NS_SUCCEEDED(nsFileInputStream::Seek(NS_SEEK_SET, mStart));
 }
+
+Maybe<uint64_t>
+nsPartialFileInputStream::ExpectedSerializedLength()
+{
+    return Some(mLength);
+}
+
 
 nsresult
 nsPartialFileInputStream::DoPendingSeek()

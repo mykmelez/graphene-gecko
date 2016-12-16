@@ -7,8 +7,11 @@
 #ifndef frontend_BytecodeCompiler_h
 #define frontend_BytecodeCompiler_h
 
+#include "mozilla/Maybe.h"
+
 #include "NamespaceImports.h"
 
+#include "vm/Scope.h"
 #include "vm/String.h"
 
 class JSLinearString;
@@ -19,18 +22,24 @@ class LazyScript;
 class LifoAlloc;
 class ModuleObject;
 class ScriptSourceObject;
-class StaticScope;
 struct SourceCompressionTask;
 
 namespace frontend {
 
 JSScript*
-CompileScript(ExclusiveContext* cx, LifoAlloc* alloc,
-              HandleObject scopeChain, Handle<StaticScope*> enclosingStaticScope,
-              HandleScript evalCaller, const ReadOnlyCompileOptions& options,
-              SourceBufferHolder& srcBuf, JSString* source_ = nullptr,
-              SourceCompressionTask* extraSct = nullptr,
-              ScriptSourceObject** sourceObjectOut = nullptr);
+CompileGlobalScript(ExclusiveContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
+                    const ReadOnlyCompileOptions& options,
+                    SourceBufferHolder& srcBuf,
+                    SourceCompressionTask* extraSct = nullptr,
+                    ScriptSourceObject** sourceObjectOut = nullptr);
+
+JSScript*
+CompileEvalScript(ExclusiveContext* cx, LifoAlloc& alloc,
+                  HandleObject scopeChain, HandleScope enclosingScope,
+                  const ReadOnlyCompileOptions& options,
+                  SourceBufferHolder& srcBuf,
+                  SourceCompressionTask* extraSct = nullptr,
+                  ScriptSourceObject** sourceObjectOut = nullptr);
 
 ModuleObject*
 CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
@@ -38,36 +47,51 @@ CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
 
 ModuleObject*
 CompileModule(ExclusiveContext* cx, const ReadOnlyCompileOptions& options,
-              SourceBufferHolder& srcBuf, LifoAlloc* alloc,
+              SourceBufferHolder& srcBuf, LifoAlloc& alloc,
               ScriptSourceObject** sourceObjectOut = nullptr);
 
 MOZ_MUST_USE bool
 CompileLazyFunction(JSContext* cx, Handle<LazyScript*> lazy, const char16_t* chars, size_t length);
 
-/*
- * enclosingStaticScope is a static enclosing scope (e.g. a StaticWithScope).
- * Must be null if the enclosing scope is a global.
- */
+//
+// Compile a single function. The source in srcBuf must match the ECMA-262
+// FunctionExpression production.
+//
+// If nonzero, parameterListEnd is the offset within srcBuf where the parameter
+// list is expected to end. During parsing, if we find that it ends anywhere
+// else, it's a SyntaxError. This is used to implement the Function constructor;
+// it's how we detect that these weird cases are SyntaxErrors:
+//
+//     Function("/*", "*/x) {")
+//     Function("x){ if (3", "return x;}")
+//
 MOZ_MUST_USE bool
-CompileFunctionBody(JSContext* cx, MutableHandleFunction fun,
-                    const ReadOnlyCompileOptions& options,
-                    Handle<PropertyNameVector> formals, JS::SourceBufferHolder& srcBuf,
-                    Handle<StaticScope*> enclosingStaticScope);
+CompileStandaloneFunction(JSContext* cx, MutableHandleFunction fun,
+                          const ReadOnlyCompileOptions& options,
+                          JS::SourceBufferHolder& srcBuf,
+                          mozilla::Maybe<uint32_t> parameterListEnd,
+                          HandleScope enclosingScope = nullptr);
 
-// As above, but defaults to the global lexical scope as the enclosing static
-// scope.
 MOZ_MUST_USE bool
-CompileFunctionBody(JSContext* cx, MutableHandleFunction fun,
-                    const ReadOnlyCompileOptions& options,
-                    Handle<PropertyNameVector> formals, JS::SourceBufferHolder& srcBuf);
+CompileStandaloneGenerator(JSContext* cx, MutableHandleFunction fun,
+                           const ReadOnlyCompileOptions& options,
+                           JS::SourceBufferHolder& srcBuf,
+                           mozilla::Maybe<uint32_t> parameterListEnd);
 
 MOZ_MUST_USE bool
-CompileStarGeneratorBody(JSContext* cx, MutableHandleFunction fun,
+CompileStandaloneAsyncFunction(JSContext* cx, MutableHandleFunction fun,
+                               const ReadOnlyCompileOptions& options,
+                               JS::SourceBufferHolder& srcBuf,
+                               mozilla::Maybe<uint32_t> parameterListEnd);
+
+MOZ_MUST_USE bool
+CompileAsyncFunctionBody(JSContext* cx, MutableHandleFunction fun,
                          const ReadOnlyCompileOptions& options,
                          Handle<PropertyNameVector> formals, JS::SourceBufferHolder& srcBuf);
 
 ScriptSourceObject*
-CreateScriptSourceObject(ExclusiveContext* cx, const ReadOnlyCompileOptions& options);
+CreateScriptSourceObject(ExclusiveContext* cx, const ReadOnlyCompileOptions& options,
+                         mozilla::Maybe<uint32_t> parameterListEnd = mozilla::Nothing());
 
 /*
  * True if str consists of an IdentifierStart character, followed by one or
@@ -91,9 +115,9 @@ IsIdentifier(const char16_t* chars, size_t length);
 bool
 IsKeyword(JSLinearString* str);
 
-/* GC marking. Defined in Parser.cpp. */
+/* Trace all GC things reachable from parser. Defined in Parser.cpp. */
 void
-MarkParser(JSTracer* trc, JS::AutoGCRooter* parser);
+TraceParser(JSTracer* trc, JS::AutoGCRooter* parser);
 
 } /* namespace frontend */
 } /* namespace js */

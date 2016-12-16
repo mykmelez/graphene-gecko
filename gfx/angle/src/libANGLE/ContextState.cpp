@@ -15,21 +15,23 @@ namespace gl
 {
 
 ContextState::ContextState(uintptr_t contextIn,
-                           GLint clientVersionIn,
+                           const Version &clientVersion,
                            State *stateIn,
                            const Caps &capsIn,
                            const TextureCapsMap &textureCapsIn,
                            const Extensions &extensionsIn,
                            const ResourceManager *resourceManagerIn,
-                           const Limitations &limitationsIn)
-    : mContext(contextIn),
-      mClientVersion(clientVersionIn),
+                           const Limitations &limitationsIn,
+                           const ResourceMap<Framebuffer> &framebufferMap)
+    : mClientVersion(clientVersion),
+      mContext(contextIn),
       mState(stateIn),
       mCaps(capsIn),
       mTextureCaps(textureCapsIn),
       mExtensions(extensionsIn),
       mResourceManager(resourceManagerIn),
-      mLimitations(limitationsIn)
+      mLimitations(limitationsIn),
+      mFramebufferMap(framebufferMap)
 {
 }
 
@@ -42,13 +44,14 @@ const TextureCaps &ContextState::getTextureCap(GLenum internalFormat) const
     return mTextureCaps.get(internalFormat);
 }
 
-ValidationContext::ValidationContext(GLint clientVersion,
+ValidationContext::ValidationContext(const Version &clientVersion,
                                      State *state,
                                      const Caps &caps,
                                      const TextureCapsMap &textureCaps,
                                      const Extensions &extensions,
                                      const ResourceManager *resourceManager,
                                      const Limitations &limitations,
+                                     const ResourceMap<Framebuffer> &framebufferMap,
                                      bool skipValidation)
     : mState(reinterpret_cast<uintptr_t>(this),
              clientVersion,
@@ -57,7 +60,8 @@ ValidationContext::ValidationContext(GLint clientVersion,
              textureCaps,
              extensions,
              resourceManager,
-             limitations),
+             limitations,
+             framebufferMap),
       mSkipValidation(skipValidation)
 {
 }
@@ -275,6 +279,14 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
             *type      = GL_INT;
             *numParams = 1;
             return true;
+        case GL_TEXTURE_BINDING_EXTERNAL_OES:
+            if (!getExtensions().eglStreamConsumerExternal && !getExtensions().eglImageExternal)
+            {
+                return false;
+            }
+            *type      = GL_INT;
+            *numParams = 1;
+            return true;
     }
 
     if (getExtensions().debug)
@@ -324,13 +336,35 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
         }
     }
 
+    if (getExtensions().bindGeneratesResource)
+    {
+        switch (pname)
+        {
+            case GL_BIND_GENERATES_RESOURCE_CHROMIUM:
+                *type      = GL_BOOL;
+                *numParams = 1;
+                return true;
+        }
+    }
+
+    if (getExtensions().sRGBWriteControl)
+    {
+        switch (pname)
+        {
+            case GL_FRAMEBUFFER_SRGB_EXT:
+                *type      = GL_BOOL;
+                *numParams = 1;
+                return true;
+        }
+    }
+
     // Check for ES3.0+ parameter names which are also exposed as ES2 extensions
     switch (pname)
     {
         case GL_PACK_ROW_LENGTH:
         case GL_PACK_SKIP_ROWS:
         case GL_PACK_SKIP_PIXELS:
-            if ((getClientVersion() < 3) && !getExtensions().packSubimage)
+            if ((getClientMajorVersion() < 3) && !getExtensions().packSubimage)
             {
                 return false;
             }
@@ -340,7 +374,7 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
         case GL_UNPACK_ROW_LENGTH:
         case GL_UNPACK_SKIP_ROWS:
         case GL_UNPACK_SKIP_PIXELS:
-            if ((getClientVersion() < 3) && !getExtensions().unpackSubimage)
+            if ((getClientMajorVersion() < 3) && !getExtensions().unpackSubimage)
             {
                 return false;
             }
@@ -348,7 +382,7 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
             *numParams = 1;
             return true;
         case GL_VERTEX_ARRAY_BINDING:
-            if ((getClientVersion() < 3) && !getExtensions().vertexArrayObject)
+            if ((getClientMajorVersion() < 3) && !getExtensions().vertexArrayObject)
             {
                 return false;
             }
@@ -357,7 +391,7 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
             return true;
         case GL_PIXEL_PACK_BUFFER_BINDING:
         case GL_PIXEL_UNPACK_BUFFER_BINDING:
-            if ((getClientVersion() < 3) && !getExtensions().pixelBufferObject)
+            if ((getClientMajorVersion() < 3) && !getExtensions().pixelBufferObject)
             {
                 return false;
             }
@@ -366,7 +400,7 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
             return true;
     }
 
-    if (getClientVersion() < 3)
+    if (getClientVersion() < Version(3, 0))
     {
         return false;
     }
@@ -442,6 +476,63 @@ bool ValidationContext::getQueryParameterInfo(GLenum pname, GLenum *type, unsign
         }
     }
 
+    if (getClientVersion() < Version(3, 1))
+    {
+        return false;
+    }
+
+    switch (pname)
+    {
+        case GL_MAX_FRAMEBUFFER_WIDTH:
+        case GL_MAX_FRAMEBUFFER_HEIGHT:
+        case GL_MAX_FRAMEBUFFER_SAMPLES:
+        case GL_MAX_SAMPLE_MASK_WORDS:
+        case GL_MAX_COLOR_TEXTURE_SAMPLES:
+        case GL_MAX_DEPTH_TEXTURE_SAMPLES:
+        case GL_MAX_INTEGER_SAMPLES:
+        case GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET:
+        case GL_MAX_VERTEX_ATTRIB_BINDINGS:
+        case GL_MAX_VERTEX_ATTRIB_STRIDE:
+        case GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS:
+        case GL_MAX_VERTEX_ATOMIC_COUNTERS:
+        case GL_MAX_VERTEX_IMAGE_UNIFORMS:
+        case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
+        case GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS:
+        case GL_MAX_FRAGMENT_ATOMIC_COUNTERS:
+        case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
+        case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
+        case GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET:
+        case GL_MAX_PROGRAM_TEXTURE_GATHER_OFFSET:
+        case GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS:
+        case GL_MAX_COMPUTE_UNIFORM_BLOCKS:
+        case GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS:
+        case GL_MAX_COMPUTE_SHARED_MEMORY_SIZE:
+        case GL_MAX_COMPUTE_UNIFORM_COMPONENTS:
+        case GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS:
+        case GL_MAX_COMPUTE_ATOMIC_COUNTERS:
+        case GL_MAX_COMPUTE_IMAGE_UNIFORMS:
+        case GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS:
+        case GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS:
+        case GL_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+        case GL_MAX_UNIFORM_LOCATIONS:
+        case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
+        case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE:
+        case GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS:
+        case GL_MAX_COMBINED_ATOMIC_COUNTERS:
+        case GL_MAX_IMAGE_UNITS:
+        case GL_MAX_COMBINED_IMAGE_UNIFORMS:
+        case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
+        case GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS:
+        case GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT:
+            *type      = GL_INT;
+            *numParams = 1;
+            return true;
+        case GL_MAX_SHADER_STORAGE_BLOCK_SIZE:
+            *type      = GL_INT_64_ANGLEX;
+            *numParams = 1;
+            return true;
+    }
+
     return false;
 }
 
@@ -449,7 +540,7 @@ bool ValidationContext::getIndexedQueryParameterInfo(GLenum target,
                                                      GLenum *type,
                                                      unsigned int *numParams)
 {
-    if (getClientVersion() < 3)
+    if (getClientVersion() < Version(3, 0))
     {
         return false;
     }
@@ -474,7 +565,54 @@ bool ValidationContext::getIndexedQueryParameterInfo(GLenum target,
         }
     }
 
+    if (getClientVersion() < Version(3, 1))
+    {
+        return false;
+    }
+
+    switch (target)
+    {
+        case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
+        case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
+        {
+            *type      = GL_INT;
+            *numParams = 1;
+            return true;
+        }
+    }
+
     return false;
+}
+
+Program *ValidationContext::getProgram(GLuint handle) const
+{
+    return mState.mResourceManager->getProgram(handle);
+}
+
+Shader *ValidationContext::getShader(GLuint handle) const
+{
+    return mState.mResourceManager->getShader(handle);
+}
+
+bool ValidationContext::isTextureGenerated(GLuint texture) const
+{
+    return mState.mResourceManager->isTextureGenerated(texture);
+}
+
+bool ValidationContext::isBufferGenerated(GLuint buffer) const
+{
+    return mState.mResourceManager->isBufferGenerated(buffer);
+}
+
+bool ValidationContext::isRenderbufferGenerated(GLuint renderbuffer) const
+{
+    return mState.mResourceManager->isRenderbufferGenerated(renderbuffer);
+}
+
+bool ValidationContext::isFramebufferGenerated(GLuint framebuffer) const
+{
+    ASSERT(mState.mFramebufferMap.find(0) != mState.mFramebufferMap.end());
+    return mState.mFramebufferMap.find(framebuffer) != mState.mFramebufferMap.end();
 }
 
 }  // namespace gl

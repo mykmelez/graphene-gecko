@@ -14,6 +14,7 @@ const { createFactories } = require("devtools/client/shared/components/reps/rep-
 const TreeView = React.createFactory(require("devtools/client/shared/components/tree/tree-view"));
 const { Rep } = createFactories(require("devtools/client/shared/components/reps/rep"));
 const { Grip } = require("devtools/client/shared/components/reps/grip");
+const { MODE } = require("devtools/client/shared/components/reps/constants");
 
 // DOM Panel
 const { GripProvider } = require("../grip-provider");
@@ -61,6 +62,7 @@ var DomTree = React.createClass({
     let renderValue = props => {
       return Rep(Object.assign({}, props, {
         defaultRep: Grip,
+        cropLimit: 50,
       }));
     };
 
@@ -69,7 +71,7 @@ var DomTree = React.createClass({
         object: this.props.object,
         provider: new GripProvider(this.props.grips, this.props.dispatch),
         decorator: new DomDecorator(),
-        mode: "short",
+        mode: MODE.SHORT,
         columns: columns,
         renderValue: renderValue,
         onFilter: this.onFilter

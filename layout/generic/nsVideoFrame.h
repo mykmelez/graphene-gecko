@@ -52,8 +52,7 @@ public:
                                     nsIAtom* aAttribute,
                                     int32_t aModType) override;
 
-  void OnVisibilityChange(Visibility aOldVisibility,
-                          Visibility aNewVisibility,
+  void OnVisibilityChange(Visibility aNewVisibility,
                           Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
 
   /* get the size of the video's display */
@@ -130,8 +129,6 @@ protected:
   void UpdatePosterSource(bool aNotify);
 
   virtual ~nsVideoFrame();
-
-  nsMargin mBorderPadding;
 
   // Anonymous child which is bound via XBL to the video controls.
   nsCOMPtr<nsIContent> mVideoControls;

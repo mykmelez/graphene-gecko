@@ -7,6 +7,7 @@
 #define MOZILLA_GFX_MATRIX_H_
 
 #include "Types.h"
+#include "Triangle.h"
 #include "Rect.h"
 #include "Point.h"
 #include "Quaternion.h"
@@ -53,7 +54,7 @@ public:
 
   friend std::ostream& operator<<(std::ostream& aStream, const Matrix& aMatrix);
 
-  Point operator *(const Point &aPoint) const
+  Point TransformPoint(const Point &aPoint) const
   {
     Point retPoint;
 
@@ -63,7 +64,7 @@ public:
     return retPoint;
   }
 
-  Size operator *(const Size &aSize) const
+  Size TransformSize(const Size &aSize) const
   {
     Size retSize;
 
@@ -462,6 +463,11 @@ public:
     , _41(a41), _42(a42), _43(a43), _44(a44)
   {}
 
+  explicit Matrix4x4Typed(const Float aArray[16])
+  {
+    memcpy(components, aArray, sizeof(components));
+  }
+
   Matrix4x4Typed(const Matrix4x4Typed& aOther)
   {
     memcpy(this, &aOther, sizeof(*this));
@@ -592,7 +598,7 @@ public:
     F z = -(aPoint.x * _13 + aPoint.y * _23 + _43) / _33;
 
     // Compute the transformed point
-    return *this * Point4DTyped<SourceUnits, F>(aPoint.x, aPoint.y, z, 1);
+    return this->TransformPoint(Point4DTyped<SourceUnits, F>(aPoint.x, aPoint.y, z, 1));
   }
 
   template<class F>
@@ -703,6 +709,13 @@ public:
     return RectTyped<TargetUnits, F>(min_x, min_y, max_x - min_x, max_y - min_y);
   }
 
+  template<class F>
+  RectTyped<TargetUnits, F> TransformAndClipBounds(const TriangleTyped<SourceUnits, F>& aTriangle,
+                                                   const RectTyped<TargetUnits, F>& aClip) const
+  {
+    return TransformAndClipBounds(aTriangle.BoundingBox(), aClip);
+  }
+
   /**
    * TransformAndClipRect projects a rectangle and clips against view frustum
    * clipping planes in homogenous space so that its projected vertices are
@@ -723,10 +736,10 @@ public:
     Point4DTyped<UnknownUnits, F> points[2][kTransformAndClipRectMaxVerts];
     Point4DTyped<UnknownUnits, F>* dstPoint = points[0];
 
-    *dstPoint++ = *this * Point4DTyped<UnknownUnits, F>(aRect.x, aRect.y, 0, 1);
-    *dstPoint++ = *this * Point4DTyped<UnknownUnits, F>(aRect.XMost(), aRect.y, 0, 1);
-    *dstPoint++ = *this * Point4DTyped<UnknownUnits, F>(aRect.XMost(), aRect.YMost(), 0, 1);
-    *dstPoint++ = *this * Point4DTyped<UnknownUnits, F>(aRect.x, aRect.YMost(), 0, 1);
+    *dstPoint++ = TransformPoint(Point4DTyped<UnknownUnits, F>(aRect.x, aRect.y, 0, 1));
+    *dstPoint++ = TransformPoint(Point4DTyped<UnknownUnits, F>(aRect.XMost(), aRect.y, 0, 1));
+    *dstPoint++ = TransformPoint(Point4DTyped<UnknownUnits, F>(aRect.XMost(), aRect.YMost(), 0, 1));
+    *dstPoint++ = TransformPoint(Point4DTyped<UnknownUnits, F>(aRect.x, aRect.YMost(), 0, 1));
 
     // View frustum clipping planes are described as normals originating from
     // the 0,0,0,0 origin.
@@ -824,54 +837,55 @@ public:
   }
 
   template<class F>
-  Point4DTyped<TargetUnits, F> operator *(const Point4DTyped<SourceUnits, F>& aPoint) const
+  Point4DTyped<TargetUnits, F> TransformPoint(const Point4DTyped<SourceUnits, F>& aPoint) const
   {
     Point4DTyped<TargetUnits, F> retPoint;
 
-    retPoint.x = aPoint.x * _11 + aPoint.y * _21 + aPoint.z * _31 + _41;
-    retPoint.y = aPoint.x * _12 + aPoint.y * _22 + aPoint.z * _32 + _42;
-    retPoint.z = aPoint.x * _13 + aPoint.y * _23 + aPoint.z * _33 + _43;
-    retPoint.w = aPoint.x * _14 + aPoint.y * _24 + aPoint.z * _34 + _44;
+    retPoint.x = aPoint.x * _11 + aPoint.y * _21 + aPoint.z * _31 + aPoint.w * _41;
+    retPoint.y = aPoint.x * _12 + aPoint.y * _22 + aPoint.z * _32 + aPoint.w * _42;
+    retPoint.z = aPoint.x * _13 + aPoint.y * _23 + aPoint.z * _33 + aPoint.w * _43;
+    retPoint.w = aPoint.x * _14 + aPoint.y * _24 + aPoint.z * _34 + aPoint.w * _44;
 
     return retPoint;
   }
 
   template<class F>
-  Point3DTyped<TargetUnits, F> operator *(const Point3DTyped<SourceUnits, F>& aPoint) const
+  Point3DTyped<TargetUnits, F> TransformPoint(const Point3DTyped<SourceUnits, F>& aPoint) const
   {
-    Point4DTyped<SourceUnits, F> temp(aPoint.x, aPoint.y, aPoint.z, 1);
+    Point3DTyped<TargetUnits, F> result;
+    result.x = aPoint.x * _11 + aPoint.y * _21 + aPoint.z * _31 + _41;
+    result.y = aPoint.x * _12 + aPoint.y * _22 + aPoint.z * _32 + _42;
+    result.z = aPoint.x * _13 + aPoint.y * _23 + aPoint.z * _33 + _43;
 
-    Point4DTyped<TargetUnits, F> result = *this * temp;
-    result /= result.w;
+    result /= (aPoint.x * _14 + aPoint.y * _24 + aPoint.z * _34 + _44);
 
-    return Point3DTyped<TargetUnits, F>(result.x, result.y, result.z);
+    return result;
   }
 
   template<class F>
-  PointTyped<TargetUnits, F> operator *(const PointTyped<SourceUnits, F> &aPoint) const
+  PointTyped<TargetUnits, F> TransformPoint(const PointTyped<SourceUnits, F> &aPoint) const
   {
     Point4DTyped<SourceUnits, F> temp(aPoint.x, aPoint.y, 0, 1);
-    Point4DTyped<TargetUnits, F> result = *this * temp;
-    return result.As2DPoint();
+    return TransformPoint(temp).As2DPoint();
   }
 
   template<class F>
   GFX2D_API RectTyped<TargetUnits, F> TransformBounds(const RectTyped<SourceUnits, F>& aRect) const
   {
     Point4DTyped<TargetUnits, F> verts[4];
-    verts[0] = *this * Point4DTyped<SourceUnits, F>(aRect.x, aRect.y, 0.0, 1.0);
-    verts[1] = *this * Point4DTyped<SourceUnits, F>(aRect.XMost(), aRect.y, 0.0, 1.0);
-    verts[2] = *this * Point4DTyped<SourceUnits, F>(aRect.XMost(), aRect.YMost(), 0.0, 1.0);
-    verts[3] = *this * Point4DTyped<SourceUnits, F>(aRect.x, aRect.YMost(), 0.0, 1.0);
+    verts[0] = TransformPoint(Point4DTyped<SourceUnits, F>(aRect.x, aRect.y, 0.0, 1.0));
+    verts[1] = TransformPoint(Point4DTyped<SourceUnits, F>(aRect.XMost(), aRect.y, 0.0, 1.0));
+    verts[2] = TransformPoint(Point4DTyped<SourceUnits, F>(aRect.XMost(), aRect.YMost(), 0.0, 1.0));
+    verts[3] = TransformPoint(Point4DTyped<SourceUnits, F>(aRect.x, aRect.YMost(), 0.0, 1.0));
 
     PointTyped<TargetUnits, F> quad[4];
     F min_x, max_x;
     F min_y, max_y;
 
-    quad[0] = *this * aRect.TopLeft();
-    quad[1] = *this * aRect.TopRight();
-    quad[2] = *this * aRect.BottomLeft();
-    quad[3] = *this * aRect.BottomRight();
+    quad[0] = TransformPoint(aRect.TopLeft());
+    quad[1] = TransformPoint(aRect.TopRight());
+    quad[2] = TransformPoint(aRect.BottomLeft());
+    quad[3] = TransformPoint(aRect.BottomRight());
 
     min_x = max_x = quad[0].x;
     min_y = max_y = quad[0].y;
@@ -903,9 +917,14 @@ public:
                           aX,   aY,   aZ, 1.0f);
   }
 
-  static Matrix4x4Typed Translation(const Point3D& aP)
+  static Matrix4x4Typed Translation(const TargetPoint3D& aP)
   {
     return Translation(aP.x, aP.y, aP.z);
+  }
+
+  static Matrix4x4Typed Translation(const TargetPoint& aP)
+  {
+    return Translation(aP.x, aP.y, 0);
   }
 
   /**
@@ -971,8 +990,12 @@ public:
     return *this;
   }
 
-  Matrix4x4Typed &PostTranslate(const Point3D& aPoint) {
+  Matrix4x4Typed &PostTranslate(const TargetPoint3D& aPoint) {
     return PostTranslate(aPoint.x, aPoint.y, aPoint.z);
+  }
+
+  Matrix4x4Typed &PostTranslate(const TargetPoint& aPoint) {
+    return PostTranslate(aPoint.x, aPoint.y, 0);
   }
 
   static Matrix4x4Typed Scaling(Float aScaleX, Float aScaleY, float aScaleZ)
@@ -1505,9 +1528,9 @@ public:
   {
     // Define a plane in transformed space as the transformations
     // of 3 points on the z=0 screen plane.
-    Point3D a = *this * Point3D(0, 0, 0);
-    Point3D b = *this * Point3D(0, 1, 0);
-    Point3D c = *this * Point3D(1, 0, 0);
+    Point3D a = TransformPoint(Point3D(0, 0, 0));
+    Point3D b = TransformPoint(Point3D(0, 1, 0));
+    Point3D c = TransformPoint(Point3D(1, 0, 0));
 
     // Convert to two vectors on the surface of the plane.
     Point3D ab = b - a;

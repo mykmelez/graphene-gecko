@@ -21,10 +21,9 @@ loader.lazyRequireGetter(this, "promise");
 loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/event-emitter");
 loader.lazyRequireGetter(this, "AnimationsFront", "devtools/shared/fronts/animation", true);
 
-const { LocalizationHelper } = require("devtools/client/shared/l10n");
-
-const STRINGS_URI = "chrome://devtools/locale/animationinspector.properties";
-const L10N = new LocalizationHelper(STRINGS_URI);
+const { LocalizationHelper } = require("devtools/shared/l10n");
+const L10N =
+      new LocalizationHelper("devtools/client/locales/animationinspector.properties");
 
 // Global toolbox/inspector, set when startup is called.
 var gToolbox, gInspector;
@@ -135,16 +134,20 @@ var AnimationsController = {
 
   initialize: Task.async(function* () {
     if (this.initialized) {
-      yield this.initialized.promise;
+      yield this.initialized;
       return;
     }
-    this.initialized = promise.defer();
+
+    let resolver;
+    this.initialized = new Promise(resolve => {
+      resolver = resolve;
+    });
 
     this.onPanelVisibilityChange = this.onPanelVisibilityChange.bind(this);
     this.onNewNodeFront = this.onNewNodeFront.bind(this);
     this.onAnimationMutations = this.onAnimationMutations.bind(this);
 
-    let target = gToolbox.target;
+    let target = gInspector.target;
     this.animationsFront = new AnimationsFront(target.client, target.form);
 
     // Expose actor capabilities.
@@ -164,7 +167,7 @@ var AnimationsController = {
     this.startListeners();
     yield this.onNewNodeFront();
 
-    this.initialized.resolve();
+    resolver();
   }),
 
   destroy: Task.async(function* () {
@@ -173,10 +176,14 @@ var AnimationsController = {
     }
 
     if (this.destroyed) {
-      yield this.destroyed.promise;
+      yield this.destroyed;
       return;
     }
-    this.destroyed = promise.defer();
+
+    let resolver;
+    this.destroyed = new Promise(resolve => {
+      resolver = resolve;
+    });
 
     this.stopListeners();
     this.destroyAnimationPlayers();
@@ -186,8 +193,7 @@ var AnimationsController = {
       this.animationsFront.destroy();
       this.animationsFront = null;
     }
-
-    this.destroyed.resolve();
+    resolver();
   }),
 
   startListeners: function () {

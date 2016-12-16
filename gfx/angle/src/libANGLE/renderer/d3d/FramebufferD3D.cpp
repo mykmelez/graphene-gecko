@@ -207,7 +207,7 @@ GLenum FramebufferD3D::getImplementationColorReadFormat() const
     GLenum implementationFormat = getRenderTargetImplementationFormat(attachmentRenderTarget);
     const gl::InternalFormat &implementationFormatInfo = gl::GetInternalFormatInfo(implementationFormat);
 
-    return implementationFormatInfo.format;
+    return implementationFormatInfo.getReadPixelsFormat();
 }
 
 GLenum FramebufferD3D::getImplementationColorReadType() const
@@ -229,7 +229,7 @@ GLenum FramebufferD3D::getImplementationColorReadType() const
     GLenum implementationFormat = getRenderTargetImplementationFormat(attachmentRenderTarget);
     const gl::InternalFormat &implementationFormatInfo = gl::GetInternalFormatInfo(implementationFormat);
 
-    return implementationFormatInfo.type;
+    return implementationFormatInfo.getReadPixelsType();
 }
 
 gl::Error FramebufferD3D::readPixels(ContextImpl *context,
@@ -242,13 +242,13 @@ gl::Error FramebufferD3D::readPixels(ContextImpl *context,
 
     GLenum sizedInternalFormat = gl::GetSizedInternalFormat(format, type);
     const gl::InternalFormat &sizedFormatInfo = gl::GetInternalFormatInfo(sizedInternalFormat);
-    GLuint outputPitch                        = 0;
+
+    GLuint outputPitch = 0;
     ANGLE_TRY_RESULT(
         sizedFormatInfo.computeRowPitch(type, area.width, packState.alignment, packState.rowLength),
         outputPitch);
     GLuint outputSkipBytes = 0;
-    ANGLE_TRY_RESULT(sizedFormatInfo.computeSkipBytes(outputPitch, 0, 0, packState.skipRows,
-                                                      packState.skipPixels, false),
+    ANGLE_TRY_RESULT(sizedFormatInfo.computeSkipBytes(outputPitch, 0, packState, false),
                      outputSkipBytes);
 
     return readPixelsImpl(area, format, type, outputPitch, packState,
@@ -309,24 +309,10 @@ bool FramebufferD3D::checkStatus() const
         return false;
     }
 
-    // D3D11 does not allow for overlapping RenderTargetViews, so ensure uniqueness
-    const auto &colorAttachments = mState.getColorAttachments();
-    for (size_t colorAttachment = 0; colorAttachment < colorAttachments.size(); colorAttachment++)
+    // D3D11 does not allow for overlapping RenderTargetViews
+    if (!mState.colorAttachmentsAreUniqueImages())
     {
-        const gl::FramebufferAttachment &attachment = colorAttachments[colorAttachment];
-        if (attachment.isAttached())
-        {
-            for (size_t prevColorAttachment = 0; prevColorAttachment < colorAttachment; prevColorAttachment++)
-            {
-                const gl::FramebufferAttachment &prevAttachment = colorAttachments[prevColorAttachment];
-                if (prevAttachment.isAttached() &&
-                    (attachment.id() == prevAttachment.id() &&
-                     attachment.type() == prevAttachment.type()))
-                {
-                    return false;
-                }
-            }
-        }
+        return false;
     }
 
     // D3D requires all render targets to have the same dimensions.

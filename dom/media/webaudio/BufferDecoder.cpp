@@ -8,7 +8,7 @@
 
 #include "nsISupports.h"
 #include "MediaResource.h"
-#include "GMPService.h"
+#include "GMPCrashHelper.h"
 
 namespace mozilla {
 
@@ -19,13 +19,11 @@ BufferDecoder::BufferDecoder(MediaResource* aResource, GMPCrashHelper* aCrashHel
   , mCrashHelper(aCrashHelper)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_COUNT_CTOR(BufferDecoder);
 }
 
 BufferDecoder::~BufferDecoder()
 {
   // The dtor may run on any thread, we cannot be sure.
-  MOZ_COUNT_DTOR(BufferDecoder);
 }
 
 void
@@ -42,8 +40,7 @@ BufferDecoder::GetResource() const
 }
 
 void
-BufferDecoder::NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded,
-                                   uint32_t aDropped)
+BufferDecoder::NotifyDecodedFrames(const FrameStatisticsData& aStats)
 {
   // ignore
 }
@@ -63,7 +60,7 @@ BufferDecoder::GetImageContainer()
 }
 
 MediaDecoderOwner*
-BufferDecoder::GetOwner()
+BufferDecoder::GetOwner() const
 {
   // unknown
   return nullptr;

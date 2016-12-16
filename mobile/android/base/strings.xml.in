@@ -85,8 +85,8 @@
 
   <string name="url_bar_default_text">&url_bar_default_text2;</string>
 
-  <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/ -->
-  <string name="help_link">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/</string>
+  <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/mobile-help -->
+  <string name="help_link">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/mobile-help</string>
   <string name="help_menu">&help_menu;</string>
 
   <string name="quit">&quit;</string>
@@ -131,6 +131,7 @@
   <string name="media_pause">&media_pause;</string>
   <string name="media_stop">&media_stop;</string>
 
+  <string name="overlay_share_open_browser_btn_label">&overlay_share_open_browser_btn_label;</string>
   <string name="overlay_share_send_other">&overlay_share_send_other;</string>
   <string name="overlay_share_label">&overlay_share_label;</string>
   <string name="overlay_share_bookmark_btn_label">&overlay_share_bookmark_btn_label;</string>
@@ -234,8 +235,13 @@
   <string name="pref_whats_new_notification">&pref_whats_new_notification;</string>
   <string name="pref_whats_new_notification_summary">&pref_whats_new_notification_summary;</string>
 
+  <string name="pref_category_experimental">&pref_category_experimental;</string>
+
   <string name="pref_custom_tabs">&pref_custom_tabs;</string>
-  <string name="pref_custom_tabs_summary">&pref_custom_tabs_summary;</string>
+  <string name="pref_custom_tabs_summary">&pref_custom_tabs_summary3;</string>
+
+  <string name="pref_activity_stream">&pref_activity_stream;</string>
+  <string name="pref_activity_stream_summary">&pref_activity_stream_summary;</string>
 
   <string name="pref_char_encoding">&pref_char_encoding;</string>
   <string name="pref_char_encoding_on">&pref_char_encoding_on;</string>
@@ -424,6 +430,9 @@
   <string name="pref_scroll_title_bar2">&pref_scroll_title_bar2;</string>
   <string name="pref_scroll_title_bar_summary">&pref_scroll_title_bar_summary2;</string>
 
+  <string name="pref_compact_tabs">&pref_compact_tabs;</string>
+  <string name="pref_compact_tabs_summary">&pref_compact_tabs_summary2;</string>
+
   <string name="page_removed">&page_removed;</string>
 
   <string name="bookmark_edit_title">&bookmark_edit_title;</string>
@@ -539,8 +548,8 @@
   <string name="updater_downloading_select">&updater_downloading_select2;</string>
   <string name="updater_downloading_retry">&updater_downloading_retry2;</string>
 
-  <string name="updater_apply_title">&updater_apply_title2;</string>
-  <string name="updater_apply_select">&updater_apply_select2;</string>
+  <string name="updater_apply_title">&updater_apply_title3;</string>
+  <string name="updater_apply_select">&updater_apply_select3;</string>
 
   <string name="updater_permission_title">&brandShortName;</string>
   <string name="updater_permission_text">&updater_permission_text;</string>
@@ -556,10 +565,6 @@
   <string name="set_image_fail">&set_image_fail;</string>
   <string name="set_image_path_fail">&set_image_path_fail;</string>
   <string name="set_image_chooser_title">&set_image_chooser_title;</string>
-
-  <!-- Contacts API -->
-  <string name="contacts_account_chooser_dialog_title2">Share contacts from…</string>
-
 
   <!-- Guest mode -->
   <string name="new_guest_session">&new_guest_session;</string>
@@ -629,4 +634,13 @@
   <string name="helper_triple_readerview_open_message">&helper_triple_readerview_open_message;</string>
   <string name="helper_triple_readerview_open_button">&helper_triple_readerview_open_button;</string>
 
+  <string name="activity_stream_topsites">&activity_stream_topsites;</string>
+  <string name="activity_stream_highlights">&activity_stream_highlights;</string>
+  <string name="activity_stream_highlight_label_bookmarked">&activity_stream_highlight_label_bookmarked;</string>
+  <string name="activity_stream_highlight_label_visited">&activity_stream_highlight_label_visited;</string>
+  <string name="activity_stream_dismiss">&activity_stream_dismiss;</string>
+  <string name="activity_stream_delete_history">&activity_stream_delete_history;</string>
+
+  <string name="activity_stream_welcome_title">&activity_stream_welcome_title;</string>
+  <string name="activity_stream_welcome_content">&activity_stream_welcome_content;</string>
 </resources>

@@ -27,10 +27,8 @@ interfaces = [
     'offline',
     'geolocation',
     'notification',
-    'permission',
     'svg',
     'smil',
-    'apps',
     'push',
 ]
 
@@ -38,49 +36,40 @@ DIRS += ['interfaces/' + i for i in interfaces]
 
 DIRS += [
     'animation',
-    'apps',
     'base',
-    'bluetooth',
     'archivereader',
     'bindings',
     'battery',
     'browser-element',
     'cache',
     'canvas',
-    'cellbroadcast',
-    'contacts',
     'crypto',
-    'phonenumberutils',
-    'alarm',
     'devicestorage',
     'encoding',
     'events',
     'fetch',
+    'file',
     'filehandle',
     'filesystem',
     'flyweb',
-    'fmradio',
     'gamepad',
     'geolocation',
     'grid',
     'html',
-    'icc',
-    'inputport',
     'json',
     'jsurl',
     'asmjscache',
     'mathml',
     'media',
-    'mobileconnection',
     'notification',
     'offline',
     'power',
+    'push',
     'quota',
     'security',
     'settings',
     'storage',
     'svg',
-    'mobilemessage',
     'time',
     'locales',
     'network',
@@ -91,57 +80,29 @@ DIRS += [
     'system',
     'ipc',
     'workers',
-    'camera',
     'audiochannel',
     'broadcastchannel',
     'messagechannel',
     'promise',
     'smil',
-    'telephony',
-    'tv',
     'url',
-    'voicemail',
     'inputmethod',
     'webidl',
     'xbl',
     'xml',
     'xslt',
     'xul',
-    'resourcestats',
     'manifest',
     'vr',
-    'newapps',
     'u2f',
     'console',
     'performance',
     'xhr',
+    'worklet',
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     DIRS += ['plugins/ipc/hangui']
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    DIRS += [
-        'speakermanager',
-        'tethering',
-        'wifi',
-    ]
-
-if CONFIG['MOZ_B2G_RIL']:
-    DIRS += [
-        'wappush',
-    ]
-
-if CONFIG['MOZ_PAY']:
-    DIRS += ['payment']
-
-if CONFIG['MOZ_NFC']:
-    DIRS += ['nfc']
-
-if CONFIG['MOZ_SIMPLEPUSH']:
-    DIRS += ['simplepush']
-else:
-    DIRS += ['push']
 
 if CONFIG['MOZ_SECUREELEMENT']:
     DIRS += ['secureelement']
@@ -149,8 +110,6 @@ if CONFIG['MOZ_SECUREELEMENT']:
 if CONFIG['MOZ_B2G']:
     DIRS += [
         'downloads',
-        'identity',
-        'mobileid'
     ]
 
 DIRS += ['presentation']

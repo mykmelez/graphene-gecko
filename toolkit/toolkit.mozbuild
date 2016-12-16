@@ -1,3 +1,4 @@
+# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
 # vim: set filetype=python:
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -142,6 +143,12 @@ DIRS += [
 if CONFIG['MOZ_GIO_COMPONENT']:
     DIRS += ['/extensions/gio']
 
+if CONFIG['MOZ_RUST']:
+    DIRS += [
+        '/toolkit/library/gtest/rust',
+        '/toolkit/library/rust',
+    ]
+
 DIRS += [
     '/toolkit/library/StaticXULComponentsEnd',
     '/toolkit/library',
@@ -153,7 +160,10 @@ if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
 DIRS += ['/addon-sdk']
 
 if CONFIG['ENABLE_MARIONETTE'] or CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('gonk', 'android'):
-    DIRS += ['/testing/marionette']
+    DIRS += [
+        '/testing/firefox-ui',
+        '/testing/marionette',
+    ]
 
 DIRS += [
     '/tools/quitter',
@@ -177,8 +187,14 @@ if CONFIG['ENABLE_TESTS']:
     if CONFIG['MOZ_CRASHREPORTER']:
         DIRS += ['/testing/tools/fileid']
 
-    if CONFIG['MOZ_WEBRTC'] and CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk' and not CONFIG['MOZ_TASK_TRACER']:
-            DIRS += [
-                '/media/webrtc/signaling/test',
-                '/media/mtransport/test',
-            ]
+    if CONFIG['MOZ_MEMORY']:
+        DIRS += ['/memory/gtest']
+
+    if CONFIG['MOZ_WEBRTC'] and not CONFIG['MOZ_TASK_TRACER']:
+        DIRS += [
+            '/media/webrtc/signaling/test',
+            '/media/mtransport/test',
+        ]
+
+if CONFIG['FUZZING']:
+    DIRS += ['/tools/fuzzing']

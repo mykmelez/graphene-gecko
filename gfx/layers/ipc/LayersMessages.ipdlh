@@ -28,11 +28,13 @@ using struct nsPoint from "nsPoint.h";
 using class mozilla::TimeDuration from "mozilla/TimeStamp.h";
 using class mozilla::TimeStamp from "mozilla/TimeStamp.h";
 using mozilla::ScreenRotation from "mozilla/WidgetUtils.h";
-using nsCSSProperty from "nsCSSProperty.h";
+using nsCSSPropertyID from "nsCSSPropertyID.h";
 using mozilla::dom::ScreenOrientationInternal from "mozilla/dom/ScreenOrientation.h";
 using struct mozilla::layers::TextureInfo from "mozilla/layers/CompositorTypes.h";
 using mozilla::LayerMargin from "Units.h";
 using mozilla::LayerPoint from "Units.h";
+using mozilla::LayerCoord from "Units.h";
+using mozilla::LayerSize from "Units.h";
 using mozilla::LayerRect from "Units.h";
 using mozilla::LayerIntRegion from "Units.h";
 using mozilla::ParentLayerIntRect from "Units.h";
@@ -43,9 +45,12 @@ using mozilla::layers::EventRegionsOverride from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::DiagnosticTypes from "mozilla/layers/CompositorTypes.h";
 using struct mozilla::layers::ScrollMetadata from "FrameMetrics.h";
 using mozilla::layers::FrameMetrics::ViewID from "FrameMetrics.h";
-using struct mozilla::layers::FenceHandle from "mozilla/layers/FenceUtils.h";
 using mozilla::layers::LayersBackend from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::MaybeLayerClip from "FrameMetrics.h";
+using mozilla::gfx::Glyph from "Layers.h";
+using mozilla::layers::BorderColors from "mozilla/layers/LayersTypes.h";
+using mozilla::layers::BorderCorners from "mozilla/layers/LayersTypes.h";
+using mozilla::layers::BorderWidths from "mozilla/layers/LayersTypes.h";
 
 namespace mozilla {
 namespace layers {
@@ -62,6 +67,8 @@ struct OpCreatePaintedLayer    { PLayer layer; };
 struct OpCreateContainerLayer  { PLayer layer; };
 struct OpCreateImageLayer      { PLayer layer; };
 struct OpCreateColorLayer      { PLayer layer; };
+struct OpCreateTextLayer       { PLayer layer; };
+struct OpCreateBorderLayer       { PLayer layer; };
 struct OpCreateCanvasLayer     { PLayer layer; };
 struct OpCreateRefLayer        { PLayer layer; };
 
@@ -153,11 +160,18 @@ union Animatable {
   TransformFunction[];
 };
 
+union BaseAnimationStyle {
+  null_t;
+  Animatable;
+};
+
 struct AnimationSegment {
   Animatable startState;
   Animatable endState;
   float startPortion;
   float endPortion;
+  uint8_t startComposite;
+  uint8_t endComposite;
   TimingFunction sampleFn;
 };
 
@@ -178,15 +192,19 @@ union AnimationData {
 };
 
 struct Animation {
-  // Unlike in nsAnimationManager, this start time is at the end of the
-  // delay.  If the delay is changed dynamically, the layer's data will
-  // be updated.
   TimeStamp startTime;
-  // The value of the animation's current time at the moment it was created.
-  // For animations that are waiting to start, their startTime will be null.
-  // Once the animation is ready to start, we calculate an appropriate value
-  // of startTime such that we begin playback from initialCurrentTime.
-  TimeDuration initialCurrentTime;
+  TimeDuration delay;
+  TimeDuration endDelay;
+  // The value of the animation's current time at the moment it was sent to the
+  // compositor.  This value will be used for below cases:
+  // 1) Animations that are play-pending. Initially these animations will have a
+  //    null |startTime|. Once the animation is read to start (i.e. painting has
+  //    finished), we calculate an appropriate value of |startTime| such that
+  //    playback begins from |holdTime|.
+  // 2) Not playing animations (e.g. paused and finished animations). In this
+  //   case the |holdTime| represents the current time the animation will
+  //   maintain.
+  TimeDuration holdTime;
   TimeDuration duration;
   // For each frame, the interpolation point is computed based on the
   // startTime, the direction, the duration, and the current time.
@@ -198,12 +216,23 @@ struct Animation {
   float iterations;
   float iterationStart;
   // This uses the NS_STYLE_ANIMATION_DIRECTION_* constants.
-  int32_t direction;
-  nsCSSProperty property;
+  uint8_t direction;
+  // This uses dom::FillMode.
+  uint8_t fillMode;
+  nsCSSPropertyID property;
   AnimationData data;
   float playbackRate;
   // This is used in the transformed progress calculation.
   TimingFunction easingFunction;
+  uint8_t iterationComposite;
+  // True if the animation has a fixed current time (e.g. paused and
+  // forward-filling animations).
+  bool isNotPlaying;
+  // The base style that animations should composite with. This is only set for
+  // animations with a composite mode of additive or accumulate, and only for
+  // the first animation in the set (i.e. the animation that is lowest in the
+  // stack). In all other cases the value is null_t.
+  BaseAnimationStyle baseStyle;
 };
 
 // Change a layer's attributes
@@ -254,9 +283,17 @@ struct ContainerLayerAttributes {
   float presShellResolution;
   bool scaleToResolution;
   EventRegionsOverride eventRegionsOverride;
-  uint32_t hmdDeviceID;
-  int32_t inputFrameID;
 };
+
+struct GlyphArray
+{
+  LayerColor color;
+  Glyph[] glyphs;
+};
+
+// XXX - Bas - Hack warning! This is using a raw pointer to a ScaledFont*
+// and won't work with e10s.
+struct TextLayerAttributes      { IntRect bounds; GlyphArray[] glyphs; uintptr_t scaledFont; };
 struct ColorLayerAttributes     { LayerColor color; IntRect bounds; };
 struct CanvasLayerAttributes    { SamplingFilter samplingFilter; IntRect bounds; };
 struct RefLayerAttributes {
@@ -266,6 +303,12 @@ struct RefLayerAttributes {
   EventRegionsOverride eventRegionsOverride;
 };
 struct ImageLayerAttributes     { SamplingFilter samplingFilter; IntSize scaleToSize; ScaleMode scaleMode; };
+struct BorderLayerAttributes {
+  LayerRect rect;
+  BorderColors colors;
+  BorderCorners corners;
+  BorderWidths widths;
+};
 
 union SpecificLayerAttributes {
   null_t;
@@ -273,8 +316,10 @@ union SpecificLayerAttributes {
   ContainerLayerAttributes;
   ColorLayerAttributes;
   CanvasLayerAttributes;
+  TextLayerAttributes;
   RefLayerAttributes;
   ImageLayerAttributes;
+  BorderLayerAttributes;
 };
 
 struct LayerAttributes {
@@ -376,32 +421,13 @@ struct OpRemoveTexture {
   PTexture texture;
 };
 
-struct OpRemoveTextureAsync {
-  uint64_t holderId;
-  uint64_t transactionId;
-  PCompositable compositable;
-  PTexture texture;
-};
-
-struct OpReplyRemoveTexture {
-  uint64_t holderId;
-  uint64_t transactionId;
-};
-
-union MaybeFence {
-  FenceHandle;
-  null_t;
-};
-
 struct TimedTexture {
   PTexture texture;
   ReadLockDescriptor sharedLock;
-  MaybeFence fence;
   TimeStamp timeStamp;
   IntRect picture;
   uint32_t frameID;
   uint32_t producerID;
-  int32_t inputFrameID;
 };
 
 /**
@@ -430,22 +456,7 @@ union MaybeRegion {
   null_t;
 };
 
-struct OpDeliverFence {
-  uint64_t TextureId;
-  FenceHandle fence;
-};
-
-struct OpDeliverFenceToNonRecycle {
-  uint64_t TextureId;
-  FenceHandle fence;
-};
-
 struct OpNotifyNotUsed {
-  uint64_t TextureId;
-  uint64_t fwdTransactionId;
-};
-
-struct OpNotifyNotUsedToNonRecycle {
   uint64_t TextureId;
   uint64_t fwdTransactionId;
 };
@@ -456,7 +467,6 @@ union CompositableOperationDetail {
   OpUseTiledLayerBuffer;
 
   OpRemoveTexture;
-  OpRemoveTextureAsync;
 
   OpUseTexture;
   OpUseComponentAlphaTextures;
@@ -476,6 +486,8 @@ union Edit {
   OpCreateContainerLayer;
   OpCreateImageLayer;
   OpCreateColorLayer;
+  OpCreateTextLayer;
+  OpCreateBorderLayer;
   OpCreateCanvasLayer;
   OpCreateRefLayer;
 
@@ -529,11 +541,7 @@ union EditReply {
 };
 
 union AsyncParentMessageData {
-  OpDeliverFence;
-  OpDeliverFenceToNonRecycle;
   OpNotifyNotUsed;
-  OpNotifyNotUsedToNonRecycle;
-  OpReplyRemoveTexture;
 };
 
 } // namespace

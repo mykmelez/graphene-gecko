@@ -157,12 +157,15 @@ static const char* const sExtensionNames[] = {
     "GL_IMG_texture_compression_pvrtc",
     "GL_IMG_texture_npot",
     "GL_KHR_debug",
+    "GL_KHR_texture_compression_astc_hdr",
+    "GL_KHR_texture_compression_astc_ldr",
     "GL_NV_draw_instanced",
     "GL_NV_fence",
     "GL_NV_framebuffer_blit",
     "GL_NV_geometry_program4",
     "GL_NV_half_float",
     "GL_NV_instanced_arrays",
+    "GL_NV_primitive_restart",
     "GL_NV_texture_barrier",
     "GL_NV_transform_feedback",
     "GL_NV_transform_feedback2",
@@ -470,6 +473,7 @@ GLContext::GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
     mNeedsTextureSizeChecks(false),
     mNeedsFlushBeforeDeleteFB(false),
     mTextureAllocCrashesOnMapFailure(false),
+    mNeedsCheckAfterAttachTextureToFb(false),
     mWorkAroundDriverBugs(true),
     mHeavyGLCallsSinceLastFlush(false)
 {
@@ -787,7 +791,7 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
 
     // The order of these strings must match up with the order of the enum
     // defined in GLContext.h for vendor IDs.
-    const char* vendorMatchStrings[size_t(GLVendor::Other)] = {
+    const char* vendorMatchStrings[size_t(GLVendor::Other) + 1] = {
         "Intel",
         "NVIDIA",
         "ATI",
@@ -796,7 +800,8 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
         "nouveau",
         "Vivante",
         "VMware, Inc.",
-        "ARM"
+        "ARM",
+        "Unknown"
     };
 
     mVendor = GLVendor::Other;
@@ -809,7 +814,7 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
 
     // The order of these strings must match up with the order of the enum
     // defined in GLContext.h for renderer IDs.
-    const char* rendererMatchStrings[size_t(GLRenderer::Other)] = {
+    const char* rendererMatchStrings[size_t(GLRenderer::Other) + 1] = {
         "Adreno 200",
         "Adreno 205",
         "Adreno (TM) 200",
@@ -819,13 +824,16 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
         "Adreno (TM) 330",
         "Adreno (TM) 420",
         "Mali-400 MP",
+        "Mali-450 MP",
         "PowerVR SGX 530",
         "PowerVR SGX 540",
+        "PowerVR SGX 544MP",
         "NVIDIA Tegra",
         "Android Emulator",
         "Gallium 0.4 on llvmpipe",
         "Intel HD Graphics 3000 OpenGL Engine",
-        "Microsoft Basic Render Driver"
+        "Microsoft Basic Render Driver",
+        "Unknown"
     };
 
     mRenderer = GLRenderer::Other;
@@ -837,20 +845,10 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
     }
 
     if (ShouldSpew()) {
-        const char* vendors[size_t(GLVendor::Other)] = {
-            "Intel",
-            "NVIDIA",
-            "ATI",
-            "Qualcomm"
-        };
-
-        MOZ_ASSERT(glVendorString);
-        if (mVendor < GLVendor::Other) {
-            printf_stderr("OpenGL vendor ('%s') recognized as: %s\n",
-                          glVendorString, vendors[size_t(mVendor)]);
-        } else {
-            printf_stderr("OpenGL vendor ('%s') not recognized.\n", glVendorString);
-        }
+        printf_stderr("GL_VENDOR: %s\n", glVendorString);
+        printf_stderr("mVendor: %s\n", vendorMatchStrings[size_t(mVendor)]);
+        printf_stderr("GL_RENDERER: %s\n", glRendererString);
+        printf_stderr("mRenderer: %s\n", rendererMatchStrings[size_t(mRenderer)]);
     }
 
     ////////////////
@@ -1068,6 +1066,17 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
         // Bug 1164027. Driver crashes when functions such as
         // glTexImage2D fail due to virtual memory exhaustion.
         mTextureAllocCrashesOnMapFailure = true;
+    }
+#endif
+#if MOZ_WIDGET_ANDROID
+    if (mWorkAroundDriverBugs &&
+        Renderer() == GLRenderer::SGX540 &&
+        AndroidBridge::Bridge()->GetAPIVersion() <= 15) {
+        // Bug 1288446. Driver sometimes crashes when uploading data to a
+        // texture if the render target has changed since the texture was
+        // rendered from. Calling glCheckFramebufferStatus after
+        // glFramebufferTexture2D prevents the crash.
+        mNeedsCheckAfterAttachTextureToFb = true;
     }
 #endif
 
@@ -1574,6 +1583,14 @@ GLContext::LoadMoreSymbols(const char* prefix, bool trygl)
         fnLoadForFeature(symbols, GLFeature::invalidate_framebuffer);
     }
 
+    if (IsSupported(GLFeature::prim_restart)) {
+        const SymLoadStruct symbols[] = {
+            { (PRFuncPtr*) &mSymbols.fPrimitiveRestartIndex,    { "PrimitiveRestartIndex", "PrimitiveRestartIndexNV", nullptr } },
+            END_SYMBOLS
+        };
+        fnLoadForFeature(symbols, GLFeature::prim_restart);
+    }
+
     if (IsExtensionSupported(KHR_debug)) {
         const SymLoadStruct symbols[] = {
             { (PRFuncPtr*) &mSymbols.fDebugMessageControl,  { "DebugMessageControl",  "DebugMessageControlKHR",  nullptr } },
@@ -1780,6 +1797,13 @@ GLContext::InitExtensions()
             MarkExtensionSupported(OES_EGL_sync);
         }
 
+        if (Vendor() == GLVendor::ATI) {
+            // ATI drivers say this extension exists, but we can't
+            // actually find the EGLImageTargetRenderbufferStorageOES
+            // extension function pointer in the drivers.
+            MarkExtensionUnsupported(OES_EGL_image);
+        }
+
         if (Vendor() == GLVendor::Imagination &&
             Renderer() == GLRenderer::SGX540)
         {
@@ -1787,8 +1811,20 @@ GLContext::InitExtensions()
             MarkExtensionUnsupported(OES_EGL_sync);
         }
 
+#ifdef MOZ_WIDGET_ANDROID
+        if (Vendor() == GLVendor::Imagination &&
+            Renderer() == GLRenderer::SGX544MP &&
+            AndroidBridge::Bridge()->GetAPIVersion() < 21)
+        {
+            // Bug 1026404
+            MarkExtensionUnsupported(OES_EGL_image);
+            MarkExtensionUnsupported(OES_EGL_image_external);
+        }
+#endif
+
         if (Vendor() == GLVendor::ARM &&
-            Renderer() == GLRenderer::Mali400MP)
+            (Renderer() == GLRenderer::Mali400MP ||
+             Renderer() == GLRenderer::Mali450MP))
         {
             // Bug 1264505
             MarkExtensionUnsupported(OES_EGL_image_external);
@@ -2116,13 +2152,13 @@ GLContext::AssembleOffscreenFBs(const GLuint colorMSRB,
     if (drawFB_out) {
         *drawFB_out = drawFB;
     } else if (drawFB) {
-        NS_RUNTIMEABORT("drawFB created when not requested!");
+        MOZ_CRASH("drawFB created when not requested!");
     }
 
     if (readFB_out) {
         *readFB_out = readFB;
     } else if (readFB) {
-        NS_RUNTIMEABORT("readFB created when not requested!");
+        MOZ_CRASH("readFB created when not requested!");
     }
 
     return isComplete;
@@ -2846,6 +2882,35 @@ GLContext::fReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum f
     }
 
     AfterGLReadCall();
+
+    // Check if GL is giving back 1.0 alpha for
+    // RGBA reads to RGBA images from no-alpha buffers.
+#ifdef XP_MACOSX
+    if (WorkAroundDriverBugs() &&
+        Vendor() == gl::GLVendor::NVIDIA &&
+        format == LOCAL_GL_RGBA &&
+        type == LOCAL_GL_UNSIGNED_BYTE &&
+        !IsCoreProfile() &&
+        width && height)
+    {
+        GLint alphaBits = 0;
+        fGetIntegerv(LOCAL_GL_ALPHA_BITS, &alphaBits);
+        if (!alphaBits) {
+            const uint32_t alphaMask = 0xff000000;
+
+            uint32_t* itr = (uint32_t*)pixels;
+            uint32_t testPixel = *itr;
+            if ((testPixel & alphaMask) != alphaMask) {
+                // We need to set the alpha channel to 1.0 manually.
+                uint32_t* itrEnd = itr + width*height;  // Stride is guaranteed to be width*4.
+
+                for (; itr != itrEnd; itr++) {
+                    *itr |= alphaMask;
+                }
+            }
+        }
+    }
+#endif
 }
 
 void

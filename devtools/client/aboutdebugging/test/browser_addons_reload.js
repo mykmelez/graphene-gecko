@@ -109,8 +109,11 @@ class TempWebExt {
 add_task(function* reloadButtonReloadsAddon() {
   const { tab, document } = yield openAboutDebugging("addons");
   yield waitForInitialAddonList(document);
-  yield installAddon(document, "addons/unpacked/install.rdf",
-                     ADDON_NAME, ADDON_NAME);
+  yield installAddon({
+    document,
+    path: "addons/unpacked/install.rdf",
+    name: ADDON_NAME,
+  });
 
   const reloadButton = getReloadButton(document, ADDON_NAME);
   is(reloadButton.disabled, false, "Reload button should not be disabled");
@@ -167,8 +170,8 @@ add_task(function* reloadButtonRefreshesMetadata() {
 
   // Wait for the add-on list to be updated with the reloaded name.
   const onReInstall = promiseAddonEvent("onInstalled");
-  const onAddonReloaded = waitForMutation(getAddonList(document),
-                                          { childList: true, subtree: true });
+  const onAddonReloaded = waitForContentMutation(getAddonList(document));
+
   const reloadButton = getReloadButton(document, manifestBase.name);
   reloadButton.click();
 

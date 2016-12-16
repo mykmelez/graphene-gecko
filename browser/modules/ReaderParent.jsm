@@ -13,7 +13,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils","resource://gre/modules/PlacesUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils", "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode", "resource://gre/modules/ReaderMode.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour", "resource:///modules/UITour.jsm");
 
@@ -88,6 +88,7 @@ var ReaderParent = {
 
     let button = win.document.getElementById("reader-mode-button");
     let command = win.document.getElementById("View:ReaderView");
+    let key = win.document.getElementById("toggleReaderMode");
     if (browser.currentURI.spec.startsWith("about:reader")) {
       button.setAttribute("readeractive", true);
       button.hidden = false;
@@ -96,6 +97,7 @@ var ReaderParent = {
       command.setAttribute("label", closeText);
       command.setAttribute("hidden", false);
       command.setAttribute("accesskey", gStringBundle.GetStringFromName("readerView.close.accesskey"));
+      key.setAttribute("disabled", false);
     } else {
       button.removeAttribute("readeractive");
       button.hidden = !browser.isArticle;
@@ -104,6 +106,7 @@ var ReaderParent = {
       command.setAttribute("label", enterText);
       command.setAttribute("hidden", !browser.isArticle);
       command.setAttribute("accesskey", gStringBundle.GetStringFromName("readerView.enter.accesskey"));
+      key.setAttribute("disabled", !browser.isArticle);
     }
 
     let currentUriHost = browser.currentURI && browser.currentURI.asciiHost;

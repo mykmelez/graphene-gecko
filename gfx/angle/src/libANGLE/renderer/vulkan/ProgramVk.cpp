@@ -25,7 +25,7 @@ ProgramVk::~ProgramVk()
 LinkResult ProgramVk::load(gl::InfoLog &infoLog, gl::BinaryInputStream *stream)
 {
     UNIMPLEMENTED();
-    return LinkResult(false, gl::Error(GL_INVALID_OPERATION));
+    return gl::Error(GL_INVALID_OPERATION);
 }
 
 gl::Error ProgramVk::save(gl::BinaryOutputStream *stream)
@@ -42,7 +42,7 @@ void ProgramVk::setBinaryRetrievableHint(bool retrievable)
 LinkResult ProgramVk::link(const gl::ContextState &data, gl::InfoLog &infoLog)
 {
     UNIMPLEMENTED();
-    return LinkResult(false, gl::Error(GL_INVALID_OPERATION));
+    return gl::Error(GL_INVALID_OPERATION);
 }
 
 GLboolean ProgramVk::validate(const gl::Caps &caps, gl::InfoLog *infoLog)
@@ -199,6 +199,14 @@ bool ProgramVk::getUniformBlockMemberInfo(const std::string &memberUniformName,
 {
     UNIMPLEMENTED();
     return bool();
+}
+
+void ProgramVk::setPathFragmentInputGen(const std::string &inputName,
+                                        GLenum genMode,
+                                        GLint components,
+                                        const GLfloat *coeffs)
+{
+    UNIMPLEMENTED();
 }
 
 }  // namespace rx

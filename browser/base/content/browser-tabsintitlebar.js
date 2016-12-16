@@ -7,7 +7,7 @@
 // this one on platforms which don't have CAN_DRAW_IN_TITLEBAR defined.
 
 var TabsInTitlebar = {
-  init: function () {
+  init: function() {
     if (this._initialized) {
       return;
     }
@@ -49,17 +49,15 @@ var TabsInTitlebar = {
     }
   },
 
-  allowedBy: function (condition, allow) {
+  allowedBy: function(condition, allow) {
     if (allow) {
       if (condition in this._disallowed) {
         delete this._disallowed[condition];
         this._update(true);
       }
-    } else {
-      if (!(condition in this._disallowed)) {
-        this._disallowed[condition] = null;
-        this._update(true);
-      }
+    } else if (!(condition in this._disallowed)) {
+      this._disallowed[condition] = null;
+      this._update(true);
     }
   },
 
@@ -71,18 +69,18 @@ var TabsInTitlebar = {
     return document.documentElement.getAttribute("tabsintitlebar") == "true";
   },
 
-  observe: function (subject, topic, data) {
+  observe: function(subject, topic, data) {
     if (topic == "nsPref:changed")
       this._readPref();
   },
 
-  handleEvent: function (aEvent) {
+  handleEvent: function(aEvent) {
     if (aEvent.type == "resolutionchange" && aEvent.target == window) {
       this._update(true);
     }
   },
 
-  _onMenuMutate: function (aMutations) {
+  _onMenuMutate: function(aMutations) {
     for (let mutation of aMutations) {
       if (mutation.attributeName == "inactive" ||
           mutation.attributeName == "autohide") {
@@ -98,12 +96,12 @@ var TabsInTitlebar = {
   _prefName: "browser.tabs.drawInTitlebar",
   _lastSizeMode: null,
 
-  _readPref: function () {
+  _readPref: function() {
     this.allowedBy("pref",
                    Services.prefs.getBoolPref(this._prefName));
   },
 
-  _update: function (aForce=false) {
+  _update: function(aForce = false) {
     let $ = id => document.getElementById(id);
     let rect = ele => ele.getBoundingClientRect();
     let verticalMargins = cstyle => parseFloat(cstyle.marginBottom) + parseFloat(cstyle.marginTop);
@@ -117,8 +115,6 @@ var TabsInTitlebar = {
       this._updateOnInit = true;
       return;
     }
-
-    let allowed = true;
 
     if (!aForce) {
       // _update is called on resize events, because the window is not ready
@@ -140,10 +136,7 @@ var TabsInTitlebar = {
       }
     }
 
-    for (let something in this._disallowed) {
-      allowed = false;
-      break;
-    }
+    let allowed = (Object.keys(this._disallowed)).length == 0;
 
     let titlebar = $("titlebar");
     let titlebarContent = $("titlebar-content");
@@ -260,12 +253,12 @@ var TabsInTitlebar = {
     }
   },
 
-  _sizePlaceholder: function (type, width) {
-    Array.forEach(document.querySelectorAll(".titlebar-placeholder[type='"+ type +"']"),
-                  function (node) { node.width = width; });
+  _sizePlaceholder: function(type, width) {
+    Array.forEach(document.querySelectorAll(".titlebar-placeholder[type='" + type + "']"),
+                  function(node) { node.width = width; });
   },
 
-  uninit: function () {
+  uninit: function() {
     this._initialized = false;
     removeEventListener("resolutionchange", this);
     Services.prefs.removeObserver(this._prefName, this);
@@ -298,11 +291,11 @@ function updateTitlebarDisplay() {
       }
       document.documentElement.setAttribute("drawtitle", "true");
     }
-  } else { // not OS X
-    if (TabsInTitlebar.enabled)
-      document.documentElement.setAttribute("chromemargin", "0,2,2,2");
-    else
-      document.documentElement.removeAttribute("chromemargin");
+  } else if (TabsInTitlebar.enabled) {
+    // not OS X
+    document.documentElement.setAttribute("chromemargin", "0,2,2,2");
+  } else {
+    document.documentElement.removeAttribute("chromemargin");
   }
 }
 

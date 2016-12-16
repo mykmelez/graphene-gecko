@@ -7,7 +7,7 @@
 #include "GamepadServiceTest.h"
 
 #include "mozilla/ErrorResult.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "mozilla/dom/GamepadManager.h"
 #include "mozilla/dom/GamepadPlatformService.h"
@@ -17,7 +17,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
@@ -123,7 +123,9 @@ GamepadServiceTest::AddGamepad(const nsAString& aID,
   }
 
   GamepadAdded a(nsString(aID), 0,
-                (uint32_t)aMapping, aNumButtons, aNumAxes);
+                 aMapping, static_cast<uint32_t>(GamepadHand::_empty),
+                 GamepadServiceType::Standard,
+                 aNumButtons, aNumAxes);
   GamepadChangeEvent e(a);
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
 
@@ -150,7 +152,7 @@ GamepadServiceTest::RemoveGamepad(uint32_t aIndex)
     return;
   }
 
-  GamepadRemoved a(aIndex);
+  GamepadRemoved a(aIndex, GamepadServiceType::Standard);
   GamepadChangeEvent e(a);
 
   uint32_t id = ++mEventNumber;
@@ -171,7 +173,8 @@ GamepadServiceTest::NewButtonEvent(uint32_t aIndex,
     return;
   }
 
-  GamepadButtonInformation a(aIndex, aButton, aPressed, aPressed ? 1.0 : 0);
+  GamepadButtonInformation a(aIndex, GamepadServiceType::Standard,
+                             aButton, aPressed, aPressed ? 1.0 : 0);
   GamepadChangeEvent e(a);
 
   uint32_t id = ++mEventNumber;
@@ -193,7 +196,8 @@ GamepadServiceTest::NewButtonValueEvent(uint32_t aIndex,
     return;
   }
 
-  GamepadButtonInformation a(aIndex, aButton, aPressed, aValue);
+  GamepadButtonInformation a(aIndex, GamepadServiceType::Standard,
+                             aButton, aPressed, aValue);
   GamepadChangeEvent e(a);
 
   uint32_t id = ++mEventNumber;
@@ -214,7 +218,8 @@ GamepadServiceTest::NewAxisMoveEvent(uint32_t aIndex,
     return;
   }
 
-  GamepadAxisInformation a(aIndex, aAxis, aValue);
+  GamepadAxisInformation a(aIndex, GamepadServiceType::Standard,
+                           aAxis, aValue);
   GamepadChangeEvent e(a);
 
   uint32_t id = ++mEventNumber;

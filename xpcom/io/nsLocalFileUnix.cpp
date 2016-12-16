@@ -10,6 +10,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Sprintf.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -826,7 +827,7 @@ nsLocalFile::CopyToNative(nsIFile* aNewParent, const nsACString& aNewName)
 #endif
 
     // actually create the file.
-    nsLocalFile* newFile = new nsLocalFile();
+    auto* newFile = new nsLocalFile();
     nsCOMPtr<nsIFile> fileRef(newFile); // release on exit
 
     rv = newFile->InitWithNativePath(newPathName);
@@ -1039,7 +1040,7 @@ nsLocalFile::Remove(bool aRecursive)
   }
 
   if (aRecursive) {
-    nsDirEnumeratorUnix* dir = new nsDirEnumeratorUnix();
+    auto* dir = new nsDirEnumeratorUnix();
 
     nsCOMPtr<nsISimpleEnumerator> dirRef(dir); // release on exit
 
@@ -1296,7 +1297,7 @@ GetDeviceName(int aDeviceMajor, int aDeviceMinor, nsACString& aDeviceName)
   char mountinfoLine[kMountInfoLineLength];
   char deviceNum[kMountInfoLineLength];
 
-  snprintf(deviceNum, kMountInfoLineLength, "%d:%d", aDeviceMajor, aDeviceMinor);
+  SprintfLiteral(deviceNum, "%d:%d", aDeviceMajor, aDeviceMinor);
 
   FILE* f = fopen("/proc/self/mountinfo", "rt");
   if (!f) {
@@ -1436,10 +1437,8 @@ nsLocalFile::GetParent(nsIFile** aParent)
 
   // <brendan, after jband> I promise to play nice
   char* buffer = mPath.BeginWriting();
-  char* slashp = buffer;
-
   // find the last significant slash in buffer
-  slashp = strrchr(buffer, '/');
+  char* slashp = strrchr(buffer, '/');
   NS_ASSERTION(slashp, "non-canonical path?");
   if (!slashp) {
     return NS_ERROR_FILE_INVALID_PATH;
@@ -1558,8 +1557,8 @@ nsLocalFile::IsExecutable(bool* aResult)
       "jar"   // java application bundle
     };
     nsDependentSubstring ext = Substring(path, dotIdx + 1);
-    for (size_t i = 0; i < ArrayLength(executableExts); i++) {
-      if (ext.EqualsASCII(executableExts[i])) {
+    for (auto executableExt : executableExts) {
+      if (ext.EqualsASCII(executableExt)) {
         // Found a match.  Set result and quit.
         *aResult = true;
         return NS_OK;

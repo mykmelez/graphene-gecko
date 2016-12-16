@@ -22,7 +22,7 @@ NS_IMPL_NS_NEW_HTML_ELEMENT(Menu)
 namespace mozilla {
 namespace dom {
 
-enum MenuType
+enum MenuType : uint8_t
 {
   MENU_TYPE_CONTEXT = 1,
   MENU_TYPE_TOOLBAR,
@@ -33,7 +33,7 @@ static const nsAttrValue::EnumTable kMenuTypeTable[] = {
   { "context", MENU_TYPE_CONTEXT },
   { "toolbar", MENU_TYPE_TOOLBAR },
   { "list", MENU_TYPE_LIST },
-  { 0 }
+  { nullptr, 0 }
 };
 
 static const nsAttrValue::EnumTable* kMenuDefaultType =
@@ -58,7 +58,7 @@ HTMLMenuElement::~HTMLMenuElement()
 }
 
 NS_IMPL_ISUPPORTS_INHERITED(HTMLMenuElement, nsGenericHTMLElement,
-                            nsIDOMHTMLMenuElement, nsIHTMLMenu)
+                            nsIDOMHTMLMenuElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLMenuElement)
 
@@ -68,14 +68,12 @@ NS_IMPL_ENUM_ATTR_DEFAULT_VALUE(HTMLMenuElement, Type, type,
 NS_IMPL_STRING_ATTR(HTMLMenuElement, Label, label)
 
 
-NS_IMETHODIMP
+void
 HTMLMenuElement::SendShowEvent()
 {
-  NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_DOM_SECURITY_ERR);
-
   nsCOMPtr<nsIDocument> document = GetComposedDoc();
   if (!document) {
-    return NS_ERROR_FAILURE;
+    return;
   }
 
   WidgetEvent event(true, eShow);
@@ -84,25 +82,13 @@ HTMLMenuElement::SendShowEvent()
 
   nsCOMPtr<nsIPresShell> shell = document->GetShell();
   if (!shell) {
-    return NS_ERROR_FAILURE;
+    return;
   }
  
   RefPtr<nsPresContext> presContext = shell->GetPresContext();
   nsEventStatus status = nsEventStatus_eIgnore;
   EventDispatcher::Dispatch(static_cast<nsIContent*>(this), presContext,
                             &event, nullptr, &status);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLMenuElement::CreateBuilder(nsIMenuBuilder** _retval)
-{
-  NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_DOM_SECURITY_ERR);
-
-  nsCOMPtr<nsIMenuBuilder> builder = CreateBuilder();
-  builder.swap(*_retval);
-  return NS_OK;
 }
 
 already_AddRefed<nsIMenuBuilder>
@@ -113,22 +99,18 @@ HTMLMenuElement::CreateBuilder()
   }
 
   nsCOMPtr<nsIMenuBuilder> builder = do_CreateInstance(HTMLMENUBUILDER_CONTRACTID);
-  NS_WARN_IF_FALSE(builder, "No builder available");
+  NS_WARNING_ASSERTION(builder, "No builder available");
   return builder.forget();
 }
 
-NS_IMETHODIMP
+void
 HTMLMenuElement::Build(nsIMenuBuilder* aBuilder)
 {
-  NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_DOM_SECURITY_ERR);
-
   if (!aBuilder) {
-    return NS_OK;
+    return;
   }
 
   BuildSubmenu(EmptyString(), this, aBuilder);
-
-  return NS_OK;
 }
 
 
@@ -226,6 +208,8 @@ HTMLMenuElement::TraverseContent(nsIContent* aContent,
       aBuilder->AddItemFor(menuitem, CanLoadIcon(child, icon));
 
       aSeparator = ST_FALSE;
+    } else if (child->IsHTMLElement(nsGkAtoms::hr)) {
+      aBuilder->AddSeparator();
     } else if (child->IsHTMLElement(nsGkAtoms::menu) && !element->IsHidden()) {
       if (child->HasAttr(kNameSpaceID_None, nsGkAtoms::label)) {
         nsAutoString label;

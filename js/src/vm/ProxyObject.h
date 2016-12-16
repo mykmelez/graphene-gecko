@@ -77,6 +77,9 @@ class ProxyObject : public ShapedObject
         SetProxyExtra(this, n, extra);
     }
 
+    gc::AllocKind allocKindForTenure() const;
+    static size_t objectMovedDuringMinorGC(TenuringTracer* trc, JSObject* dst, JSObject* src);
+
   private:
     GCPtrValue* slotOfExtra(size_t n) {
         MOZ_ASSERT(n < detail::PROXY_EXTRA_SLOTS);
@@ -101,11 +104,11 @@ class ProxyObject : public ShapedObject
   public:
     static unsigned grayLinkExtraSlot(JSObject* obj);
 
-    void renew(JSContext* cx, const BaseProxyHandler* handler, Value priv);
+    void renew(JSContext* cx, const BaseProxyHandler* handler, const Value& priv);
 
     static void trace(JSTracer* trc, JSObject* obj);
 
-    void nuke(const BaseProxyHandler* handler);
+    void nuke();
 
     // There is no class_ member to force specialization of JSObject::is<T>().
     // The implementation in JSObject is incorrect for proxies since it doesn't

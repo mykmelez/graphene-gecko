@@ -9,6 +9,8 @@ const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 
+const logger = Log.repository.getLogger("Marionette");
+
 Cu.import("chrome://marionette/content/error.js");
 
 XPCOMUtils.defineLazyModuleGetter(
@@ -16,12 +18,19 @@ XPCOMUtils.defineLazyModuleGetter(
 XPCOMUtils.defineLazyModuleGetter(
     this, "clearInterval", "resource://gre/modules/Timer.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "retrieval",
-    () => Cc["@mozilla.org/accessibleRetrieval;1"].getService(Ci.nsIAccessibleRetrieval));
+XPCOMUtils.defineLazyGetter(this, "service", () => {
+  let service;
+  try {
+    service = Cc["@mozilla.org/accessibilityService;1"].getService(
+      Ci.nsIAccessibilityService);
+  } catch (e) {
+    logger.warn("Accessibility module is not present");
+  } finally {
+    return service;
+  }
+});
 
 this.EXPORTED_SYMBOLS = ["accessibility"];
-
-const logger = Log.repository.getLogger("Marionette");
 
 /**
  * Number of attempts to get an accessible object for an element.
@@ -36,17 +45,32 @@ const GET_ACCESSIBLE_ATTEMPTS = 100;
  */
 const GET_ACCESSIBLE_ATTEMPT_INTERVAL = 10;
 
-this.accessibility = {};
+this.accessibility = {
+  get service() {
+    return service;
+  }
+};
 
 /**
  * Accessible states used to check element"s state from the accessiblity API
  * perspective.
+ * Note: if gecko is built with --disable-accessibility, the interfaces are not
+ * defined. This is why we use getters instead to be able to use these
+ * statically.
  */
 accessibility.State = {
-  Unavailable: Ci.nsIAccessibleStates.STATE_UNAVAILABLE,
-  Focusable: Ci.nsIAccessibleStates.STATE_FOCUSABLE,
-  Selectable: Ci.nsIAccessibleStates.STATE_SELECTABLE,
-  Selected: Ci.nsIAccessibleStates.STATE_SELECTED,
+  get Unavailable() {
+    return Ci.nsIAccessibleStates.STATE_UNAVAILABLE;
+  },
+  get Focusable() {
+    return Ci.nsIAccessibleStates.STATE_FOCUSABLE;
+  },
+  get Selectable() {
+    return Ci.nsIAccessibleStates.STATE_SELECTABLE;
+  },
+  get Selected() {
+    return Ci.nsIAccessibleStates.STATE_SELECTED;
+  }
 };
 
 /**
@@ -81,7 +105,7 @@ accessibility.ActionableRoles = new Set([
  * Factory function that constructs a new {@code accessibility.Checks}
  * object with enforced strictness or not.
  */
-accessibility.get = function(strict = false) {
+accessibility.get = function (strict = false) {
   return new accessibility.Checks(!!strict);
 };
 
@@ -112,30 +136,32 @@ accessibility.Checks = class {
    *     Flag indicating that the element must have an accessible object.
    *     Defaults to not require this.
    *
-   * @return {nsIAccessible}
-   *     Accessibility object for the given element.
+   * @return {Promise: nsIAccessible}
+   *     Promise with an accessibility object for the given element.
    */
   getAccessible(element, mustHaveAccessible = false) {
+    if (!this.strict) {
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
-      let acc = retrieval.getAccessibleFor(element);
-
-      // if accessible object is found, return it;
-      // if it is not required, also resolve
-      if (acc || !mustHaveAccessible) {
-        resolve(acc);
-
-      // if we must have an accessible but are strict,
-      // reject now and avoid polling for an accessible object
-      } else if (mustHaveAccessible && !this.strict) {
+      if (!accessibility.service) {
         reject();
+        return;
+      }
 
-      // if we require an accessible object, we need to poll for it
-      // because accessible tree might be
-      // out of sync with DOM tree for a short time
+      let acc = accessibility.service.getAccessibleFor(element);
+      if (acc || !mustHaveAccessible) {
+        // if accessible object is found, return it;
+        // if it is not required, also resolve
+        resolve(acc);
       } else {
+        // if we require an accessible object, we need to poll for it
+        // because accessible tree might be
+        // out of sync with DOM tree for a short time
         let attempts = GET_ACCESSIBLE_ATTEMPTS;
         let intervalId = setInterval(() => {
-          let acc = retrieval.getAccessibleFor(element);
+          let acc = accessibility.service.getAccessibleFor(element);
           if (acc || --attempts <= 0) {
             clearInterval(intervalId);
             if (acc) {
@@ -163,7 +189,7 @@ accessibility.Checks = class {
    */
   isActionableRole(accessible) {
     return accessibility.ActionableRoles.has(
-        retrieval.getStringRole(accessible.role));
+        accessibility.service.getStringRole(accessible.role));
   }
 
   /**
@@ -266,7 +292,7 @@ accessibility.Checks = class {
    *     If |element|'s visibility state does not correspond to
    *     |accessible|'s.
    */
-  checkVisible(accessible, element, visible) {
+  assertVisible(accessible, element, visible) {
     if (!accessible) {
       return;
     }
@@ -298,7 +324,7 @@ accessibility.Checks = class {
    * @throws ElementNotAccessibleError
    *     If |element|'s enabled state does not match |accessible|'s.
    */
-  checkEnabled(accessible, element, enabled) {
+  assertEnabled(accessible, element, enabled) {
     if (!accessible) {
       return;
     }
@@ -333,7 +359,7 @@ accessibility.Checks = class {
    * @throws ElementNotAccessibleError
    *     If it is impossible to activate |element| with |accessible|.
    */
-  checkActionable(accessible, element) {
+  assertActionable(accessible, element) {
     if (!accessible) {
       return;
     }
@@ -368,7 +394,7 @@ accessibility.Checks = class {
    *     If |element|'s selected state does not correspond to
    *     |accessible|'s.
    */
-  checkSelected(accessible, element, selected) {
+  assertSelected(accessible, element, selected) {
     if (!accessible) {
       return;
     }
@@ -401,17 +427,15 @@ accessibility.Checks = class {
    *     If |strict| is true.
    */
   error(message, element) {
-    if (!message) {
+    if (!message || !this.strict) {
       return;
     }
     if (element) {
       let {id, tagName, className} = element;
       message += `: id: ${id}, tagName: ${tagName}, className: ${className}`;
     }
-    if (this.strict) {
-      throw new ElementNotAccessibleError(message);
-    }
-    logger.debug(message);
+
+    throw new ElementNotAccessibleError(message);
   }
 
 };

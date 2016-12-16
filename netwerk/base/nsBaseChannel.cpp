@@ -84,8 +84,8 @@ nsBaseChannel::Redirect(nsIChannel *newChannel, uint32_t redirectFlags,
   // make a copy of the loadinfo, append to the redirectchain
   // and set it on the new channel
   if (mLoadInfo) {
-    nsSecurityFlags secFlags = mLoadInfo->GetSecurityFlags() ^
-                               nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
+    nsSecurityFlags secFlags = mLoadInfo->GetSecurityFlags() &
+                               ~nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
     nsCOMPtr<nsILoadInfo> newLoadInfo =
       static_cast<mozilla::LoadInfo*>(mLoadInfo.get())->CloneWithNewSecFlags(secFlags);
 
@@ -312,9 +312,9 @@ nsBaseChannel::ClassifyURI()
   }
 
   if (mLoadFlags & LOAD_CLASSIFY_URI) {
-    RefPtr<nsChannelClassifier> classifier = new nsChannelClassifier();
+    RefPtr<nsChannelClassifier> classifier = new nsChannelClassifier(this);
     if (classifier) {
-      classifier->Start(this);
+      classifier->Start();
     } else {
       Cancel(NS_ERROR_OUT_OF_MEMORY);
     }

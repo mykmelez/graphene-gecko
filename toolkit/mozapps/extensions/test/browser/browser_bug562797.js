@@ -58,23 +58,27 @@ function test() {
 
   Services.prefs.setCharPref(PREF_DISCOVERURL, MAIN_URL);
 
-  var gProvider = new MockProvider();
-  gProvider.createAddons([{
-    id: "test1@tests.mozilla.org",
-    name: "Test add-on 1",
-    description: "foo"
-  },
-  {
-    id: "test2@tests.mozilla.org",
-    name: "Test add-on 2",
-    description: "bar"
-  },
-  {
-    id: "test3@tests.mozilla.org",
-    name: "Test add-on 3",
-    type: "theme",
-    description: "bar"
-  }]);
+  SpecialPowers.pushPrefEnv({"set": [
+      ["dom.ipc.processCount", 1],
+    ]}, () => {
+    var gProvider = new MockProvider();
+    gProvider.createAddons([{
+      id: "test1@tests.mozilla.org",
+      name: "Test add-on 1",
+      description: "foo"
+    },
+    {
+      id: "test2@tests.mozilla.org",
+      name: "Test add-on 2",
+      description: "bar"
+    },
+    {
+      id: "test3@tests.mozilla.org",
+      name: "Test add-on 3",
+      type: "theme",
+      description: "bar"
+    }]);
+  });
 
   run_next_test();
 }
@@ -93,11 +97,11 @@ function go_back(aManager) {
 }
 
 function go_back_backspace(aManager) {
-    EventUtils.synthesizeKey("VK_BACK_SPACE",{});
+    EventUtils.synthesizeKey("VK_BACK_SPACE", {});
 }
 
 function go_forward_backspace(aManager) {
-    EventUtils.synthesizeKey("VK_BACK_SPACE",{shiftKey: true});
+    EventUtils.synthesizeKey("VK_BACK_SPACE", {shiftKey: true});
 }
 
 function go_forward(aManager) {
@@ -233,12 +237,6 @@ add_test(function() {
   if (!gUseInContentUI) {
     run_next_test();
     return;
-  }
-
-  function promiseViewLoad(manager) {
-    return new Promise(resolve => {
-      wait_for_view_load(manager, resolve);
-    });
   }
 
   function promiseManagerLoaded(manager) {

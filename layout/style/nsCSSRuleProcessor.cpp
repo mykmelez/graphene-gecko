@@ -44,7 +44,7 @@
 #include "nsAttrName.h"
 #include "nsTArray.h"
 #include "nsContentUtils.h"
-#include "nsIMediaList.h"
+#include "nsMediaList.h"
 #include "nsCSSRules.h"
 #include "nsStyleSet.h"
 #include "mozilla/dom/Element.h"
@@ -54,6 +54,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Likely.h"
+#include "mozilla/OperatorNewExtensions.h"
 #include "mozilla/TypedEnumBits.h"
 #include "RuleProcessorCache.h"
 #include "nsIDOMMutationEvent.h"
@@ -260,7 +261,7 @@ static void
 RuleHash_InitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   RuleHashTableEntry* entry = static_cast<RuleHashTableEntry*>(hdr);
-  new (entry) RuleHashTableEntry();
+  new (KnownNotNull, entry) RuleHashTableEntry();
 }
 
 static void
@@ -278,7 +279,7 @@ RuleHash_MoveEntry(PLDHashTable *table, const PLDHashEntryHdr *from,
   RuleHashTableEntry *oldEntry =
     const_cast<RuleHashTableEntry*>(
       static_cast<const RuleHashTableEntry*>(from));
-  RuleHashTableEntry *newEntry = new (to) RuleHashTableEntry();
+  auto* newEntry = new (KnownNotNull, to) RuleHashTableEntry();
   newEntry->mRules.SwapElements(oldEntry->mRules);
   oldEntry->~RuleHashTableEntry();
 }
@@ -296,7 +297,7 @@ static void
 RuleHash_TagTable_InitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   RuleHashTagTableEntry* entry = static_cast<RuleHashTagTableEntry*>(hdr);
-  new (entry) RuleHashTagTableEntry();
+  new (KnownNotNull, entry) RuleHashTagTableEntry();
   entry->mTag = const_cast<nsIAtom*>(static_cast<const nsIAtom*>(key));
 }
 
@@ -315,7 +316,7 @@ RuleHash_TagTable_MoveEntry(PLDHashTable *table, const PLDHashEntryHdr *from,
   RuleHashTagTableEntry *oldEntry =
     const_cast<RuleHashTagTableEntry*>(
       static_cast<const RuleHashTagTableEntry*>(from));
-  RuleHashTagTableEntry *newEntry = new (to) RuleHashTagTableEntry();
+  auto* newEntry = new (KnownNotNull, to) RuleHashTagTableEntry();
   newEntry->mTag.swap(oldEntry->mTag);
   newEntry->mRules.SwapElements(oldEntry->mRules);
   oldEntry->~RuleHashTagTableEntry();
@@ -769,9 +770,7 @@ struct SelectorPair
     MOZ_ASSERT(aSelector);
     MOZ_ASSERT(mRightmostSelector);
   }
-  SelectorPair(const SelectorPair& aOther)
-    : mSelector(aOther.mSelector)
-    , mRightmostSelector(aOther.mRightmostSelector) {}
+  SelectorPair(const SelectorPair& aOther) = default;
   nsCSSSelector* const mSelector;
   nsCSSSelector* const mRightmostSelector;
 };
@@ -794,7 +793,7 @@ static void
 AtomSelector_InitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   AtomSelectorEntry *entry = static_cast<AtomSelectorEntry*>(hdr);
-  new (entry) AtomSelectorEntry();
+  new (KnownNotNull, entry) AtomSelectorEntry();
   entry->mAtom = const_cast<nsIAtom*>(static_cast<const nsIAtom*>(key));
 }
 
@@ -805,7 +804,7 @@ AtomSelector_MoveEntry(PLDHashTable *table, const PLDHashEntryHdr *from,
   NS_PRECONDITION(from != to, "This is not going to work!");
   AtomSelectorEntry *oldEntry =
     const_cast<AtomSelectorEntry*>(static_cast<const AtomSelectorEntry*>(from));
-  AtomSelectorEntry *newEntry = new (to) AtomSelectorEntry();
+  auto* newEntry = new (KnownNotNull, to) AtomSelectorEntry();
   newEntry->mAtom = oldEntry->mAtom;
   newEntry->mSelectors.SwapElements(oldEntry->mSelectors);
   oldEntry->~AtomSelectorEntry();
@@ -1101,18 +1100,6 @@ InitSystemMetrics()
   }
 
   metricResult =
-    LookAndFeel::GetInt(LookAndFeel::eIntID_ImagesInMenus);
-  if (metricResult) {
-    sSystemMetrics->AppendElement(nsGkAtoms::images_in_menus);
-  }
-
-  metricResult =
-    LookAndFeel::GetInt(LookAndFeel::eIntID_ImagesInButtons);
-  if (metricResult) {
-    sSystemMetrics->AppendElement(nsGkAtoms::images_in_buttons);
-  }
-
-  metricResult =
     LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars);
   if (metricResult) {
     sSystemMetrics->AppendElement(nsGkAtoms::overlay_scrollbars);
@@ -1133,11 +1120,6 @@ InitSystemMetrics()
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacGraphiteTheme, &metricResult);
   if (NS_SUCCEEDED(rv) && metricResult) {
     sSystemMetrics->AppendElement(nsGkAtoms::mac_graphite_theme);
-  }
-
-  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacLionTheme, &metricResult);
-  if (NS_SUCCEEDED(rv) && metricResult) {
-    sSystemMetrics->AppendElement(nsGkAtoms::mac_lion_theme);
   }
 
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacYosemiteTheme, &metricResult);
@@ -1273,7 +1255,7 @@ nsCSSRuleProcessor::GetContentState(Element* aElement, const TreeMatchContext& a
 
 /* static */
 bool
-nsCSSRuleProcessor::IsLink(Element* aElement)
+nsCSSRuleProcessor::IsLink(const Element* aElement)
 {
   EventStates state = aElement->StyleState();
   return state.HasAtLeastOneOfStates(NS_EVENT_STATE_VISITED | NS_EVENT_STATE_UNVISITED);
@@ -1462,12 +1444,8 @@ static inline bool
 edgeChildMatches(Element* aElement, TreeMatchContext& aTreeMatchContext,
                  bool checkFirst, bool checkLast)
 {
-  nsIContent *parent = aElement->GetParent();
-  if (!parent) {
-    return false;
-  }
-
-  if (aTreeMatchContext.mForStyling)
+  nsIContent* parent = aElement->GetParent();
+  if (parent && aTreeMatchContext.mForStyling)
     parent->SetFlags(NODE_HAS_EDGE_CHILD_SELECTOR);
 
   return (!checkFirst ||
@@ -1484,12 +1462,8 @@ nthChildGenericMatches(Element* aElement,
                        nsPseudoClassList* pseudoClass,
                        bool isOfType, bool isFromEnd)
 {
-  nsIContent *parent = aElement->GetParent();
-  if (!parent) {
-    return false;
-  }
-
-  if (aTreeMatchContext.mForStyling) {
+  nsIContent* parent = aElement->GetParent();
+  if (parent && aTreeMatchContext.mForStyling) {
     if (isFromEnd)
       parent->SetFlags(NODE_HAS_SLOW_SELECTOR);
     else
@@ -1526,11 +1500,7 @@ edgeOfTypeMatches(Element* aElement, TreeMatchContext& aTreeMatchContext,
                   bool checkFirst, bool checkLast)
 {
   nsIContent *parent = aElement->GetParent();
-  if (!parent) {
-    return false;
-  }
-
-  if (aTreeMatchContext.mForStyling) {
+  if (parent && aTreeMatchContext.mForStyling) {
     if (checkLast)
       parent->SetFlags(NODE_HAS_SLOW_SELECTOR);
     else
@@ -1942,7 +1912,7 @@ static bool SelectorMatches(Element* aElement,
           if (parent) {
             if (aTreeMatchContext.mForStyling)
               parent->SetFlags(NODE_HAS_EDGE_CHILD_SELECTOR);
-            
+
             uint32_t index = parent->GetChildCount();
             do {
               lastNode = parent->GetChildAt(--index);
@@ -2105,13 +2075,12 @@ static bool SelectorMatches(Element* aElement,
           nsCOMPtr<nsIMozBrowserFrame>
             browserFrame = do_QueryInterface(aElement);
           if (!browserFrame ||
-              !browserFrame->GetReallyIsBrowserOrApp()) {
+              !browserFrame->GetReallyIsBrowser()) {
             return false;
           }
         }
         break;
 
-      case CSSPseudoClassType::mozDir:
       case CSSPseudoClassType::dir:
         {
           if (aDependence) {
@@ -2311,10 +2280,10 @@ nsCSSRuleProcessor::RestrictedSelectorMatches(
   MOZ_ASSERT(aSelector->IsRestrictedSelector(),
              "aSelector must not have a pseudo-element");
 
-  NS_WARN_IF_FALSE(!HasPseudoClassSelectorArgsWithCombinators(aSelector),
-                   "processing eRestyle_SomeDescendants can be slow if "
-                   "pseudo-classes with selector arguments can now have "
-                   "combinators in them");
+  NS_WARNING_ASSERTION(
+    !HasPseudoClassSelectorArgsWithCombinators(aSelector),
+    "processing eRestyle_SomeDescendants can be slow if pseudo-classes with "
+    "selector arguments can now have combinators in them");
 
   // We match aSelector as if :visited and :link both match visited and
   // unvisited links.
@@ -2533,9 +2502,9 @@ void ContentEnumFunc(const RuleValue& value, nsCSSSelector* aSelector,
       // We can get here when calling getComputedStyle(aElt, aPseudo) if:
       //
       //   * aPseudo is a pseudo-element that supports a user action
-      //     pseudo-class, like "::-moz-placeholder";
+      //     pseudo-class, like "::placeholder";
       //   * there is a style rule that uses a pseudo-class on this
-      //     pseudo-element in the document, like ::-moz-placeholder:hover; and
+      //     pseudo-element in the document, like ::placeholder:hover; and
       //   * aElt does not have such a pseudo-element.
       //
       // We know that the selector can't match, since there is no element for
@@ -3480,7 +3449,7 @@ static void
 InitWeightEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   RuleByWeightEntry* entry = static_cast<RuleByWeightEntry*>(hdr);
-  new (entry) RuleByWeightEntry();
+  new (KnownNotNull, entry) RuleByWeightEntry();
 }
 
 static const PLDHashTableOps gRulesByWeightOps = {
@@ -3634,7 +3603,7 @@ CascadeRuleEnumFunc(css::Rule* aRule, void* aData)
       entry->data.mWeight = weight;
       // entry->data.mRuleSelectorPairs should be linked in forward order;
       // entry->data.mTail is the slot to write to.
-      PerWeightDataListItem *newItem =
+      auto* newItem =
         new (data->mArena) PerWeightDataListItem(styleRule, sel->mSelectors);
       if (newItem) {
         *(entry->data.mTail) = newItem;

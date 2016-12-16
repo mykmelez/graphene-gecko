@@ -7,7 +7,7 @@ config = {
     # if you are updating this with custom 32 bit keys/values please add them
     # below under the '32 bit specific' code block otherwise, update in this
     # code block and also make sure this is synced with
-    # releng_base_windows_64_builds.py
+    # releng_base_windows_32_builds.py
 
     'default_actions': [
         'clobber',
@@ -24,12 +24,6 @@ config = {
     "buildbot_json_path": "buildprops.json",
     'exes': {
         'python2.7': sys.executable,
-        'hgtool.py': [
-            sys.executable,
-            os.path.join(
-                os.getcwd(), 'build', 'tools', 'buildfarm', 'utils', 'hgtool.py'
-            )
-        ],
         "buildbot": [
             sys.executable,
             'c:\\mozilla-build\\buildbotve\\scripts\\buildbot'

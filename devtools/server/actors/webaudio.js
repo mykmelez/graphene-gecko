@@ -451,6 +451,9 @@ var WebAudioActor = exports.WebAudioActor = protocol.ActorClassWithSpec(webAudio
     this._nativeToActorID.clear();
 
     if (this._initialized) {
+      if (reload) {
+        this.tabActor.window.location.reload();
+      }
       return;
     }
 
@@ -799,7 +802,7 @@ function InvalidCommandError() {
  * or "Float32Array".
  */
 function getConstructorName(obj) {
-  return obj.toString().match(/\[object ([^\[\]]*)\]\]?$/)[1];
+  return Object.prototype.toString.call(obj).match(/\[object ([^\[\]]*)\]\]?$/)[1];
 }
 
 /**

@@ -14,6 +14,7 @@
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/Maybe.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsDocument.h"
@@ -25,7 +26,7 @@
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
-#include "xpcprivate.h"
+#include "xpcpublic.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsProxyRelease.h"
@@ -340,7 +341,8 @@ public:
     }
 
     if (NS_WARN_IF(!WorkerProxyToMainThreadRunnable::Dispatch())) {
-      RunBackOnWorkerThread();
+      // RunBackOnWorkerThread() will be called by
+      // WorkerProxyToMainThreadRunnable::Dispatch().
       return false;
     }
 
@@ -1099,7 +1101,7 @@ Console::ProfileMethodInternal(JSContext* aCx, const nsAString& aAction,
     return;
   }
 
-  nsXPConnect*  xpc = nsXPConnect::XPConnect();
+  nsIXPConnect* xpc = nsContentUtils::XPConnect();
   nsCOMPtr<nsISupports> wrapper;
   const nsIID& iid = NS_GET_IID(nsISupports);
 
@@ -1333,10 +1335,7 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
       WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
       MOZ_ASSERT(workerPrivate);
 
-      TimeDuration duration =
-        mozilla::TimeStamp::Now() - workerPrivate->NowBaseTimeStamp();
-
-      monotonicTimer = duration.ToMilliseconds();
+      monotonicTimer = workerPrivate->TimeStampToDOMHighRes(TimeStamp::Now());
     }
   }
 
@@ -1380,7 +1379,7 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
 
   RefPtr<ConsoleCallDataRunnable> runnable =
     new ConsoleCallDataRunnable(this, callData);
-  NS_WARN_IF(!runnable->Dispatch(aCx));
+  Unused << NS_WARN_IF(!runnable->Dispatch(aCx));
 }
 
 // We store information to lazily compute the stack in the reserved slots of
@@ -1477,8 +1476,8 @@ Console::ProcessCallData(JSContext* aCx, ConsoleCallData* aData,
   }
 
   if (aData->mMethodName == MethodClear) {
-    nsresult rv = mStorage->ClearEvents(innerID);
-    NS_WARN_IF(NS_FAILED(rv));
+    DebugOnly<nsresult> rv = mStorage->ClearEvents(innerID);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "ClearEvents failed");
   }
 
   if (NS_FAILED(mStorage->RecordEvent(innerID, outerID, eventValue))) {
@@ -1999,7 +1998,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
     return false;
   }
 
-  DOMHighResTimeStamp entry;
+  DOMHighResTimeStamp entry = 0;
   if (!mTimerRegistry.Get(label, &entry)) {
     mTimerRegistry.Put(label, aTimestamp);
   } else {
@@ -2062,7 +2061,7 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
     return false;
   }
 
-  DOMHighResTimeStamp entry;
+  DOMHighResTimeStamp entry = 0;
   if (NS_WARN_IF(!mTimerRegistry.Get(key, &entry))) {
     return false;
   }
@@ -2362,8 +2361,35 @@ Console::IsShuttingDown() const
 /* static */ already_AddRefed<Console>
 Console::GetConsole(const GlobalObject& aGlobal)
 {
-  RefPtr<Console> console;
+  ErrorResult rv;
+  RefPtr<Console> console = GetConsoleInternal(aGlobal, rv);
+  if (NS_WARN_IF(rv.Failed()) || !console) {
+    rv.SuppressException();
+    return nullptr;
+  }
 
+  console->AssertIsOnOwningThread();
+
+  if (console->IsShuttingDown()) {
+    return nullptr;
+  }
+
+  return console.forget();
+}
+
+/* static */ Console*
+Console::GetConsoleInternal(const GlobalObject& aGlobal, ErrorResult& aRv)
+{
+  // Worklet
+  if (NS_IsMainThread()) {
+    nsCOMPtr<WorkletGlobalScope> workletScope =
+      do_QueryInterface(aGlobal.GetAsSupports());
+    if (workletScope) {
+      return workletScope->GetConsole(aRv);
+    }
+  }
+
+  // Window
   if (NS_IsMainThread()) {
     nsCOMPtr<nsPIDOMWindowInner> innerWindow =
       do_QueryInterface(aGlobal.GetAsSupports());
@@ -2372,57 +2398,39 @@ Console::GetConsole(const GlobalObject& aGlobal)
     }
 
     nsGlobalWindow* window = nsGlobalWindow::Cast(innerWindow);
-
-    ErrorResult rv;
-    console = window->GetConsole(rv);
-    if (NS_WARN_IF(rv.Failed())) {
-      rv.SuppressException();
-      return nullptr;
-    }
-  } else {
-    JSContext* cx = aGlobal.Context();
-    WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(cx);
-    MOZ_ASSERT(workerPrivate);
-
-    nsCOMPtr<nsIGlobalObject> global =
-      do_QueryInterface(aGlobal.GetAsSupports());
-    if (NS_WARN_IF(!global)) {
-      return nullptr;
-    }
-
-    WorkerGlobalScope* scope = workerPrivate->GlobalScope();
-    MOZ_ASSERT(scope);
-
-    // Normal worker scope.
-    ErrorResult rv;
-    if (scope == global) {
-      console = scope->GetConsole(rv);
-    }
-
-    // Debugger worker scope
-    else {
-      WorkerDebuggerGlobalScope* debuggerScope =
-        workerPrivate->DebuggerGlobalScope();
-      MOZ_ASSERT(debuggerScope);
-      MOZ_ASSERT(debuggerScope == global, "Which kind of global do we have?");
-
-      console = debuggerScope->GetConsole(rv);
-    }
-
-    if (NS_WARN_IF(rv.Failed())) {
-      rv.SuppressException();
-      return nullptr;
-    }
+    return window->GetConsole(aRv);
   }
 
-  MOZ_ASSERT(console);
-  console->AssertIsOnOwningThread();
+  // Workers
+  MOZ_ASSERT(!NS_IsMainThread());
 
-  if (console->IsShuttingDown()) {
+  JSContext* cx = aGlobal.Context();
+  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(cx);
+  MOZ_ASSERT(workerPrivate);
+
+  nsCOMPtr<nsIGlobalObject> global =
+    do_QueryInterface(aGlobal.GetAsSupports());
+  if (NS_WARN_IF(!global)) {
     return nullptr;
   }
 
-  return console.forget();
+  WorkerGlobalScope* scope = workerPrivate->GlobalScope();
+  MOZ_ASSERT(scope);
+
+  // Normal worker scope.
+  if (scope == global) {
+    return scope->GetConsole(aRv);
+  }
+
+  // Debugger worker scope
+  else {
+    WorkerDebuggerGlobalScope* debuggerScope =
+      workerPrivate->DebuggerGlobalScope();
+    MOZ_ASSERT(debuggerScope);
+    MOZ_ASSERT(debuggerScope == global, "Which kind of global do we have?");
+
+    return debuggerScope->GetConsole(aRv);
+  }
 }
 
 } // namespace dom

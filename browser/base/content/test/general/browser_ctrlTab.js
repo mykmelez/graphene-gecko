@@ -7,9 +7,9 @@ add_task(function* () {
 
   checkTabs(4);
 
-  yield ctrlTabTest([2]      , 1, 0);
+  yield ctrlTabTest([2],       1, 0);
   yield ctrlTabTest([2, 3, 1], 2, 2);
-  yield ctrlTabTest([]       , 4, 2);
+  yield ctrlTabTest([],        4, 2);
 
   {
     let selectedIndex = gBrowser.tabContainer.selectedIndex;
@@ -41,10 +41,22 @@ add_task(function* () {
   checkTabs(3);
   yield ctrlTabTest([2, 1, 0], 7, 1);
 
-  gBrowser.addTab();
-  checkTabs(4);
+  { // test for bug 1292049
+    let tabToClose = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:buildconfig");
+    checkTabs(4);
+    selectTabs([0, 1, 2, 3]);
+
+    yield BrowserTestUtils.removeTab(tabToClose);
+    checkTabs(3);
+    undoCloseTab();
+    checkTabs(4);
+    is(gBrowser.tabContainer.selectedIndex, 3, "tab is selected after closing and restoring it");
+
+    yield ctrlTabTest([], 1, 2);
+  }
 
   { // test for bug 445369
+    checkTabs(4);
     selectTabs([1, 2, 0]);
 
     let selectedTab = gBrowser.selectedTab;
@@ -73,7 +85,7 @@ add_task(function* () {
   { // test for bug 445768
     let focusedWindow = document.commandDispatcher.focusedWindow;
     let eventConsumed = true;
-    let detectKeyEvent = function (event) {
+    let detectKeyEvent = function(event) {
       eventConsumed = event.defaultPrevented;
     };
     document.addEventListener("keypress", detectKeyEvent, false);
@@ -127,16 +139,11 @@ add_task(function* () {
   }
 
   function checkTabs(aTabs) {
-    var tabs = gBrowser.tabs.length;
-    if (tabs != aTabs) {
-      while (gBrowser.tabs.length > 1)
-        gBrowser.removeCurrentTab();
-      throw "expected " + aTabs + " open tabs, got " + tabs;
-    }
+    is(gBrowser.tabs.length, aTabs, "number of open tabs should be " + aTabs);
   }
 
   function selectTabs(tabs) {
-    tabs.forEach(function (index) {
+    tabs.forEach(function(index) {
       gBrowser.selectedTab = gBrowser.tabs[index];
     });
   }
@@ -172,7 +179,7 @@ add_task(function* () {
     }
 
     is(gBrowser.tabContainer.selectedIndex, expectedIndex,
-       "With "+ tabCount +" tabs open and tab " + indexStart
+       "With " + tabCount + " tabs open and tab " + indexStart
        + " selected, Ctrl+Tab*" + tabTimes + " goes " + where);
   }
 });

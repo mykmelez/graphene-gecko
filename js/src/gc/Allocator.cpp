@@ -84,7 +84,7 @@ GCRuntime::tryNewNurseryObject(JSContext* cx, size_t thingSize, size_t nDynamicS
         return obj;
 
     if (allowGC && !rt->mainThread.suppressGC) {
-        minorGC(cx, JS::gcreason::OUT_OF_NURSERY);
+        minorGC(JS::gcreason::OUT_OF_NURSERY);
 
         // Exceeding gcMaxBytes while tenuring can disable the Nursery.
         if (nursery.isEnabled()) {
@@ -166,7 +166,6 @@ GCRuntime::tryNewTenuredThing(ExclusiveContext* cx, AllocKind kind, size_t thing
             // all-compartments, non-incremental, shrinking GC and wait for
             // sweeping to finish.
             JS::PrepareForFullGC(cx->asJSContext());
-            AutoKeepAtoms keepAtoms(cx->perThreadData);
             cx->asJSContext()->gc.gc(GC_SHRINK, JS::gcreason::LAST_DITCH);
             cx->asJSContext()->gc.waitBackgroundSweepOrAllocEnd();
 
@@ -191,18 +190,22 @@ GCRuntime::checkAllocatorState(JSContext* cx, AllocKind kind)
     }
 
 #if defined(JS_GC_ZEAL) || defined(DEBUG)
-    MOZ_ASSERT_IF(rt->isAtomsCompartment(cx->compartment()),
-                  kind == AllocKind::STRING ||
-                  kind == AllocKind::FAT_INLINE_STRING ||
+    MOZ_ASSERT_IF(cx->compartment()->isAtomsCompartment(),
+                  kind == AllocKind::ATOM ||
+                  kind == AllocKind::FAT_INLINE_ATOM ||
                   kind == AllocKind::SYMBOL ||
-                  kind == AllocKind::JITCODE);
+                  kind == AllocKind::JITCODE ||
+                  kind == AllocKind::SCOPE);
+    MOZ_ASSERT_IF(!cx->compartment()->isAtomsCompartment(),
+                  kind != AllocKind::ATOM &&
+                  kind != AllocKind::FAT_INLINE_ATOM);
     MOZ_ASSERT(!rt->isHeapBusy());
     MOZ_ASSERT(isAllocAllowed());
 #endif
 
     // Crash if we perform a GC action when it is not safe.
     if (allowGC && !rt->mainThread.suppressGC)
-        JS::AutoAssertOnGC::VerifyIsSafeToGC(rt);
+        rt->gc.verifyIsSafeToGC();
 
     // For testing out of memory conditions
     if (js::oom::ShouldFailWithOOM()) {
@@ -227,7 +230,7 @@ GCRuntime::gcIfNeededPerAllocation(JSContext* cx)
     // Invoking the interrupt callback can fail and we can't usefully
     // handle that here. Just check in case we need to collect instead.
     if (rt->hasPendingInterrupt())
-        gcIfRequested(cx);
+        gcIfRequested();
 
     // If we have grown past our GC heap threshold while in the middle of
     // an incremental GC, we're growing faster than we're GCing, so stop
@@ -236,7 +239,6 @@ GCRuntime::gcIfNeededPerAllocation(JSContext* cx)
         cx->zone()->usage.gcBytes() > cx->zone()->threshold.gcTriggerBytes())
     {
         PrepareZoneForGC(cx->zone());
-        AutoKeepAtoms keepAtoms(cx->perThreadData);
         gc(GC_NORMAL, JS::gcreason::INCREMENTAL_TOO_SLOW);
     }
 
@@ -260,30 +262,6 @@ GCRuntime::checkIncrementalZoneState(ExclusiveContext* cx, T* t)
 
 // ///////////  Arena -> Thing Allocator  //////////////////////////////////////
 
-// After pulling a Chunk out of the empty chunks pool, we want to run the
-// background allocator to refill it. The code that takes Chunks does so under
-// the GC lock. We need to start the background allocation under the helper
-// threads lock. To avoid lock inversion we have to delay the start until after
-// we are outside the GC lock. This class handles that delay automatically.
-class MOZ_RAII js::gc::AutoMaybeStartBackgroundAllocation
-{
-    JSRuntime* runtime;
-
-  public:
-    AutoMaybeStartBackgroundAllocation()
-      : runtime(nullptr)
-    {}
-
-    void tryToStartBackgroundAllocation(JSRuntime* rt) {
-        runtime = rt;
-    }
-
-    ~AutoMaybeStartBackgroundAllocation() {
-        if (runtime)
-            runtime->gc.startBackgroundAllocTaskIfIdle();
-    }
-};
-
 void
 GCRuntime::startBackgroundAllocTaskIfIdle()
 {
@@ -294,7 +272,7 @@ GCRuntime::startBackgroundAllocTaskIfIdle()
     // Join the previous invocation of the task. This will return immediately
     // if the thread has never been started.
     allocTask.joinWithLockHeld(helperLock);
-    allocTask.startWithLockHeld();
+    allocTask.startWithLockHeld(helperLock);
 }
 
 /* static */ TenuredCell*
@@ -311,32 +289,25 @@ GCRuntime::refillFreeListFromAnyThread(ExclusiveContext* cx, AllocKind thingKind
 /* static */ TenuredCell*
 GCRuntime::refillFreeListFromMainThread(JSContext* cx, AllocKind thingKind, size_t thingSize)
 {
-    ArenaLists *arenas = cx->arenas();
+    // It should not be possible to allocate on the main thread while we are
+    // inside a GC.
     Zone *zone = cx->zone();
     MOZ_ASSERT(!cx->runtime()->isHeapBusy(), "allocating while under GC");
 
     AutoMaybeStartBackgroundAllocation maybeStartBGAlloc;
-
-    return arenas->allocateFromArena(zone, thingKind, maybeStartBGAlloc);
+    return cx->arenas()->allocateFromArena(zone, thingKind, CheckThresholds, maybeStartBGAlloc);
 }
 
 /* static */ TenuredCell*
 GCRuntime::refillFreeListOffMainThread(ExclusiveContext* cx, AllocKind thingKind)
 {
-    ArenaLists* arenas = cx->arenas();
+    // A GC may be happening on the main thread, but zones used by exclusive
+    // contexts are never collected.
     Zone* zone = cx->zone();
-    JSRuntime* rt = zone->runtimeFromAnyThread();
+    MOZ_ASSERT(!zone->wasGCStarted());
 
     AutoMaybeStartBackgroundAllocation maybeStartBGAlloc;
-
-    // If we're off the main thread, we try to allocate once and return
-    // whatever value we get. We need to first ensure the main thread is not in
-    // a GC session.
-    AutoLockHelperThreadState lock;
-    while (rt->isHeapBusy())
-        HelperThreadState().wait(lock, GlobalHelperThreadState::PRODUCER);
-
-    return arenas->allocateFromArena(zone, thingKind, maybeStartBGAlloc);
+    return cx->arenas()->allocateFromArena(zone, thingKind, CheckThresholds, maybeStartBGAlloc);
 }
 
 /* static */ TenuredCell*
@@ -352,14 +323,17 @@ GCRuntime::refillFreeListInGC(Zone* zone, AllocKind thingKind)
     MOZ_ASSERT_IF(!rt->isHeapMinorCollecting(), !rt->gc.isBackgroundSweeping());
 
     AutoMaybeStartBackgroundAllocation maybeStartBackgroundAllocation;
-    return zone->arenas.allocateFromArena(zone, thingKind, maybeStartBackgroundAllocation);
+    return zone->arenas.allocateFromArena(zone, thingKind, DontCheckThresholds,
+                                          maybeStartBackgroundAllocation);
 }
 
 TenuredCell*
 ArenaLists::allocateFromArena(JS::Zone* zone, AllocKind thingKind,
+                              ShouldCheckThresholds checkThresholds,
                               AutoMaybeStartBackgroundAllocation& maybeStartBGAlloc)
 {
     JSRuntime* rt = zone->runtimeFromAnyThread();
+
     mozilla::Maybe<AutoLockGC> maybeLock;
 
     // See if we can proceed without taking the GC lock.
@@ -386,11 +360,10 @@ ArenaLists::allocateFromArena(JS::Zone* zone, AllocKind thingKind,
 
     // Although our chunk should definitely have enough space for another arena,
     // there are other valid reasons why Chunk::allocateArena() may fail.
-    arena = rt->gc.allocateArena(chunk, zone, thingKind, maybeLock.ref());
+    arena = rt->gc.allocateArena(chunk, zone, thingKind, checkThresholds, maybeLock.ref());
     if (!arena)
         return nullptr;
 
-    MOZ_ASSERT(!maybeLock->wasUnlocked());
     MOZ_ASSERT(al.isCursorAtEnd());
     al.insertBeforeCursor(arena);
 
@@ -438,23 +411,20 @@ GCRuntime::wantBackgroundAllocation(const AutoLockGC& lock) const
 }
 
 Arena*
-GCRuntime::allocateArena(Chunk* chunk, Zone* zone, AllocKind thingKind, const AutoLockGC& lock)
+GCRuntime::allocateArena(Chunk* chunk, Zone* zone, AllocKind thingKind,
+                         ShouldCheckThresholds checkThresholds, const AutoLockGC& lock)
 {
     MOZ_ASSERT(chunk->hasAvailableArenas());
 
     // Fail the allocation if we are over our heap size limits.
-    if (!rt->isHeapMinorCollecting() &&
-        !isHeapCompacting() &&
-        usage.gcBytes() >= tunables.gcMaxBytes())
-    {
+    if (checkThresholds && usage.gcBytes() >= tunables.gcMaxBytes())
         return nullptr;
-    }
 
     Arena* arena = chunk->allocateArena(rt, zone, thingKind, lock);
     zone->usage.addGCArena();
 
     // Trigger an incremental slice if needed.
-    if (!rt->isHeapMinorCollecting() && !isHeapCompacting())
+    if (checkThresholds)
         maybeAllocTriggerZoneGC(zone, lock);
 
     return arena;
@@ -536,12 +506,9 @@ Chunk::findDecommittedArenaOffset()
 // ///////////  System -> Chunk Allocator  /////////////////////////////////////
 
 Chunk*
-GCRuntime::pickChunk(const AutoLockGC& lock,
-                     AutoMaybeStartBackgroundAllocation& maybeStartBackgroundAllocation)
+GCRuntime::getOrAllocChunk(const AutoLockGC& lock,
+                           AutoMaybeStartBackgroundAllocation& maybeStartBackgroundAllocation)
 {
-    if (availableChunks(lock).count())
-        return availableChunks(lock).head();
-
     Chunk* chunk = emptyChunks(lock).pop();
     if (!chunk) {
         chunk = Chunk::allocate(rt);
@@ -550,11 +517,34 @@ GCRuntime::pickChunk(const AutoLockGC& lock,
         MOZ_ASSERT(chunk->info.numArenasFreeCommitted == 0);
     }
 
+    if (wantBackgroundAllocation(lock))
+        maybeStartBackgroundAllocation.tryToStartBackgroundAllocation(rt->gc);
+
+    return chunk;
+}
+
+void
+GCRuntime::recycleChunk(Chunk* chunk, const AutoLockGC& lock)
+{
+    emptyChunks(lock).push(chunk);
+}
+
+Chunk*
+GCRuntime::pickChunk(const AutoLockGC& lock,
+                     AutoMaybeStartBackgroundAllocation& maybeStartBackgroundAllocation)
+{
+    if (availableChunks(lock).count())
+        return availableChunks(lock).head();
+
+    Chunk* chunk = getOrAllocChunk(lock, maybeStartBackgroundAllocation);
+    if (!chunk)
+        return nullptr;
+
+    chunk->init(rt);
+    MOZ_ASSERT(chunk->info.numArenasFreeCommitted == 0);
     MOZ_ASSERT(chunk->unused());
     MOZ_ASSERT(!fullChunks(lock).contains(chunk));
-
-    if (wantBackgroundAllocation(lock))
-        maybeStartBackgroundAllocation.tryToStartBackgroundAllocation(rt);
+    MOZ_ASSERT(!availableChunks(lock).contains(chunk));
 
     chunkAllocationSinceLastGC = true;
 
@@ -584,6 +574,7 @@ BackgroundAllocTask::run()
             chunk = Chunk::allocate(runtime);
             if (!chunk)
                 break;
+            chunk->init(runtime);
         }
         chunkPool_.push(chunk);
     }
@@ -595,7 +586,6 @@ Chunk::allocate(JSRuntime* rt)
     Chunk* chunk = static_cast<Chunk*>(MapAlignedPages(ChunkSize, ChunkSize));
     if (!chunk)
         return nullptr;
-    chunk->init(rt);
     rt->gc.stats.count(gcstats::STAT_NEW_CHUNK);
     return chunk;
 }
@@ -619,7 +609,7 @@ Chunk::init(JSRuntime* rt)
 
     /* Initialize the chunk info. */
     info.init();
-    new (&info.trailer) ChunkTrailer(rt);
+    new (&trailer) ChunkTrailer(rt);
 
     /* The rest of info fields are initialized in pickChunk. */
 }

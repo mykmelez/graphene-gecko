@@ -6,6 +6,7 @@
 
 #include "vm/ObjectGroup.h"
 
+#include "jsexn.h"
 #include "jshashutil.h"
 #include "jsobj.h"
 
@@ -13,6 +14,7 @@
 #include "gc/Policy.h"
 #include "gc/StoreBuffer.h"
 #include "gc/Zone.h"
+#include "js/CharacterEncoding.h"
 #include "vm/ArrayObject.h"
 #include "vm/TaggedProto.h"
 #include "vm/UnboxedObject.h"
@@ -37,6 +39,7 @@ ObjectGroup::ObjectGroup(const Class* clasp, TaggedProto proto, JSCompartment* c
 
     /* Windows may not appear on prototype chains. */
     MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
+    MOZ_ASSERT(JS::StringIsASCII(clasp->name));
 
     this->clasp_ = clasp;
     this->proto_ = proto;
@@ -307,7 +310,7 @@ JSObject::makeLazyGroup(JSContext* cx, HandleObject obj)
     /* De-lazification of functions can GC, so we need to do it up here. */
     if (obj->is<JSFunction>() && obj->as<JSFunction>().isInterpretedLazy()) {
         RootedFunction fun(cx, &obj->as<JSFunction>());
-        if (!fun->getOrCreateScript(cx))
+        if (!JSFunction::getOrCreateScript(cx, fun))
             return nullptr;
     }
 
@@ -375,30 +378,58 @@ struct ObjectGroupCompartment::NewEntry
 
     struct Lookup {
         const Class* clasp;
-        uint64_t protoUID;
-        uint64_t assocUID;
+        TaggedProto proto;
+        JSObject* associated;
 
         Lookup(const Class* clasp, TaggedProto proto, JSObject* associated)
-          : clasp(clasp),
-            protoUID(proto.uniqueId()),
-            assocUID(associated ? associated->zone()->getUniqueIdInfallible(associated) : 0)
+          : clasp(clasp), proto(proto), associated(associated)
         {}
+
+        bool hasAssocId() const {
+            return !associated || associated->zone()->hasUniqueId(associated);
+        }
+
+        bool ensureAssocId() const {
+            uint64_t unusedId;
+            return !associated ||
+                   associated->zoneFromAnyThread()->getUniqueId(associated, &unusedId);
+        }
+
+        uint64_t getAssocId() const {
+            return associated ? associated->zone()->getUniqueIdInfallible(associated) : 0;
+        }
     };
 
+    static bool hasHash(const Lookup& l) {
+        return l.proto.hasUniqueId() && l.hasAssocId();
+    }
+
+    static bool ensureHash(const Lookup& l) {
+        return l.proto.ensureUniqueId() && l.ensureAssocId();
+    }
+
     static inline HashNumber hash(const Lookup& lookup) {
+        MOZ_ASSERT(lookup.proto.hasUniqueId());
+        MOZ_ASSERT(lookup.hasAssocId());
         HashNumber hash = uintptr_t(lookup.clasp);
-        hash = mozilla::RotateLeft(hash, 4) ^ Zone::UniqueIdToHash(lookup.protoUID);
-        hash = mozilla::RotateLeft(hash, 4) ^ Zone::UniqueIdToHash(lookup.assocUID);
+        hash = mozilla::RotateLeft(hash, 4) ^ Zone::UniqueIdToHash(lookup.proto.uniqueId());
+        hash = mozilla::RotateLeft(hash, 4) ^ Zone::UniqueIdToHash(lookup.getAssocId());
         return hash;
     }
 
-    static inline bool match(const NewEntry& key, const Lookup& lookup) {
+    static inline bool match(const ObjectGroupCompartment::NewEntry& key, const Lookup& lookup) {
+        TaggedProto proto = key.group.unbarrieredGet()->proto();
+        JSObject* assoc = key.associated;
+        MOZ_ASSERT(proto.hasUniqueId());
+        MOZ_ASSERT_IF(assoc, assoc->zone()->hasUniqueId(assoc));
+        MOZ_ASSERT(lookup.proto.hasUniqueId());
+        MOZ_ASSERT(lookup.hasAssocId());
+
         if (lookup.clasp && key.group.unbarrieredGet()->clasp() != lookup.clasp)
             return false;
-        if (key.group.unbarrieredGet()->proto().unbarrieredGet().uniqueId() != lookup.protoUID)
+        if (proto.uniqueId() != lookup.proto.uniqueId())
             return false;
-        return !key.associated ||
-               key.associated->zone()->getUniqueIdInfallible(key.associated) == lookup.assocUID;
+        return !assoc || assoc->zone()->getUniqueIdInfallible(assoc) == lookup.getAssocId();
     }
 
     static void rekey(NewEntry& k, const NewEntry& newKey) { k = newKey; }
@@ -408,6 +439,19 @@ struct ObjectGroupCompartment::NewEntry
                 (associated && IsAboutToBeFinalizedUnbarriered(&associated)));
     }
 };
+
+namespace js {
+template <>
+struct FallibleHashMethods<ObjectGroupCompartment::NewEntry>
+{
+    template <typename Lookup> static bool hasHash(Lookup&& l) {
+        return ObjectGroupCompartment::NewEntry::hasHash(mozilla::Forward<Lookup>(l));
+    }
+    template <typename Lookup> static bool ensureHash(Lookup&& l) {
+        return ObjectGroupCompartment::NewEntry::ensureHash(mozilla::Forward<Lookup>(l));
+    }
+};
+} // namespace js
 
 class ObjectGroupCompartment::NewTable : public JS::WeakCache<js::GCHashSet<NewEntry, NewEntry,
                                                                             SystemAllocPolicy>>
@@ -512,39 +556,32 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
         return nullptr;
     }
 
-    if (proto.isObject()) {
-        RootedObject obj(cx, proto.toObject());
-
-        if (associated) {
-            if (associated->is<JSFunction>()) {
-                if (!TypeNewScript::make(cx->asJSContext(), group, &associated->as<JSFunction>()))
-                    return nullptr;
-            } else {
-                group->setTypeDescr(&associated->as<TypeDescr>());
-            }
+    if (associated) {
+        if (associated->is<JSFunction>()) {
+            if (!TypeNewScript::make(cx->asJSContext(), group, &associated->as<JSFunction>()))
+                return nullptr;
+        } else {
+            group->setTypeDescr(&associated->as<TypeDescr>());
         }
+    }
 
-        /*
-         * Some builtin objects have slotful native properties baked in at
-         * creation via the Shape::{insert,get}initialShape mechanism. Since
-         * these properties are never explicitly defined on new objects, update
-         * the type information for them here.
-         */
+    /*
+     * Some builtin objects have slotful native properties baked in at
+     * creation via the Shape::{insert,get}initialShape mechanism. Since
+     * these properties are never explicitly defined on new objects, update
+     * the type information for them here.
+     */
 
-        const JSAtomState& names = cx->names();
+    const JSAtomState& names = cx->names();
 
-        if (obj->is<RegExpObject>())
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.lastIndex), TypeSet::Int32Type());
-
-        if (obj->is<StringObject>())
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.length), TypeSet::Int32Type());
-
-        if (obj->is<ErrorObject>()) {
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.fileName), TypeSet::StringType());
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.lineNumber), TypeSet::Int32Type());
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.columnNumber), TypeSet::Int32Type());
-            AddTypePropertyId(cx, group, nullptr, NameToId(names.stack), TypeSet::StringType());
-        }
+    if (clasp == &RegExpObject::class_) {
+        AddTypePropertyId(cx, group, nullptr, NameToId(names.lastIndex), TypeSet::Int32Type());
+    } else if (clasp == &StringObject::class_) {
+        AddTypePropertyId(cx, group, nullptr, NameToId(names.length), TypeSet::Int32Type());
+    } else if (ErrorObject::isErrorClass(clasp)) {
+        AddTypePropertyId(cx, group, nullptr, NameToId(names.fileName), TypeSet::StringType());
+        AddTypePropertyId(cx, group, nullptr, NameToId(names.lineNumber), TypeSet::Int32Type());
+        AddTypePropertyId(cx, group, nullptr, NameToId(names.columnNumber), TypeSet::Int32Type());
     }
 
     return group;
@@ -825,6 +862,8 @@ ObjectGroup::newArrayObject(ExclusiveContext* cx,
     // information, but make sure when creating an unboxed array that the
     // common element type is suitable for the unboxed representation.
     ShouldUpdateTypes updateTypes = ShouldUpdateTypes::DontUpdate;
+    if (!MaybeAnalyzeBeforeCreatingLargeArray(cx, group, vp, length))
+        return nullptr;
     if (group->maybePreliminaryObjects())
         group->maybePreliminaryObjects()->maybeAnalyze(cx, group);
     if (group->maybeUnboxedLayout()) {
@@ -1078,7 +1117,7 @@ struct ObjectGroupCompartment::PlainObjectKey
     };
 
     static inline HashNumber hash(const Lookup& lookup) {
-        return (HashNumber) (JSID_BITS(lookup.properties[lookup.nproperties - 1].id) ^
+        return (HashNumber) (HashId(lookup.properties[lookup.nproperties - 1].id) ^
                              lookup.nproperties);
     }
 

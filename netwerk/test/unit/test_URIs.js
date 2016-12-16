@@ -92,6 +92,18 @@ var gTests = [
     ref:     "",
     relativeURI: "data/text/plain,2",
     nsIURL:  true, nsINestedURI: false },
+  { spec:    "ftp://",
+    scheme:  "ftp",
+    prePath: "ftp://",
+    path:    "/",
+    ref:     "",
+    nsIURL:  true, nsINestedURI: false },
+  { spec:    "ftp:///",
+    scheme:  "ftp",
+    prePath: "ftp://",
+    path:    "/",
+    ref:     "",
+    nsIURL:  true, nsINestedURI: false },
   { spec:    "ftp://ftp.mozilla.org/pub/mozilla.org/README",
     scheme:  "ftp",
     prePath: "ftp://ftp.mozilla.org",
@@ -117,20 +129,24 @@ var gTests = [
     ref:     "",
     nsIURL:  true, nsINestedURI: false },
   //Bug 706249
-  { spec:    "http:x:@",
-    scheme:  "http",
-    prePath: "http://x:@",
-    username: "x",
-    password: "",
-    path:    "",
-    ref:     "",
-    nsIURL:  true, nsINestedURI: false },
   { spec:    "gopher://mozilla.org/",
     scheme:  "gopher",
     prePath: "gopher:",
     path:    "//mozilla.org/",
     ref:     "",
     nsIURL:  false, nsINestedURI: false },
+  { spec:    "http://",
+    scheme:  "http",
+    prePath: "http://",
+    path:    "/",
+    ref:     "",
+    nsIURL:  true, nsINestedURI: false },
+  { spec:    "http:///",
+    scheme:  "http",
+    prePath: "http://",
+    path:    "/",
+    ref:     "",
+    nsIURL:  true, nsINestedURI: false },
   { spec:    "http://www.example.com/",
     scheme:  "http",
     prePath: "http://www.example.com",
@@ -426,6 +442,19 @@ function do_test_uri_with_hash_suffix(aTest, aSuffix) {
     var cloneNoRef = testURI.cloneIgnoringRef();
     do_check_uri_eq(cloneNoRef, origURI);
     do_check_false(cloneNoRef.equals(testURI));
+
+    do_info("testing cloneWithNewRef on " + testURI.spec +
+            " with an empty ref is equal to no-ref version but not equal to ref version");
+    var cloneNewRef = testURI.cloneWithNewRef("");
+    do_check_uri_eq(cloneNewRef, origURI);
+    do_check_uri_eq(cloneNewRef, cloneNoRef);
+    do_check_false(cloneNewRef.equals(testURI));
+
+    do_info("testing cloneWithNewRef on " + origURI.spec +
+            " with the same new ref is equal to ref version and not equal to no-ref version");
+    cloneNewRef = origURI.cloneWithNewRef(aSuffix);
+    do_check_uri_eq(cloneNewRef, testURI);
+    do_check_true(cloneNewRef.equals(testURI));
   }
 
   do_check_property(aTest, testURI, "scheme");

@@ -639,7 +639,7 @@ nsBMPDecoder::ReadBitfields(const char* aData, size_t aLength)
   // Note that RLE-encoded BMPs might be transparent because the 'delta' mode
   // can skip pixels and cause implicit transparency.
   mMayHaveTransparency =
-    (mH.mCompression == Compression::RGB && mIsWithinICO && mH.mBpp == 32) ||
+    mIsWithinICO ||
     mH.mCompression == Compression::RLE8 ||
     mH.mCompression == Compression::RLE4 ||
     (mH.mCompression == Compression::BITFIELDS &&
@@ -674,10 +674,10 @@ nsBMPDecoder::ReadBitfields(const char* aData, size_t aLength)
   }
 
   MOZ_ASSERT(!mImageData, "Already have a buffer allocated?");
-  IntSize targetSize = mDownscaler ? mDownscaler->TargetSize() : GetSize();
-  nsresult rv = AllocateFrame(/* aFrameNum = */ 0, targetSize,
-                              IntRect(IntPoint(), targetSize),
-                              SurfaceFormat::B8G8R8A8);
+  nsresult rv = AllocateFrame(/* aFrameNum = */ 0, OutputSize(),
+                              FullOutputFrame(),
+                              mMayHaveTransparency ? SurfaceFormat::B8G8R8A8
+                                                   : SurfaceFormat::B8G8R8X8);
   if (NS_FAILED(rv)) {
     return Transition::TerminateFailure();
   }
@@ -687,7 +687,7 @@ nsBMPDecoder::ReadBitfields(const char* aData, size_t aLength)
     // BMPs store their rows in reverse order, so the downscaler needs to
     // reverse them again when writing its output. Unless the height is
     // negative!
-    rv = mDownscaler->BeginFrame(GetSize(), Nothing(),
+    rv = mDownscaler->BeginFrame(Size(), Nothing(),
                                  mImageData, mMayHaveTransparency,
                                  /* aFlipVertically = */ mH.mHeight >= 0);
     if (NS_FAILED(rv)) {

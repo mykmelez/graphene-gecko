@@ -6,8 +6,9 @@
 #define MOZILLA_MEDIAMANAGER_H
 
 #include "MediaEngine.h"
+#include "mozilla/media/DeviceChangeCallback.h"
 #include "mozilla/Services.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsAutoPtr.h"
 #include "nsIMediaManager.h"
 
@@ -42,10 +43,6 @@
 #include "base/thread.h"
 #include "base/task.h"
 
-#ifdef MOZ_WIDGET_GONK
-#include "DOMCameraManager.h"
-#endif
-
 namespace mozilla {
 namespace dom {
 struct MediaStreamConstraints;
@@ -69,8 +66,10 @@ public:
   NS_DECL_NSIMEDIADEVICE
 
   void SetId(const nsAString& aID);
+  void SetRawId(const nsAString& aID);
   virtual uint32_t GetBestFitnessDistance(
-      const nsTArray<const NormalizedConstraintSet*>& aConstraintSets);
+      const nsTArray<const NormalizedConstraintSet*>& aConstraintSets,
+      bool aIsChrome);
   virtual Source* GetSource() = 0;
   nsresult Allocate(const dom::MediaTrackConstraints &aConstraints,
                     const MediaEnginePrefs &aPrefs,
@@ -94,9 +93,11 @@ private:
 protected:
   nsString mName;
   nsString mID;
+  nsString mRawID;
+  bool mScary;
   dom::MediaSourceEnum mMediaSource;
   RefPtr<MediaEngineSource> mSource;
-  RefPtr<MediaEngineSource::BaseAllocationHandle> mAllocationHandle;
+  RefPtr<MediaEngineSource::AllocationHandle> mAllocationHandle;
 public:
   dom::MediaSourceEnum GetMediaSource() {
     return mMediaSource;
@@ -187,6 +188,7 @@ typedef void (*WindowListenerCallback)(MediaManager *aThis,
 
 class MediaManager final : public nsIMediaManagerService,
                            public nsIObserver
+                          ,public DeviceChangeCallback
 {
   friend GetUserMediaCallbackMediaStreamListener;
 public:
@@ -255,14 +257,14 @@ public:
   MediaEnginePrefs mPrefs;
 
   typedef nsTArray<RefPtr<MediaDevice>> SourceSet;
-  static bool IsPrivateBrowsing(nsPIDOMWindowInner* window);
+
+  virtual int AddDeviceChangeCallback(DeviceChangeCallback* aCallback) override;
+  virtual void OnDeviceChange() override;
 private:
   typedef media::Pledge<SourceSet*, dom::MediaStreamError*> PledgeSourceSet;
   typedef media::Pledge<const char*, dom::MediaStreamError*> PledgeChar;
   typedef media::Pledge<bool, dom::MediaStreamError*> PledgeVoid;
 
-  static bool IsPrivileged();
-  static bool IsLoop(nsIURI* aDocURI);
   static nsresult GenerateUUID(nsAString& aResult);
   static nsresult AnonymizeId(nsAString& aId, const nsACString& aOriginKey);
 public: // TODO: make private once we upgrade to GCC 4.8+ on linux.
@@ -273,15 +275,16 @@ private:
   EnumerateRawDevices(uint64_t aWindowId,
                       dom::MediaSourceEnum aVideoType,
                       dom::MediaSourceEnum aAudioType,
-                      bool aFake, bool aFakeTracks);
+                      bool aFake);
   already_AddRefed<PledgeSourceSet>
   EnumerateDevicesImpl(uint64_t aWindowId,
                        dom::MediaSourceEnum aVideoSrcType,
                        dom::MediaSourceEnum aAudioSrcType,
-                       bool aFake = false, bool aFakeTracks = false);
+                       bool aFake = false);
   already_AddRefed<PledgeChar>
   SelectSettings(
       dom::MediaStreamConstraints& aConstraints,
+      bool aIsChrome,
       RefPtr<media::Refcountable<UniquePtr<SourceSet>>>& aSources);
 
   StreamListeners* AddWindowID(uint64_t aWindowId);
@@ -308,6 +311,7 @@ private:
                               void *aData);
 
   void StopMediaStreams();
+  void RemoveMediaDevicesCallback(uint64_t aWindowID);
 
   // ONLY access from MainThread so we don't need to lock
   WindowTable mActiveWindows;
@@ -326,12 +330,9 @@ private:
   media::CoatCheck<PledgeSourceSet> mOutstandingPledges;
   media::CoatCheck<PledgeChar> mOutstandingCharPledges;
   media::CoatCheck<PledgeVoid> mOutstandingVoidPledges;
-#if defined(MOZ_B2G_CAMERA) && defined(MOZ_WIDGET_GONK)
-  RefPtr<nsDOMCameraManager> mCameraManager;
-#endif
 public:
   media::CoatCheck<media::Pledge<nsCString>> mGetOriginKeyPledges;
-  UniquePtr<media::Parent<media::NonE10s>> mNonE10sParent;
+  RefPtr<media::Parent<media::NonE10s>> mNonE10sParent;
 };
 
 } // namespace mozilla

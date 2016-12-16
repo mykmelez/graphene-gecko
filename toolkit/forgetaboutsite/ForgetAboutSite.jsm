@@ -12,8 +12,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
                                   "resource://gre/modules/Downloads.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ContextualIdentityService",
-                                  "resource://gre/modules/ContextualIdentityService.jsm");
 
 this.EXPORTED_SYMBOLS = ["ForgetAboutSite"];
 
@@ -49,14 +47,6 @@ const Cu = Components.utils;
 this.ForgetAboutSite = {
   removeDataFromDomain: function CRH_removeDataFromDomain(aDomain)
   {
-    // Get all userContextId from the ContextualIdentityService and create
-    // all originAttributes.
-    let oaList = [ {} ]; // init the list with the default originAttributes.
-
-    for (let identity of ContextualIdentityService.getIdentities()) {
-      oaList.push({ userContextId: identity.userContextId});
-    }
-
     PlacesUtils.history.removePagesFromHost(aDomain, true);
 
     // Cache
@@ -84,19 +74,16 @@ this.ForgetAboutSite = {
     // Cookies
     let cm = Cc["@mozilla.org/cookiemanager;1"].
              getService(Ci.nsICookieManager2);
-    let enumerator;
-    for (let originAttributes of oaList) {
-      enumerator = cm.getCookiesFromHost(aDomain, originAttributes);
-      while (enumerator.hasMoreElements()) {
-        let cookie = enumerator.getNext().QueryInterface(Ci.nsICookie);
-        cm.remove(cookie.host, cookie.name, cookie.path, false, cookie.originAttributes);
-      }
+    let enumerator = cm.getCookiesWithOriginAttributes(JSON.stringify({}), aDomain);
+    while (enumerator.hasMoreElements()) {
+      let cookie = enumerator.getNext().QueryInterface(Ci.nsICookie);
+      cm.remove(cookie.host, cookie.name, cookie.path, false, cookie.originAttributes);
     }
 
     // EME
     let mps = Cc["@mozilla.org/gecko-media-plugin-service;1"].
                getService(Ci.mozIGeckoMediaPluginChromeService);
-    mps.forgetThisSite(aDomain);
+    mps.forgetThisSite(aDomain, JSON.stringify({}));
 
     // Plugin data
     const phInterface = Ci.nsIPluginHost;
@@ -106,7 +93,6 @@ this.ForgetAboutSite = {
     let promises = [];
     for (let i = 0; i < tags.length; i++) {
       let promise = new Promise(resolve => {
-        let tag = tags[i];
         try {
           ph.clearSiteData(tags[i], aDomain, FLAG_CLEAR_ALL, -1, function(rv) {
             resolve();
@@ -144,12 +130,6 @@ this.ForgetAboutSite = {
       }
     }
 
-    // Clear any "do not save for this site" for this domain
-    let disabledHosts = lm.getAllDisabledHosts();
-    for (let i = 0; i < disabledHosts.length; i++)
-      if (hasRootDomain(disabledHosts[i], aDomain))
-        lm.setLoginSavingEnabled(disabledHosts, true);
-
     // Permissions
     let pm = Cc["@mozilla.org/permissionmanager;1"].
              getService(Ci.nsIPermissionManager);
@@ -177,14 +157,16 @@ this.ForgetAboutSite = {
                                caUtils);
     let httpURI = caUtils.makeURI("http://" + aDomain);
     let httpsURI = caUtils.makeURI("https://" + aDomain);
-    for (let originAttributes of oaList) {
-      let httpPrincipal = Services.scriptSecurityManager
-                                  .createCodebasePrincipal(httpURI, originAttributes);
-      let httpsPrincipal = Services.scriptSecurityManager
-                                   .createCodebasePrincipal(httpsURI, originAttributes);
-      qms.clearStoragesForPrincipal(httpPrincipal);
-      qms.clearStoragesForPrincipal(httpsPrincipal);
-    }
+    // Following code section has been reverted to the state before Bug 1238183,
+    // but added a new argument to clearStoragesForPrincipal() for indicating
+    // clear all storages under a given origin.
+    let httpPrincipal = Services.scriptSecurityManager
+                                .createCodebasePrincipal(httpURI, {});
+    let httpsPrincipal = Services.scriptSecurityManager
+                                 .createCodebasePrincipal(httpsURI, {});
+    qms.clearStoragesForPrincipal(httpPrincipal, null, true);
+    qms.clearStoragesForPrincipal(httpsPrincipal, null, true);
+
 
     function onContentPrefsRemovalFinished() {
       // Everybody else (including extensions)
@@ -213,8 +195,23 @@ this.ForgetAboutSite = {
         (Components.isSuccessCode(status) ? resolve : reject)(status);
       });
     }).catch(e => {
-      dump("Web Push may not be available.\n");
+      Cu.reportError("Exception thrown while clearing Push notifications: " +
+                     e.toString());
     }));
+
+    // HSTS and HPKP
+    // TODO (bug 1290529): also remove HSTS/HPKP information for subdomains.
+    // Since we can't enumerate the information in the site security service
+    // (bug 1115712), we can't implement this right now.
+    try {
+      let sss = Cc["@mozilla.org/ssservice;1"].
+                getService(Ci.nsISiteSecurityService);
+      sss.removeState(Ci.nsISiteSecurityService.HEADER_HSTS, httpsURI, 0);
+      sss.removeState(Ci.nsISiteSecurityService.HEADER_HPKP, httpsURI, 0);
+    } catch (e) {
+      Cu.reportError("Exception thrown while clearing HSTS/HPKP: " +
+                     e.toString());
+    }
 
     return Promise.all(promises);
   }

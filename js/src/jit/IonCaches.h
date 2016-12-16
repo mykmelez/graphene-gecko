@@ -411,7 +411,7 @@ class GetPropertyIC : public IonCache
 
   public:
     GetPropertyIC(LiveRegisterSet liveRegs,
-                  Register object, ConstantOrRegister id,
+                  Register object, const ConstantOrRegister& id,
                   TypedOrValueRegister output,
                   bool monitoredResult, bool allowDoubleResult)
       : liveRegs_(liveRegs),
@@ -602,8 +602,9 @@ class SetPropertyIC : public IonCache
 
   public:
     SetPropertyIC(LiveRegisterSet liveRegs, Register object, Register temp, Register tempToUnboxIndex,
-                  FloatRegister tempDouble, FloatRegister tempFloat32, ConstantOrRegister id,
-                  ConstantOrRegister value, bool strict, bool needsTypeBarrier, bool guardHoles)
+                  FloatRegister tempDouble, FloatRegister tempFloat32,
+                  const ConstantOrRegister& id, const ConstantOrRegister& value,
+                  bool strict, bool needsTypeBarrier, bool guardHoles)
       : liveRegs_(liveRegs),
         object_(object),
         temp_(temp),
@@ -731,13 +732,13 @@ class SetPropertyIC : public IonCache
 class BindNameIC : public IonCache
 {
   protected:
-    Register scopeChain_;
+    Register environmentChain_;
     PropertyName* name_;
     Register output_;
 
   public:
-    BindNameIC(Register scopeChain, PropertyName* name, Register output)
-      : scopeChain_(scopeChain),
+    BindNameIC(Register envChain, PropertyName* name, Register output)
+      : environmentChain_(envChain),
         name_(name),
         output_(output)
     {
@@ -745,8 +746,8 @@ class BindNameIC : public IonCache
 
     CACHE_HEADER(BindName)
 
-    Register scopeChainReg() const {
-        return scopeChain_;
+    Register environmentChainReg() const {
+        return environmentChain_;
     }
     HandlePropertyName name() const {
         return HandlePropertyName::fromMarkedLocation(&name_);
@@ -756,13 +757,13 @@ class BindNameIC : public IonCache
     }
 
     MOZ_MUST_USE bool attachGlobal(JSContext* cx, HandleScript outerScript, IonScript* ion,
-                                   HandleObject scopeChain);
+                                   HandleObject envChain);
 
     MOZ_MUST_USE bool attachNonGlobal(JSContext* cx, HandleScript outerScript, IonScript* ion,
-                                      HandleObject scopeChain, HandleObject holder);
+                                      HandleObject envChain, HandleObject holder);
 
     static JSObject*
-    update(JSContext* cx, HandleScript outerScript, size_t cacheIndex, HandleObject scopeChain);
+    update(JSContext* cx, HandleScript outerScript, size_t cacheIndex, HandleObject envChain);
 };
 
 class NameIC : public IonCache
@@ -773,17 +774,17 @@ class NameIC : public IonCache
     LiveRegisterSet liveRegs_;
 
     bool typeOf_;
-    Register scopeChain_;
+    Register environmentChain_;
     PropertyName* name_;
     TypedOrValueRegister output_;
 
   public:
     NameIC(LiveRegisterSet liveRegs, bool typeOf,
-           Register scopeChain, PropertyName* name,
+           Register envChain, PropertyName* name,
            TypedOrValueRegister output)
       : liveRegs_(liveRegs),
         typeOf_(typeOf),
-        scopeChain_(scopeChain),
+        environmentChain_(envChain),
         name_(name),
         output_(output)
     {
@@ -791,8 +792,8 @@ class NameIC : public IonCache
 
     CACHE_HEADER(Name)
 
-    Register scopeChainReg() const {
-        return scopeChain_;
+    Register environmentChainReg() const {
+        return environmentChain_;
     }
     HandlePropertyName name() const {
         return HandlePropertyName::fromMarkedLocation(&name_);
@@ -805,19 +806,19 @@ class NameIC : public IonCache
     }
 
     MOZ_MUST_USE bool attachReadSlot(JSContext* cx, HandleScript outerScript, IonScript* ion,
-                                     HandleObject scopeChain, HandleObject holderBase,
+                                     HandleObject envChain, HandleObject holderBase,
                                      HandleNativeObject holder, HandleShape shape);
 
     MOZ_MUST_USE bool attachCallGetter(JSContext* cx, HandleScript outerScript, IonScript* ion,
-                                       HandleObject scopeChain, HandleObject obj,
+                                       HandleObject envChain, HandleObject obj,
                                        HandleObject holder, HandleShape shape,
                                        void* returnAddr);
 
     MOZ_MUST_USE bool attachTypeOfNoProperty(JSContext* cx, HandleScript outerScript,
-                                             IonScript* ion, HandleObject scopeChain);
+                                             IonScript* ion, HandleObject envChain);
 
     static MOZ_MUST_USE bool
-    update(JSContext* cx, HandleScript outerScript, size_t cacheIndex, HandleObject scopeChain,
+    update(JSContext* cx, HandleScript outerScript, size_t cacheIndex, HandleObject envChain,
            MutableHandleValue vp);
 };
 
@@ -840,6 +841,13 @@ IONCACHE_KIND_LIST(CACHE_CASTS)
 
 bool IsCacheableProtoChainForIonOrCacheIR(JSObject* obj, JSObject* holder);
 bool IsCacheableGetPropReadSlotForIonOrCacheIR(JSObject* obj, JSObject* holder, Shape* shape);
+
+bool IsCacheableGetPropCallScripted(JSObject* obj, JSObject* holder, Shape* shape,
+                                    bool* isTemporarilyUnoptimizable = nullptr);
+bool IsCacheableGetPropCallNative(JSObject* obj, JSObject* holder, Shape* shape);
+
+bool ValueToNameOrSymbolId(JSContext* cx, HandleValue idval, MutableHandleId id,
+                           bool* nameOrSymbol);
 
 } // namespace jit
 } // namespace js

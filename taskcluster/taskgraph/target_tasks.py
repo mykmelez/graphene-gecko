@@ -6,12 +6,17 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 from taskgraph import try_option_syntax
-from taskgraph.util.attributes import attrmatch
 
-BUILD_AND_TEST_KINDS = set([
-    'legacy',  # builds
-    'desktop-test',
-    'android-test',
+INTEGRATION_PROJECTS = set([
+    'mozilla-inbound',
+    'autoland',
+])
+
+RELEASE_PROJECTS = set([
+    'mozilla-central',
+    'mozilla-aurora',
+    'mozilla-beta',
+    'mozilla-release',
 ])
 
 _target_task_methods = {}
@@ -29,49 +34,112 @@ def get_method(method):
     return _target_task_methods[method]
 
 
-@_target_task('from_parameters')
-def target_tasks_from_parameters(full_task_graph, parameters):
-    """Get the target task set from parameters['target_tasks'].  This is
-    useful for re-running a decision task with the same target set as in an
-    earlier run, by copying `target_tasks.json` into `parameters.yml`."""
-    return parameters['target_tasks']
-
-
 @_target_task('try_option_syntax')
 def target_tasks_try_option_syntax(full_task_graph, parameters):
     """Generate a list of target tasks based on try syntax in
     parameters['message'] and, for context, the full task graph."""
     options = try_option_syntax.TryOptionSyntax(parameters['message'], full_task_graph)
-    return [t.label for t in full_task_graph.tasks.itervalues()
-            if options.task_matches(t.attributes)]
+    target_tasks_labels = [t.label for t in full_task_graph.tasks.itervalues()
+                           if options.task_matches(t.attributes)]
+
+    # If the developer wants test jobs to be rebuilt N times we add that value here
+    if int(options.trigger_tests) > 1:
+        for l in target_tasks_labels:
+            task = full_task_graph[l]
+            if 'unittest_suite' in task.attributes:
+                task.attributes['task_duplicates'] = options.trigger_tests
+
+    # Add notifications here as well
+    if options.notifications:
+        for task in full_task_graph:
+            owner = parameters.get('owner')
+            routes = task.task.setdefault('routes', [])
+            if options.notifications == 'all':
+                routes.append("notify.email.{}.on-any".format(owner))
+            elif options.notifications == 'failure':
+                routes.append("notify.email.{}.on-failed".format(owner))
+                routes.append("notify.email.{}.on-exception".format(owner))
+
+    return target_tasks_labels
 
 
-@_target_task('all_builds_and_tests')
-def target_tasks_all_builds_and_tests(full_task_graph, parameters):
-    """Trivially target all build and test tasks.  This is used for
-    branches where we want to build "everyting", but "everything"
-    does not include uninteresting things like docker images"""
+@_target_task('default')
+def target_tasks_default(full_task_graph, parameters):
+    """Target the tasks which have indicated they should be run on this project
+    via the `run_on_projects` attributes."""
     def filter(task):
-        return t.attributes.get('kind') in BUILD_AND_TEST_KINDS
+        run_on_projects = set(t.attributes.get('run_on_projects', []))
+        if 'all' in run_on_projects:
+            return True
+        project = parameters['project']
+        if 'integration' in run_on_projects:
+            if project in INTEGRATION_PROJECTS:
+                return True
+        if 'release' in run_on_projects:
+            if project in RELEASE_PROJECTS:
+                return True
+        return project in run_on_projects
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 
 @_target_task('ash_tasks')
-def target_tasks_ash_tasks(full_task_graph, parameters):
-    """Special case for builds on ash."""
+def target_tasks_ash(full_task_graph, parameters):
+    """Target tasks that only run on the ash branch."""
     def filter(task):
-        # NOTE: on the ash branch, update taskcluster/ci/desktop-test/tests.yml to
-        # run the M-dt-e10s tasks
-        attrs = t.attributes
-        if attrs.get('kind') not in BUILD_AND_TEST_KINDS:
+        platform = task.attributes.get('build_platform')
+        # only select platforms
+        if platform not in ('linux64', 'linux64-asan', 'linux64-pgo'):
             return False
-        if not attrmatch(attrs, build_platform=set([
-            'linux64',
-            'linux64-asan',
-            'linux64-pgo',
-        ])):
+        # and none of this linux64-asan/debug stuff
+        if platform == 'linux64-asan' and task.attributes['build_type'] == 'debug':
             return False
-        if not attrmatch(attrs, e10s=True):
+        # no non-et10s tests
+        if task.attributes.get('unittest_suite') or task.attributes.get('talos_siute'):
+            if not task.attributes.get('e10s'):
+                return False
+        # don't upload symbols
+        if task.attributes['kind'] == 'upload-symbols':
             return False
         return True
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('cedar_tasks')
+def target_tasks_cedar(full_task_graph, parameters):
+    """Target tasks that only run on the cedar branch."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        # only select platforms
+        if platform not in ['linux64']:
+            return False
+        if task.attributes.get('unittest_suite'):
+            if not (task.attributes['unittest_suite'].startswith('mochitest')
+                    or 'xpcshell' in task.attributes['unittest_suite']):
+                return False
+        return True
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('graphics_tasks')
+def target_tasks_graphics(full_task_graph, parameters):
+    """In addition to doing the filtering by project that the 'default'
+       filter does, also remove artifact builds because we have csets on
+       the graphics branch that aren't on the candidate branches of artifact
+       builds"""
+    filtered_for_project = target_tasks_default(full_task_graph, parameters)
+
+    def filter(task):
+        if task.attributes['kind'] == 'artifact-build':
+            return False
+        return True
+    return [l for l in filtered_for_project if filter(full_task_graph[l])]
+
+
+@_target_task('nightly_fennec')
+def target_tasks_nightly(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of fennec. The
+    nightly build process involves a pipeline of builds, signing,
+    and, eventually, uploading the tasks to balrog."""
+    def filter(task):
+        return task.attributes.get('nightly', False)
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]

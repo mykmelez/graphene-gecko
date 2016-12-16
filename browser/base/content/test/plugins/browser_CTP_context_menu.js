@@ -2,7 +2,7 @@ var rootDir = getRootDirectory(gTestPath);
 const gTestRoot = rootDir.replace("chrome://mochitests/content/", "http://127.0.0.1:8888/");
 
 add_task(function* () {
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     clearAllPluginPermissions();
     setTestPluginEnabledState(Ci.nsIPluginTag.STATE_ENABLED, "Test Plug-in");
     setTestPluginEnabledState(Ci.nsIPluginTag.STATE_ENABLED, "Second Test Plug-in");
@@ -32,7 +32,7 @@ add_task(function* () {
   // check plugin state
   let pluginInfo = yield promiseForPluginInfo("test", gBrowser.selectedBrowser);
   ok(!pluginInfo.activated, "plugin should not be activated");
-   
+
   // Display a context menu on the test plugin so we can test
   // activation menu options.
   yield ContentTask.spawn(gBrowser.selectedBrowser, {}, function* () {

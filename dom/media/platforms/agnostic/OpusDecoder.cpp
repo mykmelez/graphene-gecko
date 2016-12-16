@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "OpusDecoder.h"
+#include "OpusParser.h"
 #include "TimeUnits.h"
 #include "VorbisUtils.h"
 #include "VorbisDecoder.h" // For VorbisLayout
@@ -12,8 +13,12 @@
 #include "mozilla/PodOperations.h"
 #include "mozilla/SyncRunnable.h"
 
-#include <stdint.h>
 #include <inttypes.h>  // For PRId64
+
+#include "opus/opus.h"
+extern "C" {
+#include "opus/opus_multistream.h"
+}
 
 #define OPUS_DEBUG(arg, ...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, \
     ("OpusDataDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
@@ -41,10 +46,9 @@ OpusDataDecoder::~OpusDataDecoder()
   }
 }
 
-nsresult
+void
 OpusDataDecoder::Shutdown()
 {
-  return NS_OK;
 }
 
 void
@@ -62,14 +66,14 @@ OpusDataDecoder::Init()
   uint8_t *p = mInfo.mCodecSpecificConfig->Elements();
   if (length < sizeof(uint64_t)) {
     OPUS_DEBUG("CodecSpecificConfig too short to read codecDelay!");
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
   int64_t codecDelay = BigEndian::readUint64(p);
   length -= sizeof(uint64_t);
   p += sizeof(uint64_t);
   if (NS_FAILED(DecodeHeader(p, length))) {
     OPUS_DEBUG("Error decoding header!");
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 
   int r;
@@ -85,7 +89,7 @@ OpusDataDecoder::Init()
   if (codecDelay != FramesToUsecs(mOpusParser->mPreSkip,
                                   mOpusParser->mRate).value()) {
     NS_WARNING("Invalid Opus header: CodecDelay and pre-skip do not match!");
-    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 
   if (mInfo.mRate != (uint32_t)mOpusParser->mRate) {
@@ -96,7 +100,7 @@ OpusDataDecoder::Init()
   }
 
   return r == OPUS_OK ? InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__)
-                      : InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+                      : InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
 }
 
 nsresult
@@ -138,13 +142,11 @@ OpusDataDecoder::DecodeHeader(const unsigned char* aData, size_t aLength)
   return NS_OK;
 }
 
-nsresult
+void
 OpusDataDecoder::Input(MediaRawData* aSample)
 {
   mTaskQueue->Dispatch(NewRunnableMethod<RefPtr<MediaRawData>>(
                        this, &OpusDataDecoder::ProcessDecode, aSample));
-
-  return NS_OK;
 }
 
 void
@@ -154,37 +156,26 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
     return;
   }
 
-  DecodeError err = DoDecode(aSample);
-  switch (err) {
-    case DecodeError::FATAL_ERROR:
-      mCallback->Error(MediaDataDecoderError::FATAL_ERROR);
-      return;
-    case DecodeError::DECODE_ERROR:
-      mCallback->Error(MediaDataDecoderError::DECODE_ERROR);
-      break;
-    case DecodeError::DECODE_SUCCESS:
-      break;
+  MediaResult rv = DoDecode(aSample);
+  if (NS_FAILED(rv)) {
+    mCallback->Error(rv);
+    return;
   }
-
-  if (mTaskQueue->IsEmpty()) {
-    mCallback->InputExhausted();
-  }
+  mCallback->InputExhausted();
 }
 
-OpusDataDecoder::DecodeError
+MediaResult
 OpusDataDecoder::DoDecode(MediaRawData* aSample)
 {
-  int64_t aDiscardPadding = 0;
-  if (aSample->mExtraData) {
-    aDiscardPadding = BigEndian::readInt64(aSample->mExtraData->Elements());
-  }
   uint32_t channels = mOpusParser->mChannels;
 
   if (mPaddingDiscarded) {
     // Discard padding should be used only on the final packet, so
     // decoding after a padding discard is invalid.
     OPUS_DEBUG("Opus error, discard padding on interstitial packet");
-    return FATAL_ERROR;
+    return MediaResult(
+      NS_ERROR_DOM_MEDIA_FATAL_ERR,
+      RESULT_DETAIL("Discard padding on interstitial packet"));
   }
 
   if (!mLastFrameTime || mLastFrameTime.ref() != aSample->mTime) {
@@ -194,28 +185,31 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
   }
 
   // Maximum value is 63*2880, so there's no chance of overflow.
-  int32_t frames_number = opus_packet_get_nb_frames(aSample->Data(),
+  uint32_t frames_number = opus_packet_get_nb_frames(aSample->Data(),
                                                     aSample->Size());
   if (frames_number <= 0) {
     OPUS_DEBUG("Invalid packet header: r=%ld length=%ld",
                frames_number, aSample->Size());
-    return FATAL_ERROR;
+    return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                       RESULT_DETAIL("Invalid packet header: r=%d length=%u",
+                                     frames_number, uint32_t(aSample->Size())));
   }
 
-  int32_t samples = opus_packet_get_samples_per_frame(aSample->Data(),
-                                           opus_int32(mOpusParser->mRate));
+  uint32_t samples = opus_packet_get_samples_per_frame(
+    aSample->Data(), opus_int32(mOpusParser->mRate));
 
 
   // A valid Opus packet must be between 2.5 and 120 ms long (48kHz).
-  int32_t frames = frames_number*samples;
+  uint32_t frames = frames_number*samples;
   if (frames < 120 || frames > 5760) {
-    OPUS_DEBUG("Invalid packet frames: %ld", frames);
-    return FATAL_ERROR;
+    OPUS_DEBUG("Invalid packet frames: %u", frames);
+    return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                       RESULT_DETAIL("Invalid packet frames:%u", frames));
   }
 
   AlignedAudioBuffer buffer(frames * channels);
   if (!buffer) {
-    return FATAL_ERROR;
+    return MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__);
   }
 
   // Decode to the appropriate sample type.
@@ -229,9 +223,10 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
                                     buffer.get(), frames, false);
 #endif
   if (ret < 0) {
-    return DECODE_ERROR;
+    return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
+                       RESULT_DETAIL("Opus decoding error:%d", ret));
   }
-  NS_ASSERTION(ret == frames, "Opus decoded too few audio samples");
+  NS_ASSERTION(uint32_t(ret) == frames, "Opus decoded too few audio samples");
   CheckedInt64 startTime = aSample->mTime;
 
   // Trim the initial frames while the decoder is settling.
@@ -247,49 +242,37 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
     mSkip -= skipFrames;
   }
 
-  if (aDiscardPadding < 0) {
-    // Negative discard padding is invalid.
-    OPUS_DEBUG("Opus error, negative discard padding");
-    return FATAL_ERROR;
-  }
-  if (aDiscardPadding > 0) {
-    OPUS_DEBUG("OpusDecoder discardpadding %" PRId64 "", aDiscardPadding);
-    CheckedInt64 discardFrames =
-      TimeUnitToFrames(media::TimeUnit::FromNanoseconds(aDiscardPadding),
-                       mOpusParser->mRate);
-    if (!discardFrames.isValid()) {
-      NS_WARNING("Int overflow in DiscardPadding");
-      return FATAL_ERROR;
-    }
-    if (discardFrames.value() > frames) {
-      // Discarding more than the entire packet is invalid.
-      OPUS_DEBUG("Opus error, discard padding larger than packet");
-      return FATAL_ERROR;
-    }
-    OPUS_DEBUG("Opus decoder discarding %d of %d frames",
-        int32_t(discardFrames.value()), frames);
+  if (aSample->mDiscardPadding > 0) {
+    OPUS_DEBUG("Opus decoder discarding %u of %u frames",
+               aSample->mDiscardPadding, frames);
     // Padding discard is only supposed to happen on the final packet.
     // Record the discard so we can return an error if another packet is
     // decoded.
+    if (aSample->mDiscardPadding > frames) {
+    // Discarding more than the entire packet is invalid.
+      OPUS_DEBUG("Opus error, discard padding larger than packet");
+      return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                         RESULT_DETAIL("Discard padding larger than packet"));
+    }
+
     mPaddingDiscarded = true;
-    int32_t keepFrames = frames - discardFrames.value();
-    frames = keepFrames;
+    frames = frames - aSample->mDiscardPadding;
   }
 
   // Apply the header gain if one was specified.
 #ifdef MOZ_SAMPLE_TYPE_FLOAT32
   if (mOpusParser->mGain != 1.0f) {
     float gain = mOpusParser->mGain;
-    int samples = frames * channels;
-    for (int i = 0; i < samples; i++) {
+    uint32_t samples = frames * channels;
+    for (uint32_t i = 0; i < samples; i++) {
       buffer[i] *= gain;
     }
   }
 #else
   if (mOpusParser->mGain_Q16 != 65536) {
     int64_t gain_Q16 = mOpusParser->mGain_Q16;
-    int samples = frames * channels;
-    for (int i = 0; i < samples; i++) {
+    uint32_t samples = frames * channels;
+    for (uint32_t i = 0; i < samples; i++) {
       int32_t val = static_cast<int32_t>((gain_Q16*buffer[i] + 32768)>>16);
       buffer[i] = static_cast<AudioDataValue>(MOZ_CLIP_TO_15(val));
     }
@@ -298,15 +281,17 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
 
   CheckedInt64 duration = FramesToUsecs(frames, mOpusParser->mRate);
   if (!duration.isValid()) {
-    NS_WARNING("OpusDataDecoder: Int overflow converting WebM audio duration");
-    return FATAL_ERROR;
+    return MediaResult(
+      NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+      RESULT_DETAIL("Overflow converting WebM audio duration"));
   }
   CheckedInt64 time =
     startTime - FramesToUsecs(mOpusParser->mPreSkip, mOpusParser->mRate) +
     FramesToUsecs(mFrames, mOpusParser->mRate);
   if (!time.isValid()) {
-    NS_WARNING("OpusDataDecoder: Int overflow shifting tstamp by codec delay");
-    return FATAL_ERROR;
+    return MediaResult(
+      NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+      RESULT_DETAIL("Overflow shifting tstamp by codec delay"));
   };
 
   mCallback->Output(new AudioData(aSample->mOffset,
@@ -317,7 +302,7 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
                                   mOpusParser->mChannels,
                                   mOpusParser->mRate));
   mFrames += frames;
-  return DECODE_SUCCESS;
+  return NS_OK;
 }
 
 void
@@ -326,18 +311,17 @@ OpusDataDecoder::ProcessDrain()
   mCallback->DrainComplete();
 }
 
-nsresult
+void
 OpusDataDecoder::Drain()
 {
   mTaskQueue->Dispatch(NewRunnableMethod(this, &OpusDataDecoder::ProcessDrain));
-  return NS_OK;
 }
 
-nsresult
+void
 OpusDataDecoder::Flush()
 {
   if (!mOpusDecoder) {
-    return NS_OK;
+    return;
   }
   mIsFlushing = true;
   nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction([this] () {
@@ -350,17 +334,13 @@ OpusDataDecoder::Flush()
   });
   SyncRunnable::DispatchToThread(mTaskQueue, runnable);
   mIsFlushing = false;
-  return NS_OK;
 }
 
 /* static */
 bool
 OpusDataDecoder::IsOpus(const nsACString& aMimeType)
 {
-  return aMimeType.EqualsLiteral("audio/webm; codecs=opus") ||
-         aMimeType.EqualsLiteral("audio/ogg; codecs=opus") ||
-         aMimeType.EqualsLiteral("audio/mp4; codecs=opus") ||
-         aMimeType.EqualsLiteral("audio/opus");
+  return aMimeType.EqualsLiteral("audio/opus");
 }
 
 } // namespace mozilla

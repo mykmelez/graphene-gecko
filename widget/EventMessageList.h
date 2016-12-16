@@ -63,6 +63,7 @@ NS_EVENT_MESSAGE(eScroll)
 
 // Application installation
 NS_EVENT_MESSAGE(eInstall)
+NS_EVENT_MESSAGE(eAppInstalled)
 
 // A plugin was clicked or otherwise focused. ePluginActivate should be
 // used when the window is not active. ePluginFocus should be used when
@@ -83,6 +84,7 @@ NS_EVENT_MESSAGE(eMouseEnterIntoWidget)
 NS_EVENT_MESSAGE(eMouseExitFromWidget)
 NS_EVENT_MESSAGE(eMouseDoubleClick)
 NS_EVENT_MESSAGE(eMouseClick)
+NS_EVENT_MESSAGE(eMouseAuxClick)
 // eMouseActivate is fired when the widget is activated by a click.
 NS_EVENT_MESSAGE(eMouseActivate)
 NS_EVENT_MESSAGE(eMouseOver)
@@ -113,11 +115,12 @@ NS_EVENT_MESSAGE(eUnload)
 NS_EVENT_MESSAGE(eHashChange)
 NS_EVENT_MESSAGE(eImageAbort)
 NS_EVENT_MESSAGE(eLoadError)
+NS_EVENT_MESSAGE(eLoadEnd)
 NS_EVENT_MESSAGE(ePopState)
 NS_EVENT_MESSAGE(eStorage)
 NS_EVENT_MESSAGE(eBeforeUnload)
 NS_EVENT_MESSAGE(eReadyStateChange)
- 
+
 NS_EVENT_MESSAGE(eFormSubmit)
 NS_EVENT_MESSAGE(eFormReset)
 NS_EVENT_MESSAGE(eFormChange)
@@ -127,6 +130,8 @@ NS_EVENT_MESSAGE(eFormInvalid)
 //Need separate focus/blur notifications for non-native widgets
 NS_EVENT_MESSAGE(eFocus)
 NS_EVENT_MESSAGE(eBlur)
+NS_EVENT_MESSAGE(eFocusIn)
+NS_EVENT_MESSAGE(eFocusOut)
 
 NS_EVENT_MESSAGE(eDragEnter)
 NS_EVENT_MESSAGE(eDragOver)
@@ -141,6 +146,7 @@ NS_EVENT_MESSAGE_FIRST_LAST(eDragDropEvent, eDragEnter, eDragLeave)
 // XUL specific events
 NS_EVENT_MESSAGE(eXULPopupShowing)
 NS_EVENT_MESSAGE(eXULPopupShown)
+NS_EVENT_MESSAGE(eXULPopupPositioned)
 NS_EVENT_MESSAGE(eXULPopupHiding)
 NS_EVENT_MESSAGE(eXULPopupHidden)
 NS_EVENT_MESSAGE(eXULBroadcast)
@@ -164,7 +170,7 @@ NS_EVENT_MESSAGE_FIRST_LAST(eLegacyMutationEvent,
   eLegacySubtreeModified, eLegacyCharacterDataModified)
 
 NS_EVENT_MESSAGE(eUnidentifiedEvent)
- 
+
 // composition events
 NS_EVENT_MESSAGE(eCompositionStart)
 // eCompositionEnd is the message for DOM compositionend event.
@@ -331,6 +337,8 @@ NS_EVENT_MESSAGE(eGestureNotify)
 NS_EVENT_MESSAGE(eScrolledAreaChanged)
 
 // CSS Transition & Animation events:
+NS_EVENT_MESSAGE(eTransitionStart)
+NS_EVENT_MESSAGE(eTransitionRun)
 NS_EVENT_MESSAGE(eTransitionEnd)
 NS_EVENT_MESSAGE(eAnimationStart)
 NS_EVENT_MESSAGE(eAnimationEnd)
@@ -372,6 +380,11 @@ NS_EVENT_MESSAGE(eDeviceLight)
 NS_EVENT_MESSAGE(eOrientationChange)
 #endif
 
+// WebVR events
+NS_EVENT_MESSAGE(eVRDisplayConnect)
+NS_EVENT_MESSAGE(eVRDisplayDisconnect)
+NS_EVENT_MESSAGE(eVRDisplayPresentChange)
+
 NS_EVENT_MESSAGE(eShow)
 
 // Fullscreen DOM API
@@ -388,6 +401,8 @@ NS_EVENT_MESSAGE(eTouchCancel)
 // Pointerlock DOM API
 NS_EVENT_MESSAGE(ePointerLockChange)
 NS_EVENT_MESSAGE(ePointerLockError)
+NS_EVENT_MESSAGE(eMozPointerLockChange)
+NS_EVENT_MESSAGE(eMozPointerLockError)
 
 // eWheel is the event message of DOM wheel event.
 NS_EVENT_MESSAGE(eWheel)
@@ -411,9 +426,6 @@ NS_EVENT_MESSAGE(eNetworkDownload)
 NS_EVENT_MESSAGE(eMediaRecorderDataAvailable)
 NS_EVENT_MESSAGE(eMediaRecorderWarning)
 NS_EVENT_MESSAGE(eMediaRecorderStop)
-
-// SpeakerManager events
-NS_EVENT_MESSAGE(eSpeakerForcedChange)
 
 #ifdef MOZ_GAMEPAD
 // Gamepad input events

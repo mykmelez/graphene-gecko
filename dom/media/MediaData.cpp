@@ -6,10 +6,6 @@
 
 #include "MediaData.h"
 #include "MediaInfo.h"
-#ifdef MOZ_OMX_DECODER
-#include "GrallocImages.h"
-#include "mozilla/layers/TextureClient.h"
-#endif
 #include "VideoUtils.h"
 #include "ImageContainer.h"
 
@@ -85,8 +81,6 @@ AudioData::TransferAndUpdateTimestampAndDuration(AudioData* aOther,
                                       Move(aOther->mAudioData),
                                       aOther->mChannels,
                                       aOther->mRate);
-  v->mDiscontinuity = aOther->mDiscontinuity;
-
   return v.forget();
 }
 
@@ -145,6 +139,28 @@ VideoData::~VideoData()
 {
 }
 
+void
+VideoData::SetListener(UniquePtr<Listener> aListener)
+{
+  MOZ_ASSERT(!mSentToCompositor, "Listener should be registered before sending data");
+
+  mListener = Move(aListener);
+}
+
+void
+VideoData::MarkSentToCompositor()
+{
+  if (mSentToCompositor) {
+    return;
+  }
+
+  mSentToCompositor = true;
+  if (mListener != nullptr) {
+    mListener->OnSentToCompositor();
+    mListener = nullptr;
+  }
+}
+
 size_t
 VideoData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
@@ -161,58 +177,24 @@ VideoData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
   return size;
 }
 
-/* static */
-already_AddRefed<VideoData>
-VideoData::ShallowCopyUpdateDuration(const VideoData* aOther,
-                                     int64_t aDuration)
+void
+VideoData::UpdateDuration(int64_t aDuration)
 {
-  RefPtr<VideoData> v = new VideoData(aOther->mOffset,
-                                        aOther->mTime,
-                                        aDuration,
-                                        aOther->mKeyframe,
-                                        aOther->mTimecode,
-                                        aOther->mDisplay,
-                                        aOther->mFrameID);
-  v->mDiscontinuity = aOther->mDiscontinuity;
-  v->mImage = aOther->mImage;
-  return v.forget();
+  MOZ_ASSERT(aDuration >= 0);
+
+  mDuration = aDuration;
 }
 
-/* static */
-already_AddRefed<VideoData>
-VideoData::ShallowCopyUpdateTimestamp(const VideoData* aOther,
-                                      int64_t aTimestamp)
+void
+VideoData::UpdateTimestamp(int64_t aTimestamp)
 {
-  NS_ENSURE_TRUE(aOther, nullptr);
-  RefPtr<VideoData> v = new VideoData(aOther->mOffset,
-                                        aTimestamp,
-                                        aOther->GetEndTime() - aTimestamp,
-                                        aOther->mKeyframe,
-                                        aOther->mTimecode,
-                                        aOther->mDisplay,
-                                        aOther->mFrameID);
-  v->mDiscontinuity = aOther->mDiscontinuity;
-  v->mImage = aOther->mImage;
-  return v.forget();
-}
+  MOZ_ASSERT(aTimestamp >= 0);
 
-/* static */
-already_AddRefed<VideoData>
-VideoData::ShallowCopyUpdateTimestampAndDuration(const VideoData* aOther,
-                                                 int64_t aTimestamp,
-                                                 int64_t aDuration)
-{
-  NS_ENSURE_TRUE(aOther, nullptr);
-  RefPtr<VideoData> v = new VideoData(aOther->mOffset,
-                                        aTimestamp,
-                                        aDuration,
-                                        aOther->mKeyframe,
-                                        aOther->mTimecode,
-                                        aOther->mDisplay,
-                                        aOther->mFrameID);
-  v->mDiscontinuity = aOther->mDiscontinuity;
-  v->mImage = aOther->mImage;
-  return v.forget();
+  int64_t updatedDuration = GetEndTime() - aTimestamp;
+  MOZ_ASSERT(updatedDuration >= 0);
+
+  mTime = aTimestamp;
+  mDuration = updatedDuration;
 }
 
 /* static */
@@ -244,6 +226,7 @@ bool VideoData::SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
   data.mPicY = aPicture.y;
   data.mPicSize = aPicture.Size();
   data.mStereoMode = aInfo.mStereoMode;
+  data.mYUVColorSpace = aBuffer.mYUVColorSpace;
 
   aVideoImage->SetDelayedConversion(true);
   if (aCopyData) {
@@ -255,27 +238,26 @@ bool VideoData::SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
 
 /* static */
 already_AddRefed<VideoData>
-VideoData::Create(const VideoInfo& aInfo,
-                  ImageContainer* aContainer,
-                  Image* aImage,
-                  int64_t aOffset,
-                  int64_t aTime,
-                  int64_t aDuration,
-                  const YCbCrBuffer& aBuffer,
-                  bool aKeyframe,
-                  int64_t aTimecode,
-                  const IntRect& aPicture)
+VideoData::CreateAndCopyData(const VideoInfo& aInfo,
+                             ImageContainer* aContainer,
+                             int64_t aOffset,
+                             int64_t aTime,
+                             int64_t aDuration,
+                             const YCbCrBuffer& aBuffer,
+                             bool aKeyframe,
+                             int64_t aTimecode,
+                             const IntRect& aPicture)
 {
-  if (!aImage && !aContainer) {
+  if (!aContainer) {
     // Create a dummy VideoData with no image. This gives us something to
     // send to media streams if necessary.
     RefPtr<VideoData> v(new VideoData(aOffset,
-                                        aTime,
-                                        aDuration,
-                                        aKeyframe,
-                                        aTimecode,
-                                        aInfo.mDisplay,
-                                        0));
+                                      aTime,
+                                      aDuration,
+                                      aKeyframe,
+                                      aTimecode,
+                                      aInfo.mDisplay,
+                                      0));
     return v.forget();
   }
 
@@ -313,58 +295,52 @@ VideoData::Create(const VideoInfo& aInfo,
   }
 
   RefPtr<VideoData> v(new VideoData(aOffset,
-                                      aTime,
-                                      aDuration,
-                                      aKeyframe,
-                                      aTimecode,
-                                      aInfo.mDisplay,
-                                      0));
+                                    aTime,
+                                    aDuration,
+                                    aKeyframe,
+                                    aTimecode,
+                                    aInfo.mDisplay,
+                                    0));
 #ifdef MOZ_WIDGET_GONK
   const YCbCrBuffer::Plane &Y = aBuffer.mPlanes[0];
   const YCbCrBuffer::Plane &Cb = aBuffer.mPlanes[1];
   const YCbCrBuffer::Plane &Cr = aBuffer.mPlanes[2];
 #endif
 
-  if (!aImage) {
-    // Currently our decoder only knows how to output to ImageFormat::PLANAR_YCBCR
-    // format.
+  // Currently our decoder only knows how to output to ImageFormat::PLANAR_YCBCR
+  // format.
 #ifdef MOZ_WIDGET_GONK
-    if (IsYV12Format(Y, Cb, Cr) && !IsInEmulator()) {
-      v->mImage = new layers::GrallocImage();
-    }
+  if (IsYV12Format(Y, Cb, Cr) && !IsInEmulator()) {
+    v->mImage = new layers::GrallocImage();
+  }
 #endif
-    if (!v->mImage) {
-      v->mImage = aContainer->CreatePlanarYCbCrImage();
-    }
-  } else {
-    v->mImage = aImage;
+  if (!v->mImage) {
+    v->mImage = aContainer->CreatePlanarYCbCrImage();
   }
 
   if (!v->mImage) {
     return nullptr;
   }
-  NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::PLANAR_YCBCR ||
-               v->mImage->GetFormat() == ImageFormat::GRALLOC_PLANAR_YCBCR,
+  NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::PLANAR_YCBCR,
                "Wrong format?");
   PlanarYCbCrImage* videoImage = v->mImage->AsPlanarYCbCrImage();
   MOZ_ASSERT(videoImage);
 
-  bool shouldCopyData = (aImage == nullptr);
   if (!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                      shouldCopyData)) {
+                                      true /* aCopyData */)) {
     return nullptr;
   }
 
 #ifdef MOZ_WIDGET_GONK
-  if (!videoImage->IsValid() && !aImage && IsYV12Format(Y, Cb, Cr)) {
+  if (!videoImage->IsValid() && IsYV12Format(Y, Cb, Cr)) {
     // Failed to allocate gralloc. Try fallback.
     v->mImage = aContainer->CreatePlanarYCbCrImage();
     if (!v->mImage) {
       return nullptr;
     }
     videoImage = v->mImage->AsPlanarYCbCrImage();
-    if(!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                       true /* aCopyData */)) {
+    if (!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
+                                        true /* aCopyData */)) {
       return nullptr;
     }
   }
@@ -374,40 +350,7 @@ VideoData::Create(const VideoInfo& aInfo,
 
 /* static */
 already_AddRefed<VideoData>
-VideoData::Create(const VideoInfo& aInfo,
-                  ImageContainer* aContainer,
-                  int64_t aOffset,
-                  int64_t aTime,
-                  int64_t aDuration,
-                  const YCbCrBuffer& aBuffer,
-                  bool aKeyframe,
-                  int64_t aTimecode,
-                  const IntRect& aPicture)
-{
-  return Create(aInfo, aContainer, nullptr, aOffset, aTime, aDuration, aBuffer,
-                aKeyframe, aTimecode, aPicture);
-}
-
-/* static */
-already_AddRefed<VideoData>
-VideoData::Create(const VideoInfo& aInfo,
-                  Image* aImage,
-                  int64_t aOffset,
-                  int64_t aTime,
-                  int64_t aDuration,
-                  const YCbCrBuffer& aBuffer,
-                  bool aKeyframe,
-                  int64_t aTimecode,
-                  const IntRect& aPicture)
-{
-  return Create(aInfo, nullptr, aImage, aOffset, aTime, aDuration, aBuffer,
-                aKeyframe, aTimecode, aPicture);
-}
-
-/* static */
-already_AddRefed<VideoData>
 VideoData::CreateFromImage(const VideoInfo& aInfo,
-                           ImageContainer* aContainer,
                            int64_t aOffset,
                            int64_t aTime,
                            int64_t aDuration,
@@ -417,75 +360,15 @@ VideoData::CreateFromImage(const VideoInfo& aInfo,
                            const IntRect& aPicture)
 {
   RefPtr<VideoData> v(new VideoData(aOffset,
-                                      aTime,
-                                      aDuration,
-                                      aKeyframe,
-                                      aTimecode,
-                                      aInfo.mDisplay,
-                                      0));
+                                    aTime,
+                                    aDuration,
+                                    aKeyframe,
+                                    aTimecode,
+                                    aInfo.mDisplay,
+                                    0));
   v->mImage = aImage;
   return v.forget();
 }
-
-#ifdef MOZ_OMX_DECODER
-/* static */
-already_AddRefed<VideoData>
-VideoData::Create(const VideoInfo& aInfo,
-                  ImageContainer* aContainer,
-                  int64_t aOffset,
-                  int64_t aTime,
-                  int64_t aDuration,
-                  mozilla::layers::TextureClient* aBuffer,
-                  bool aKeyframe,
-                  int64_t aTimecode,
-                  const IntRect& aPicture)
-{
-  if (!aContainer) {
-    // Create a dummy VideoData with no image. This gives us something to
-    // send to media streams if necessary.
-    RefPtr<VideoData> v(new VideoData(aOffset,
-                                        aTime,
-                                        aDuration,
-                                        aKeyframe,
-                                        aTimecode,
-                                        aInfo.mDisplay,
-                                        0));
-    return v.forget();
-  }
-
-  // The following situations could be triggered by invalid input
-  if (aPicture.width <= 0 || aPicture.height <= 0) {
-    NS_WARNING("Empty picture rect");
-    return nullptr;
-  }
-
-  // Ensure the picture size specified in the headers can be extracted out of
-  // the frame we've been supplied without indexing out of bounds.
-  CheckedUint32 xLimit = aPicture.x + CheckedUint32(aPicture.width);
-  CheckedUint32 yLimit = aPicture.y + CheckedUint32(aPicture.height);
-  if (!xLimit.isValid() || !yLimit.isValid())
-  {
-    // The specified picture dimensions can't be contained inside the video
-    // frame, we'll stomp memory if we try to copy it. Fail.
-    NS_WARNING("Overflowing picture rect");
-    return nullptr;
-  }
-
-  RefPtr<VideoData> v(new VideoData(aOffset,
-                                      aTime,
-                                      aDuration,
-                                      aKeyframe,
-                                      aTimecode,
-                                      aInfo.mDisplay,
-                                      0));
-
-  RefPtr<layers::GrallocImage> image = new layers::GrallocImage();
-  image->AdoptData(aBuffer, aPicture.Size());
-  v->mImage = image;
-
-  return v.forget();
-}
-#endif  // MOZ_OMX_DECODER
 
 MediaRawData::MediaRawData()
   : MediaData(RAW_DATA, 0)
@@ -497,6 +380,15 @@ MediaRawData::MediaRawData(const uint8_t* aData, size_t aSize)
   : MediaData(RAW_DATA, 0)
   , mCrypto(mCryptoInternal)
   , mBuffer(aData, aSize)
+{
+}
+
+MediaRawData::MediaRawData(const uint8_t* aData, size_t aSize,
+                           const uint8_t* aAlphaData, size_t aAlphaSize)
+  : MediaData(RAW_DATA, 0)
+  , mCrypto(mCryptoInternal)
+  , mBuffer(aData, aSize)
+  , mAlphaBuffer(aAlphaData, aAlphaSize)
 {
 }
 
@@ -512,7 +404,11 @@ MediaRawData::Clone() const
   s->mExtraData = mExtraData;
   s->mCryptoInternal = mCryptoInternal;
   s->mTrackInfo = mTrackInfo;
+  s->mEOS = mEOS;
   if (!s->mBuffer.Append(mBuffer.Data(), mBuffer.Length())) {
+    return nullptr;
+  }
+  if (!s->mAlphaBuffer.Append(mAlphaBuffer.Data(), mAlphaBuffer.Length())) {
     return nullptr;
   }
   return s.forget();

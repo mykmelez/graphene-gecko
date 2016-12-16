@@ -44,33 +44,10 @@
 # define getpid() GetCurrentProcessId()
 #elif defined(XP_UNIX)
 # include <unistd.h>
+# include <sys/wait.h>
 #endif
 
 using namespace mozilla;
-
-//
-// We use execv to spawn the updater process on all UNIX systems except Mac OSX
-// since it is known to cause problems on the Mac.  Windows has execv, but it
-// is a faked implementation that doesn't really replace the current process.
-// Instead it spawns a new process, so we gain nothing from using execv on
-// Windows.
-//
-// On platforms where we are not calling execv, we may need to make the
-// updater executable wait for the calling process to exit.  Otherwise, the
-// updater may have trouble modifying our executable image (because it might
-// still be in use).  This is accomplished by passing our PID to the updater so
-// that it can wait for us to exit.  This is not perfect as there is a race
-// condition that could bite us.  It's possible that the calling process could
-// exit before the updater waits on the specified PID, and in the meantime a
-// new process with the same PID could be created.  This situation is unlikely,
-// however, given the way most operating systems recycle PIDs.  We'll take our
-// chances ;-)
-//
-// A similar #define lives in updater.cpp and should be kept in sync with this.
-//
-#if defined(XP_UNIX) && !defined(XP_MACOSX)
-#define USE_EXECV
-#endif
 
 static PRLogModuleInfo *
 GetUpdateLog()
@@ -204,7 +181,7 @@ static bool
 GetFile(nsIFile *dir, const nsCSubstring &name, nsCOMPtr<nsIFile> &result)
 {
   nsresult rv;
-  
+
   nsCOMPtr<nsIFile> file;
   rv = dir->Clone(getter_AddRefs(file));
   if (NS_FAILED(rv))
@@ -236,8 +213,7 @@ template <size_t Size>
 static bool
 GetStatusFileContents(nsIFile *statusFile, char (&buf)[Size])
 {
-  // The buffer needs to be large enough to hold the known status codes
-  PR_STATIC_ASSERT(Size > 16);
+  static_assert(Size > 16, "Buffer needs to be large enough to hold the known status codes");
 
   PRFileDesc *fd = nullptr;
   nsresult rv = statusFile->OpenNSPRFileDesc(PR_RDONLY, 0660, &fd);
@@ -401,7 +377,7 @@ CopyUpdaterIntoUpdateDir(nsIFile *greDir, nsIFile *appDir, nsIFile *updateDir,
     return false;
 #endif
   rv = updater->AppendNative(NS_LITERAL_CSTRING(UPDATER_BIN));
-  return NS_SUCCEEDED(rv); 
+  return NS_SUCCEEDED(rv);
 }
 
 /**
@@ -471,7 +447,11 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
   // in MozUpdater in case a previous attempt locked the directory or files.
   mozUpdaterDir->Append(NS_LITERAL_STRING("MozUpdater"));
   mozUpdaterDir->Append(NS_LITERAL_STRING("bgupdate"));
-  mozUpdaterDir->CreateUnique(nsIFile::DIRECTORY_TYPE, 0755);
+  rv = mozUpdaterDir->CreateUnique(nsIFile::DIRECTORY_TYPE, 0755);
+  if (NS_FAILED(rv)) {
+    LOG(("failed creating unique dir\n"));
+    return;
+  }
 
   nsCOMPtr<nsIFile> updater;
   if (!CopyUpdaterIntoUpdateDir(greDir, appDir, mozUpdaterDir, updater)) {
@@ -593,9 +573,10 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
   if (NS_FAILED(rv))
     return;
 
-  // Construct the PID argument for this process.  If we are using execv, then
-  // we pass "0" which is then ignored by the updater.
-#if defined(USE_EXECV)
+  // Construct the PID argument for this process. We start the updater using
+  // execv on all Unix platforms except Mac, so on those platforms we pass 0
+  // instead of a good PID to signal the updater not to try and wait for us.
+#if defined(XP_UNIX) & !defined(XP_MACOSX)
   nsAutoCString pid("0");
 #else
   nsAutoCString pid;
@@ -642,14 +623,14 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
 
   LOG(("spawning updater process for replacing [%s]\n", updaterPath.get()));
 
-#if defined(USE_EXECV)
+#if defined(XP_UNIX) & !defined(XP_MACOSX)
 # if defined(MOZ_WIDGET_GONK)
   // In Gonk, we preload libmozglue, which the updater process doesn't need.
   // Since the updater will move and delete libmozglue.so, this can actually
   // stop the /system mount from correctly being remounted as read-only.
   unsetenv("LD_PRELOAD");
 # endif
-  execv(updaterPath.get(), argv);
+  exit(execv(updaterPath.get(), argv));
 #elif defined(XP_WIN)
   // Switch the application using updater.exe
   if (!WinLaunchChild(updaterPathW.get(), argc, argv)) {
@@ -658,9 +639,6 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
   _exit(0);
 #elif defined(XP_MACOSX)
   CommandLineServiceMac::SetupMacCommandLine(argc, argv, true);
-  // LaunchChildMac uses posix_spawnp and prefers the current
-  // architecture when launching. It doesn't require a
-  // null-terminated string but it doesn't matter if we pass one.
   LaunchChildMac(argc, argv);
   exit(0);
 #else
@@ -789,7 +767,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
   rv = appFile->GetNativePath(appFilePath);
   if (NS_FAILED(rv))
     return;
-  
+
   nsAutoCString updaterPath;
   rv = updater->GetNativePath(updaterPath);
   if (NS_FAILED(rv))
@@ -868,6 +846,16 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
   // in the Windows case.  This change was made for all platforms so
   // that it stays consistent across all OS.
 
+  // On platforms where we are not calling execv, we may need to make the
+  // updater executable wait for the calling process to exit.  Otherwise, the
+  // updater may have trouble modifying our executable image (because it might
+  // still be in use).  This is accomplished by passing our PID to the updater so
+  // that it can wait for us to exit.  This is not perfect as there is a race
+  // condition that could bite us.  It's possible that the calling process could
+  // exit before the updater waits on the specified PID, and in the meantime a
+  // new process with the same PID could be created.  This situation is unlikely,
+  // however, given the way most operating systems recycle PIDs.  We'll take our
+  // chances ;-)
   // Construct the PID argument for this process.  If we are using execv, then
   // we pass "0" which is then ignored by the updater.
   nsAutoCString pid;
@@ -875,7 +863,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
     // Signal the updater application that it should stage the update.
     pid.AssignASCII("-1");
   } else {
-#if defined(USE_EXECV)
+#if defined(XP_UNIX) & !defined(XP_MACOSX)
     pid.AssignASCII("0");
 #else
     pid.AppendInt((int32_t) getpid());
@@ -942,12 +930,20 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
 
   LOG(("spawning updater process [%s]\n", updaterPath.get()));
 
-#if defined(USE_EXECV)
-  // Don't use execv when staging updates.
+#if defined(XP_UNIX) && !defined(XP_MACOSX)
+  // We use execv to spawn the updater process on all UNIX systems except Mac OSX
+  // since it is known to cause problems on the Mac.  Windows has execv, but it
+  // is a faked implementation that doesn't really replace the current process.
+  // Instead it spawns a new process, so we gain nothing from using execv on
+  // Windows.
   if (restart) {
-    execv(updaterPath.get(), argv);
-  } else {
-    *outpid = PR_CreateProcess(updaterPath.get(), argv, nullptr, nullptr);
+    exit(execv(updaterPath.get(), argv));
+  }
+  *outpid = fork();
+  if (*outpid == -1) {
+    return;
+  } else if (*outpid == 0) {
+    exit(execv(updaterPath.get(), argv));
   }
 #elif defined(XP_WIN)
   // Launch the update using updater.exe
@@ -965,16 +961,17 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
   // occur when an admin user installs the application, but another admin
   // user attempts to update (see bug 394984).
   if (restart && !IsRecursivelyWritable(installDirPath.get())) {
-    if (!LaunchElevatedUpdate(argc, argv, 0, outpid)) {
+    if (!LaunchElevatedUpdate(argc, argv, outpid)) {
       LOG(("Failed to launch elevated update!"));
       exit(1);
     }
     exit(0);
   } else {
-    LaunchChildMac(argc, argv, 0, outpid);
     if (restart) {
+      LaunchChildMac(argc, argv);
       exit(0);
     }
+    LaunchChildMac(argc, argv, outpid);
   }
 #else
   *outpid = PR_CreateProcess(updaterPath.get(), argv, nullptr, nullptr);
@@ -985,22 +982,48 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
 }
 
 /**
- * Wait for a process until it terminates.  This call is blocking.
+ * Wait briefly to see if a process terminates, then return true if it has.
  */
-static void
-WaitForProcess(ProcessType pt)
+static bool
+ProcessHasTerminated(ProcessType pt)
 {
 #if defined(XP_WIN)
-  WaitForSingleObject(pt, INFINITE);
+  if (WaitForSingleObject(pt, 1000)) {
+    return false;
+  }
   CloseHandle(pt);
+  return true;
 #elif defined(XP_MACOSX)
-  waitpid(pt, 0, 0);
+  // We're waiting for the process to terminate in LaunchChildMac.
+  return true;
+#elif defined(XP_UNIX)
+  int exitStatus;
+  pid_t exited = waitpid(pt, &exitStatus, WNOHANG);
+  if (exited == 0) {
+    // Process is still running.
+    sleep(1);
+    return false;
+  }
+  if (exited == -1) {
+    LOG(("Error while checking if the updater process is finished"));
+    // This shouldn't happen, but if it does, the updater process is lost to us,
+    // so the best we can do is pretend that it's exited.
+    return true;
+  }
+  // If we get here, the process has exited; make sure it exited normally.
+  if (WIFEXITED(exitStatus) && (WEXITSTATUS(exitStatus) != 0)) {
+    LOG(("Error while running the updater process, check update.log"));
+  }
+  return true;
 #else
+  // No way to have a non-blocking implementation on these platforms,
+  // because we're using NSPR and it only provides a blocking wait.
   int32_t exitCode;
   PR_WaitProcess(pt, &exitCode);
   if (exitCode != 0) {
     LOG(("Error while running the updater process, check update.log"));
   }
+  return true;
 #endif
 }
 
@@ -1024,7 +1047,7 @@ ProcessUpdates(nsIFile *greDir, nsIFile *appDir, nsIFile *updRootDir,
   rv = updatesDir->AppendNative(NS_LITERAL_CSTRING("0"));
   if (NS_FAILED(rv))
     return rv;
- 
+
   nsCOMPtr<nsIFile> statusFile;
   UpdateStatus status = GetUpdateStatus(updatesDir, statusFile);
   switch (status) {
@@ -1270,8 +1293,11 @@ void
 nsUpdateProcessor::WaitForProcess()
 {
   MOZ_ASSERT(!NS_IsMainThread(), "main thread");
-  ::WaitForProcess(mUpdaterPID);
-  NS_DispatchToMainThread(NewRunnableMethod(this, &nsUpdateProcessor::UpdateDone));
+  if (ProcessHasTerminated(mUpdaterPID)) {
+    NS_DispatchToMainThread(NewRunnableMethod(this, &nsUpdateProcessor::UpdateDone));
+  } else {
+    NS_DispatchToCurrentThread(NewRunnableMethod(this, &nsUpdateProcessor::WaitForProcess));
+  }
 }
 
 void
@@ -1287,4 +1313,3 @@ nsUpdateProcessor::UpdateDone()
 
   ShutdownWatcherThread();
 }
-

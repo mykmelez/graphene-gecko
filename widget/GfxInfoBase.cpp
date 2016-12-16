@@ -30,6 +30,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/Logging.h"
 #include "MediaPrefs.h"
 #include "gfxPrefs.h"
@@ -47,6 +48,7 @@ using mozilla::MutexAutoLock;
 
 nsTArray<GfxDriverInfo>* GfxInfoBase::mDriverInfo;
 bool GfxInfoBase::mDriverInfoObserverInitialized;
+bool GfxInfoBase::mShutdownOccurred;
 
 // Observes for shutdown so that the child GfxDriverInfo list is freed.
 class ShutdownObserver : public nsIObserver
@@ -71,6 +73,8 @@ public:
 
     for (uint32_t i = 0; i < DeviceVendorMax; i++)
       delete GfxDriverInfo::mDeviceVendors[i];
+
+    GfxInfoBase::mShutdownOccurred = true;
 
     return NS_OK;
   }
@@ -160,7 +164,9 @@ GetPrefNameForFeature(int32_t aFeature)
       break;
     case nsIGfxInfo::FEATURE_VP8_HW_DECODE:
     case nsIGfxInfo::FEATURE_VP9_HW_DECODE:
-      // We don't provide prefs for this features.
+    case nsIGfxInfo::FEATURE_DX_INTEROP2:
+    case nsIGfxInfo::FEATURE_GPU_PROCESS:
+      // We don't provide prefs for these features.
       break;
     default:
       MOZ_ASSERT_UNREACHABLE("Unexpected nsIGfxInfo feature?!");
@@ -374,8 +380,12 @@ BlacklistComparatorToComparisonOp(const nsAString& op)
 {
   if (op.EqualsLiteral("LESS_THAN"))
     return DRIVER_LESS_THAN;
+  else if (op.EqualsLiteral("BUILD_ID_LESS_THAN"))
+    return DRIVER_BUILD_ID_LESS_THAN;
   else if (op.EqualsLiteral("LESS_THAN_OR_EQUAL"))
     return DRIVER_LESS_THAN_OR_EQUAL;
+  else if (op.EqualsLiteral("BUILD_ID_LESS_THAN_OR_EQUAL"))
+    return DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL;
   else if (op.EqualsLiteral("GREATER_THAN"))
     return DRIVER_GREATER_THAN;
   else if (op.EqualsLiteral("GREATER_THAN_OR_EQUAL"))
@@ -733,8 +743,14 @@ GfxInfoBase::FindBlocklistedDeviceInList(const nsTArray<GfxDriverInfo>& info,
     case DRIVER_LESS_THAN:
       match = driverVersion < info[i].mDriverVersion;
       break;
+    case DRIVER_BUILD_ID_LESS_THAN:
+      match = (driverVersion & 0xFFFF) < info[i].mDriverVersion;
+      break;
     case DRIVER_LESS_THAN_OR_EQUAL:
       match = driverVersion <= info[i].mDriverVersion;
+      break;
+    case DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL:
+      match = (driverVersion & 0xFFFF) <= info[i].mDriverVersion;
       break;
     case DRIVER_GREATER_THAN:
       match = driverVersion > info[i].mDriverVersion;
@@ -845,6 +861,13 @@ GfxInfoBase::GetFeatureStatusImpl(int32_t aFeature,
   if (*aStatus != nsIGfxInfo::FEATURE_STATUS_UNKNOWN) {
     // Terminate now with the status determined by the derived type (OS-specific
     // code).
+    return NS_OK;
+  }
+
+  if (mShutdownOccurred) {
+    // This is futile; we've already commenced shutdown and our blocklists have
+    // been deleted. We may want to look into resurrecting the blocklist instead
+    // but for now, just don't even go there.
     return NS_OK;
   }
 
@@ -1320,6 +1343,9 @@ GfxInfoBase::BuildFeatureStateLog(JSContext* aCx, const FeatureState& aFeature,
 void
 GfxInfoBase::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj)
 {
+  JS::Rooted<JSObject*> obj(aCx);
+  gfx::FeatureStatus gpuProcess = gfxConfig::GetValue(Feature::GPU_PROCESS);
+  InitFeatureObject(aCx, aObj, "gpuProcess", FEATURE_GPU_PROCESS, Some(gpuProcess), &obj);
 }
 
 bool
@@ -1386,6 +1412,46 @@ GfxInfoBase::GetActiveCrashGuards(JSContext* aCx, JS::MutableHandle<JS::Value> a
     }
   });
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetContentBackend(nsAString & aContentBackend)
+{
+  BackendType backend = gfxPlatform::GetPlatform()->GetDefaultContentBackend();
+  nsString outStr;
+
+  switch (backend) {
+  case BackendType::DIRECT2D1_1: {
+    outStr.AppendPrintf("Direct2D 1.1");
+    break;
+  }
+  case BackendType::SKIA: {
+    outStr.AppendPrintf("Skia");
+    break;
+  }
+  case BackendType::CAIRO: {
+    outStr.AppendPrintf("Cairo");
+    break;
+  }
+  default:
+    return NS_ERROR_FAILURE;
+  }
+
+  aContentBackend.Assign(outStr);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetUsingGPUProcess(bool *aOutValue)
+{
+  GPUProcessManager* gpu = GPUProcessManager::Get();
+  if (!gpu) {
+    // Not supported in content processes.
+    return NS_ERROR_FAILURE;
+  }
+
+  *aOutValue = !!gpu->GetGPUChild();
   return NS_OK;
 }
 

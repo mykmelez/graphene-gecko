@@ -6,11 +6,7 @@
 
 package org.mozilla.gecko;
 
-import android.content.Context;
 import android.os.Build;
-//#ifdef MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE
-import android.support.multidex.MultiDex;
-//#endif
 
 /**
  * A collection of constants that pertain to the build and runtime state of the
@@ -51,11 +47,6 @@ public class AppConstants {
          * If MIN_SDK_VERSION is greater than or equal to the number, there
          * is no need to do the runtime check.
          */
-        public static final boolean feature10Plus = MIN_SDK_VERSION >= 10 || (MAX_SDK_VERSION >= 10 && Build.VERSION.SDK_INT >= 10);
-        public static final boolean feature11Plus = MIN_SDK_VERSION >= 11 || (MAX_SDK_VERSION >= 11 && Build.VERSION.SDK_INT >= 11);
-        public static final boolean feature12Plus = MIN_SDK_VERSION >= 12 || (MAX_SDK_VERSION >= 12 && Build.VERSION.SDK_INT >= 12);
-        public static final boolean feature14Plus = MIN_SDK_VERSION >= 14 || (MAX_SDK_VERSION >= 14 && Build.VERSION.SDK_INT >= 14);
-        public static final boolean feature15Plus = MIN_SDK_VERSION >= 15 || (MAX_SDK_VERSION >= 15 && Build.VERSION.SDK_INT >= 15);
         public static final boolean feature16Plus = MIN_SDK_VERSION >= 16 || (MAX_SDK_VERSION >= 16 && Build.VERSION.SDK_INT >= 16);
         public static final boolean feature17Plus = MIN_SDK_VERSION >= 17 || (MAX_SDK_VERSION >= 17 && Build.VERSION.SDK_INT >= 17);
         public static final boolean feature19Plus = MIN_SDK_VERSION >= 19 || (MAX_SDK_VERSION >= 19 && Build.VERSION.SDK_INT >= 19);
@@ -72,6 +63,7 @@ public class AppConstants {
         public static final boolean preJBMR2 = MAX_SDK_VERSION < 18 || (MIN_SDK_VERSION < 18 && Build.VERSION.SDK_INT < 18);
         public static final boolean preJBMR1 = MAX_SDK_VERSION < 17 || (MIN_SDK_VERSION < 17 && Build.VERSION.SDK_INT < 17);
         public static final boolean preJB = MAX_SDK_VERSION < 16 || (MIN_SDK_VERSION < 16 && Build.VERSION.SDK_INT < 16);
+        public static final boolean preN = MAX_SDK_VERSION < 24 || (MIN_SDK_VERSION < 24 && Build.VERSION.SDK_INT < 24);
     }
 
     /**
@@ -226,24 +218,10 @@ public class AppConstants {
     false;
 //#endif
 
-    public static final boolean MOZ_WEBSMS_BACKEND =
-//#ifdef MOZ_WEBSMS_BACKEND
-    true;
-//#else
-    false;
-//#endif
-
     // Android Beam is only supported on API14+, so we don't even bother building
     // it if this APK doesn't include API14 support.
     public static final boolean MOZ_ANDROID_BEAM =
 //#ifdef MOZ_ANDROID_BEAM
-    Versions.feature14Plus;
-//#else
-    false;
-//#endif
-
-    public static final boolean MOZ_ANDROID_APZ =
-//#ifdef MOZ_ANDROID_APZ
     true;
 //#else
     false;
@@ -251,8 +229,8 @@ public class AppConstants {
 
     // See this wiki page for more details about channel specific build defines:
     // https://wiki.mozilla.org/Platform/Channel-specific_build_defines
-    public static final boolean RELEASE_BUILD =
-//#ifdef RELEASE_BUILD
+    public static final boolean RELEASE_OR_BETA =
+//#ifdef RELEASE_OR_BETA
     true;
 //#else
     false;
@@ -291,13 +269,6 @@ public class AppConstants {
 
     public static final boolean ANDROID_DOWNLOADS_INTEGRATION =
 //#ifdef MOZ_ANDROID_DOWNLOADS_INTEGRATION
-    AppConstants.Versions.feature12Plus;
-//#else
-    false;
-//#endif
-
-    public static final boolean MOZ_LINKER_EXTRACT =
-//#ifdef MOZ_LINKER_EXTRACT
     true;
 //#else
     false;
@@ -347,23 +318,6 @@ public class AppConstants {
 
     // (bug 1266820) Temporarily disabled since no one is working on it.
     public static final boolean SCREENSHOTS_IN_BOOKMARKS_ENABLED = false;
-
-    /**
-     * Enables multidex depending on build flags. For more information,
-     * see `multiDexEnabled true` in mobile/android/app/build.gradle.
-     *
-     * As a method, this shouldn't be in AppConstants, but it's
-     * the only semi-relevant Java file that we pre-process.
-     */
-    public static void maybeInstallMultiDex(final Context context) {
-//#ifdef MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE
-        if (BuildConfig.FLAVOR.equals("automation")) {
-            MultiDex.install(context);
-        }
-//#else
-        // Do nothing.
-//#endif
-    }
 
     public static final boolean MOZ_ANDROID_ACTIVITY_STREAM =
 //#ifdef MOZ_ANDROID_ACTIVITY_STREAM

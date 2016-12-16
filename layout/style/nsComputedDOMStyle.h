@@ -11,6 +11,7 @@
 #include "mozilla/ArenaRefPtr.h"
 #include "mozilla/ArenaRefPtrInlines.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/StyleComplexColor.h"
 #include "nsCOMPtr.h"
 #include "nscore.h"
 #include "nsCSSProps.h"
@@ -22,6 +23,7 @@
 #include "nsColor.h"
 #include "nsIContent.h"
 #include "nsStyleStruct.h"
+#include "mozilla/WritingModes.h"
 
 namespace mozilla {
 namespace dom {
@@ -104,8 +106,8 @@ public:
   // nsDOMCSSDeclaration abstract methods which should never be called
   // on a nsComputedDOMStyle object, but must be defined to avoid
   // compile errors.
-  virtual mozilla::css::Declaration* GetCSSDeclaration(Operation) override;
-  virtual nsresult SetCSSDeclaration(mozilla::css::Declaration*) override;
+  virtual mozilla::DeclarationBlock* GetCSSDeclaration(Operation) override;
+  virtual nsresult SetCSSDeclaration(mozilla::DeclarationBlock*) override;
   virtual nsIDocument* DocToUpdate() override;
   virtual void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) override;
 
@@ -149,30 +151,29 @@ private:
 #undef STYLE_STRUCT
 
   already_AddRefed<CSSValue> GetEllipseRadii(const nsStyleCorners& aRadius,
-                                             uint8_t aFullCorner,
-                                             bool aIsBorder); // else outline
+                                             uint8_t aFullCorner);
 
-  already_AddRefed<CSSValue> GetOffsetWidthFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetOffsetWidthFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetAbsoluteOffset(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetAbsoluteOffset(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetRelativeOffset(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetRelativeOffset(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetStickyOffset(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetStickyOffset(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetStaticOffset(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetStaticOffset(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetPaddingWidthFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetPaddingWidthFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetBorderColorsFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetBorderColorsFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetBorderStyleFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetBorderStyleFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetBorderWidthFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetBorderWidthFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetBorderColorFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetBorderColorFor(mozilla::Side aSide);
 
-  already_AddRefed<CSSValue> GetMarginWidthFor(mozilla::css::Side aSide);
+  already_AddRefed<CSSValue> GetMarginWidthFor(mozilla::Side aSide);
 
   already_AddRefed<CSSValue> GetSVGPaintFor(bool aFill);
 
@@ -216,6 +217,8 @@ private:
   void AppendTimingFunction(nsDOMCSSValueList *aValueList,
                             const nsTimingFunction& aTimingFunction);
 
+  bool ShouldHonorMinSizeAutoInAxis(mozilla::PhysicalAxis aAxis);
+
   /* Properties queryable as CSSValues.
    * To avoid a name conflict with nsIDOM*CSS2Properties, these are all
    * DoGetXXX instead of GetXXX.
@@ -253,6 +256,7 @@ private:
   already_AddRefed<CSSValue> DoGetColor();
   already_AddRefed<CSSValue> DoGetFontFamily();
   already_AddRefed<CSSValue> DoGetFontFeatureSettings();
+  already_AddRefed<CSSValue> DoGetFontVariationSettings();
   already_AddRefed<CSSValue> DoGetFontKerning();
   already_AddRefed<CSSValue> DoGetFontLanguageOverride();
   already_AddRefed<CSSValue> DoGetFontSize();
@@ -389,7 +393,6 @@ private:
   already_AddRefed<CSSValue> DoGetContent();
   already_AddRefed<CSSValue> DoGetCounterIncrement();
   already_AddRefed<CSSValue> DoGetCounterReset();
-  already_AddRefed<CSSValue> DoGetMarkerOffset();
 
   /* Quotes Properties */
   already_AddRefed<CSSValue> DoGetQuotes();
@@ -404,6 +407,7 @@ private:
   already_AddRefed<CSSValue> DoGetImageRegion();
 
   /* Text Properties */
+  already_AddRefed<CSSValue> DoGetInitialLetter();
   already_AddRefed<CSSValue> DoGetLineHeight();
   already_AddRefed<CSSValue> DoGetRubyAlign();
   already_AddRefed<CSSValue> DoGetRubyPosition();
@@ -480,6 +484,7 @@ private:
   already_AddRefed<CSSValue> DoGetScrollSnapPointsY();
   already_AddRefed<CSSValue> DoGetScrollSnapDestination();
   already_AddRefed<CSSValue> DoGetScrollSnapCoordinate();
+  already_AddRefed<CSSValue> DoGetShapeOutside();
 
   /* User interface properties */
   already_AddRefed<CSSValue> DoGetCursor();
@@ -581,13 +586,16 @@ private:
 
   /* Helper functions */
   void SetToRGBAColor(nsROCSSPrimitiveValue* aValue, nscolor aColor);
+  void SetValueFromComplexColor(nsROCSSPrimitiveValue* aValue,
+                                const mozilla::StyleComplexColor& aColor);
   void SetValueToStyleImage(const nsStyleImage& aStyleImage,
                             nsROCSSPrimitiveValue* aValue);
-  void SetValueToPositionCoord(
-    const nsStyleImageLayers::Position::PositionCoord& aCoord,
-    nsROCSSPrimitiveValue* aValue);
-  void SetValueToPosition(const nsStyleImageLayers::Position& aPosition,
+  void SetValueToPositionCoord(const mozilla::Position::Coord& aCoord,
+                               nsROCSSPrimitiveValue* aValue);
+  void SetValueToPosition(const mozilla::Position& aPosition,
                           nsDOMCSSValueList* aValueList);
+  void SetValueToURLValue(const mozilla::css::URLValueData* aURL,
+                          nsROCSSPrimitiveValue* aValue);
 
   /**
    * A method to get a percentage base for a percentage value.  Returns true
@@ -642,13 +650,21 @@ private:
   already_AddRefed<CSSValue> CreatePrimitiveValueForStyleFilter(
     const nsStyleFilter& aStyleFilter);
 
-  already_AddRefed<CSSValue> CreatePrimitiveValueForClipPath(
-    const nsStyleBasicShape* aStyleBasicShape,
-    mozilla::StyleClipShapeSizing aSizingBox);
+  template<typename ReferenceBox>
+  already_AddRefed<CSSValue>
+  GetShapeSource(const mozilla::StyleShapeSource<ReferenceBox>& aShapeSource,
+                 const KTableEntry aBoxKeywordTable[]);
+
+  template<typename ReferenceBox>
+  already_AddRefed<CSSValue>
+  CreatePrimitiveValueForShapeSource(
+    const mozilla::StyleBasicShape* aStyleBasicShape,
+    ReferenceBox aReferenceBox,
+    const KTableEntry aBoxKeywordTable[]);
 
   // Helper function for computing basic shape styles.
   already_AddRefed<CSSValue> CreatePrimitiveValueForBasicShape(
-    const nsStyleBasicShape* aStyleBasicShape);
+    const mozilla::StyleBasicShape* aStyleBasicShape);
   void BoxValuesToString(nsAString& aString,
                          const nsTArray<nsStyleCoord>& aBoxValues);
   void BasicShapeRadiiToString(nsAString& aCssText,

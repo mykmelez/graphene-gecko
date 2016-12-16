@@ -8,12 +8,16 @@ this.EXPORTED_SYMBOLS = [
   "SelectParentHelper"
 ];
 
+const {utils: Cu} = Components;
+const {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
+
 // Maximum number of rows to display in the select dropdown.
 const MAX_ROWS = 20;
 
 var currentBrowser = null;
 var currentMenulist = null;
 var currentZoom = 1;
+var closedWithEnter = false;
 
 this.SelectParentHelper = {
   populate: function(menulist, items, selectedIndex, zoom) {
@@ -24,31 +28,39 @@ this.SelectParentHelper = {
     populateChildren(menulist, items, selectedIndex, zoom);
   },
 
-  open: function(browser, menulist, rect) {
+  open: function(browser, menulist, rect, isOpenedViaTouch) {
     menulist.hidden = false;
     currentBrowser = browser;
+    closedWithEnter = false;
     this._registerListeners(browser, menulist.menupopup);
 
     let win = browser.ownerDocument.defaultView;
 
     // Set the maximum height to show exactly MAX_ROWS items.
-    let firstItem = menulist.getItemAtIndex(0);
+    let menupopup = menulist.menupopup;
+    let firstItem = menupopup.firstChild;
+    while (firstItem && firstItem.hidden) {
+      firstItem = firstItem.nextSibling;
+    }
+
     if (firstItem) {
       let itemHeight = firstItem.getBoundingClientRect().height;
 
       // Include the padding and border on the popup.
-      let cs = win.getComputedStyle(menulist.menupopup);
+      let cs = win.getComputedStyle(menupopup);
       let bpHeight = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth) +
                      parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-      menulist.menupopup.style.maxHeight = (itemHeight * MAX_ROWS + bpHeight) + "px";
+      menupopup.style.maxHeight = (itemHeight * MAX_ROWS + bpHeight) + "px";
     }
+
+    menupopup.classList.toggle("isOpenedViaTouch", isOpenedViaTouch);
 
     let constraintRect = browser.getBoundingClientRect();
     constraintRect = new win.DOMRect(constraintRect.left + win.mozInnerScreenX,
                                      constraintRect.top + win.mozInnerScreenY,
                                      constraintRect.width, constraintRect.height);
-    menulist.menupopup.setConstraintRect(constraintRect);
-    menulist.menupopup.openPopupAtScreenRect("after_start", rect.left, rect.top, rect.width, rect.height, false, false);
+    menupopup.setConstraintRect(constraintRect);
+    menupopup.openPopupAtScreenRect(AppConstants.platform == "macosx" ? "selection" : "after_start", rect.left, rect.top, rect.width, rect.height, false, false);
   },
 
   hide: function(menulist, browser) {
@@ -59,6 +71,10 @@ this.SelectParentHelper = {
 
   handleEvent: function(event) {
     switch (event.type) {
+      case "mouseup":
+        currentBrowser.messageManager.sendAsyncMessage("Forms:MouseUp", {});
+        break;
+
       case "mouseover":
         currentBrowser.messageManager.sendAsyncMessage("Forms:MouseOver", {});
         break;
@@ -67,11 +83,24 @@ this.SelectParentHelper = {
         currentBrowser.messageManager.sendAsyncMessage("Forms:MouseOut", {});
         break;
 
+      case "keydown":
+        if (event.keyCode == event.DOM_VK_RETURN) {
+          closedWithEnter = true;
+        }
+        break;
+
       case "command":
         if (event.target.hasAttribute("value")) {
           currentBrowser.messageManager.sendAsyncMessage("Forms:SelectDropDownItem", {
-            value: event.target.value
+            value: event.target.value,
+            closedWithEnter: closedWithEnter
           });
+        }
+        break;
+
+      case "fullscreen":
+        if (currentMenulist) {
+          currentMenulist.menupopup.hidePopup();
         }
         break;
 
@@ -106,6 +135,9 @@ this.SelectParentHelper = {
     popup.addEventListener("popuphidden", this);
     popup.addEventListener("mouseover", this);
     popup.addEventListener("mouseout", this);
+    browser.ownerDocument.defaultView.addEventListener("mouseup", this, true);
+    browser.ownerDocument.defaultView.addEventListener("keydown", this, true);
+    browser.ownerDocument.defaultView.addEventListener("fullscreen", this, true);
     browser.messageManager.addMessageListener("Forms:UpdateDropDown", this);
   },
 
@@ -114,13 +146,16 @@ this.SelectParentHelper = {
     popup.removeEventListener("popuphidden", this);
     popup.removeEventListener("mouseover", this);
     popup.removeEventListener("mouseout", this);
+    browser.ownerDocument.defaultView.removeEventListener("mouseup", this, true);
+    browser.ownerDocument.defaultView.removeEventListener("keydown", this, true);
+    browser.ownerDocument.defaultView.removeEventListener("fullscreen", this, true);
     browser.messageManager.removeMessageListener("Forms:UpdateDropDown", this);
   },
 
 };
 
 function populateChildren(menulist, options, selectedIndex, zoom,
-                          isInGroup = false, isGroupDisabled = false, adjustedTextSize = -1) {
+                          parentElement = null, isGroupDisabled = false, adjustedTextSize = -1) {
   let element = menulist.menupopup;
 
   // -1 just means we haven't calculated it yet. When we recurse through this function
@@ -142,7 +177,7 @@ function populateChildren(menulist, options, selectedIndex, zoom,
     item.setAttribute("label", option.textContent);
     item.style.direction = option.textDirection;
     item.style.fontSize = adjustedTextSize;
-    item.style.display = option.display;
+    item.hidden = option.display == "none" || (parentElement && parentElement.hidden);
     item.setAttribute("tooltiptext", option.tooltip);
 
     element.appendChild(item);
@@ -155,7 +190,7 @@ function populateChildren(menulist, options, selectedIndex, zoom,
 
     if (isOptGroup) {
       populateChildren(menulist, option.children, selectedIndex, zoom,
-                       true, isDisabled, adjustedTextSize);
+                       item, isDisabled, adjustedTextSize);
     } else {
       if (option.index == selectedIndex) {
         // We expect the parent element of the popup to be a <xul:menulist> that
@@ -175,7 +210,7 @@ function populateChildren(menulist, options, selectedIndex, zoom,
 
       item.setAttribute("value", option.index);
 
-      if (isInGroup) {
+      if (parentElement) {
         item.classList.add("contentSelectDropdown-ingroup")
       }
     }

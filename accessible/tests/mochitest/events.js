@@ -337,7 +337,7 @@ function eventQueue(aEventType)
               if (matchIdx == -1 || eventSeq.length > 0)
                 matchIdx = scnIdx;
 
-              // Report everythign is ok.
+              // Report everything is ok.
               for (var idx = 0; idx < eventSeq.length; idx++) {
                 var checker = eventSeq[idx];
 
@@ -346,15 +346,15 @@ function eventQueue(aEventType)
                   "' succeed. ";
 
                 if (checker.unexpected) {
-                  if (checker.todo) {
-                    todo(false, "Event " + typeStr + " event is still missing");
-                  }
-                  else {
-                    ok(true, msg + "There's no unexpected " + typeStr + " event.");
-                  }
+                  ok(true, msg + `There's no unexpected '${typeStr}' event.`);
                 }
                 else {
-                  ok(true, msg + "Event " + typeStr + " was handled.");
+                  if (checker.todo) {
+                    todo(false, `Todo event '${typeStr}' was caught`);
+                  }
+                  else {
+                    ok(true, `${msg} Event '${typeStr}' was handled.`);
+                  }
                 }
               }
             }
@@ -378,15 +378,13 @@ function eventQueue(aEventType)
                 ok(false, msg + "Dupe " + typeStr + " event.");
 
               if (checker.unexpected) {
-                if (checker.todo) {
-                  todo(checker.wasCaught,
-                       "Event " + typeStr + " event is still missing");
-                }
-                else if (checker.wasCaught) {
+                if (checker.wasCaught) {
                   ok(false, msg + "There's unexpected " + typeStr + " event.");
                 }
-              } else if (!checker.wasCaught) {
-                ok(false, msg + typeStr + " event was missed.");
+              }
+              else if (!checker.wasCaught) {
+                var rf = checker.todo ? todo : ok;
+                rf(false, `${msg} '${typeStr} event is missed.`);
               }
             }
           }
@@ -538,7 +536,16 @@ function eventQueue(aEventType)
       }
 
       // Check if handled event matches any expected async events.
+      var haveUnmatchedAsync = false;
       for (idx = 0; idx < eventSeq.length; idx++) {
+        if (eventSeq[idx] instanceof orderChecker && haveUnmatchedAsync) {
+            break;
+        }
+
+        if (!eventSeq[idx].wasCaught) {
+          haveUnmatchedAsync = true;
+        }
+
         if (!eventSeq[idx].unexpected && eventSeq[idx].async) {
           if (eventQueue.compareEvents(eventSeq[idx], aEvent)) {
             this.processMatchedChecker(aEvent, eventSeq[idx], scnIdx, idx);
@@ -553,6 +560,16 @@ function eventQueue(aEventType)
       var invoker = this.getInvoker();
       if ("check" in invoker)
         invoker.check(aEvent);
+    }
+
+    for (idx = 0; idx < eventSeq.length; idx++) {
+      if (!eventSeq[idx].wasCaught) {
+        if (eventSeq[idx] instanceof orderChecker) {
+          eventSeq[idx].wasCaught++;
+        } else {
+          break;
+        }
+      }
     }
 
     // If we don't have more events to wait then schedule next invoker.
@@ -596,7 +613,9 @@ function eventQueue(aEventType)
 
     while (aEventSeq.idx < aEventSeq.length &&
            (aEventSeq[aEventSeq.idx].unexpected ||
+            aEventSeq[aEventSeq.idx].todo ||
             aEventSeq[aEventSeq.idx].async ||
+            aEventSeq[aEventSeq.idx] instanceof orderChecker ||
             aEventSeq[aEventSeq.idx].wasCaught > 0)) {
       aEventSeq.idx++;
     }
@@ -612,7 +631,8 @@ function eventQueue(aEventType)
       // Check if we have unhandled async (can be anywhere in the sequance) or
       // sync expcected events yet.
       for (var idx = 0; idx < aEventSeq.length; idx++) {
-        if (!aEventSeq[idx].unexpected && !aEventSeq[idx].wasCaught)
+        if (!aEventSeq[idx].unexpected && !aEventSeq[idx].todo &&
+            !aEventSeq[idx].wasCaught && !(aEventSeq[idx] instanceof orderChecker))
           return true;
       }
 
@@ -636,7 +656,7 @@ function eventQueue(aEventType)
     for (var scnIdx = 0; scnIdx < this.mScenarios.length; scnIdx++) {
       var eventSeq = this.mScenarios[scnIdx];
       for (var idx = 0; idx < eventSeq.length; idx++) {
-        if (eventSeq[idx].unexpected)
+        if (eventSeq[idx].unexpected || eventSeq[idx].todo)
           return false;
       }
     }
@@ -648,7 +668,7 @@ function eventQueue(aEventType)
     function eventQueue_isUnexpectedEventsScenario(aScenario)
   {
     for (var idx = 0; idx < aScenario.length; idx++) {
-      if (!aScenario[idx].unexpected)
+      if (!aScenario[idx].unexpected && !aScenario[idx].todo)
         break;
     }
 
@@ -1680,14 +1700,23 @@ function invokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg, aIsAsync)
 }
 
 /**
+ * event checker that forces preceeding async events to happen before this
+ * checker.
+ */
+function orderChecker()
+{
+  // XXX it doesn't actually work to inherit from invokerChecker, but maybe we
+  // should fix that?
+  //  this.__proto__ = new invokerChecker(null, null, null, false);
+}
+
+/**
  * Generic invoker checker for todo events.
  */
 function todo_invokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg)
 {
   this.__proto__ = new invokerChecker(aEventType, aTargetOrFunc,
                                       aTargetFuncArg, true);
-
-  this.unexpected = true;
   this.todo = true;
 }
 

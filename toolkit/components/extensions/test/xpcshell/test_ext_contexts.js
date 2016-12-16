@@ -4,25 +4,27 @@ const global = this;
 
 Cu.import("resource://gre/modules/Timer.jsm");
 
+Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+
 var {
   BaseContext,
+} = ExtensionCommon;
+
+var {
   EventManager,
   SingletonEventManager,
 } = ExtensionUtils;
 
 class StubContext extends BaseContext {
   constructor() {
-    super();
+    let fakeExtension = {id: "test@web.extension"};
+    super("testEnv", fakeExtension);
     this.sandbox = Cu.Sandbox(global);
   }
 
   get cloneScope() {
-    return this. sandbox;
-  }
-
-  get extension() {
-    return {id: "test@web.extension"};
+    return this.sandbox;
   }
 }
 
@@ -130,13 +132,13 @@ add_task(function* test_post_unload_listeners() {
 
 class Context extends BaseContext {
   constructor(principal) {
-    super();
+    let fakeExtension = {id: "test@web.extension"};
+    super("testEnv", fakeExtension);
     Object.defineProperty(this, "principal", {
       value: principal,
       configurable: true,
     });
     this.sandbox = Cu.Sandbox(principal, {wantXrays: false});
-    this.extension = {id: "test@web.extension"};
   }
 
   get cloneScope() {
@@ -173,7 +175,7 @@ add_task(function* test_stringify_inaccessible() {
 
 add_task(function* test_stringify_accessible() {
   // Test that an accessible property from another global is included
-  let principal = ssm.createExpandedPrincipal([PRINCIPAL1, PRINCIPAL2]);
+  let principal = Cu.getObjectPrincipal(Cu.Sandbox([PRINCIPAL1, PRINCIPAL2]));
   let context = new Context(principal);
   let sandbox = context.sandbox;
   let sandbox2 = Cu.Sandbox(PRINCIPAL2);

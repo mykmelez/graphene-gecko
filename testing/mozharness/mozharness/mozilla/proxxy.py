@@ -30,12 +30,9 @@ class Proxxy(ScriptMixin, LogMixin):
             ('http://ftp.mozilla.org', 'ftp.mozilla.org'),
             ('https://ftp.mozilla.org', 'ftp.mozilla.org'),
             ('https://ftp-ssl.mozilla.org', 'ftp.mozilla.org'),
-            ('http://pvtbuilds.pvt.build.mozilla.org', 'pvtbuilds.mozilla.org'),
             # pypi
             ('http://pypi.pvt.build.mozilla.org', 'pypi.pvt.build.mozilla.org'),
             ('http://pypi.pub.build.mozilla.org', 'pypi.pub.build.mozilla.org'),
-            # taskcluster stuff
-            ('https://queue.taskcluster.net', 'queue.taskcluster.net'),
         ],
         "instances": [
             'proxxy1.srv.releng.use1.mozilla.com',
@@ -50,7 +47,8 @@ class Proxxy(ScriptMixin, LogMixin):
         # just the 'proxxy' element
         # if configuration has no 'proxxy' section use the default
         # configuration instead
-        self.config = config.get('proxxy', self.PROXXY_CONFIG)
+        default_config = {} if self.is_taskcluster() else self.PROXXY_CONFIG
+        self.config = config.get('proxxy', default_config)
         self.log_obj = log_obj
 
     def get_proxies_for_url(self, url):

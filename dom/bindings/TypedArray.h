@@ -105,13 +105,12 @@ public:
 
   // About shared memory:
   //
-  // Any DOM TypedArray as well as any DOM ArrayBufferView that does
-  // not represent a JS DataView can map the memory of either a JS
-  // ArrayBuffer or a JS SharedArrayBuffer.  (DataView cannot view
-  // shared memory.)  If the TypedArray maps a SharedArrayBuffer the
-  // Length() and Data() accessors on the DOM view will return zero
-  // and nullptr; to get the actual length and data, call the
-  // LengthAllowShared() and DataAllowShared() accessors instead.
+  // Any DOM TypedArray as well as any DOM ArrayBufferView can map the
+  // memory of either a JS ArrayBuffer or a JS SharedArrayBuffer.  If
+  // the TypedArray maps a SharedArrayBuffer the Length() and Data()
+  // accessors on the DOM view will return zero and nullptr; to get
+  // the actual length and data, call the LengthAllowShared() and
+  // DataAllowShared() accessors instead.
   //
   // Two methods are available for determining if a DOM view maps
   // shared memory.  The IsShared() method is cheap and can be called
@@ -369,7 +368,8 @@ template<typename ArrayType>
 class MOZ_RAII TypedArrayRooter : private JS::CustomAutoRooter
 {
 public:
-  TypedArrayRooter(JSContext* cx,
+  template <typename CX>
+  TypedArrayRooter(const CX& cx,
                    ArrayType* aArray MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
     JS::CustomAutoRooter(cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT),
     mArray(aArray)
@@ -392,7 +392,8 @@ class MOZ_RAII TypedArrayRooter<Nullable<ArrayType> > :
     private JS::CustomAutoRooter
 {
 public:
-  TypedArrayRooter(JSContext* cx,
+  template <typename CX>
+  TypedArrayRooter(const CX& cx,
                    Nullable<ArrayType>* aArray MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
     JS::CustomAutoRooter(cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT),
     mArray(aArray)
@@ -416,14 +417,16 @@ class MOZ_RAII RootedTypedArray final : public ArrayType,
                                         private TypedArrayRooter<ArrayType>
 {
 public:
-  explicit RootedTypedArray(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
+  template <typename CX>
+  explicit RootedTypedArray(const CX& cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
     ArrayType(),
     TypedArrayRooter<ArrayType>(cx, this
                                 MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT)
   {
   }
 
-  RootedTypedArray(JSContext* cx, JSObject* obj MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
+  template <typename CX>
+  RootedTypedArray(const CX& cx, JSObject* obj MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
     ArrayType(obj),
     TypedArrayRooter<ArrayType>(cx, this
                                 MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT)

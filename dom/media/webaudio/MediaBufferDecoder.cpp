@@ -7,6 +7,7 @@
 #include "MediaBufferDecoder.h"
 #include "BufferDecoder.h"
 #include "mozilla/dom/AudioContextBinding.h"
+#include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include <speex/speex_resampler.h>
 #include "nsXPCOMCIDInternal.h"
@@ -25,7 +26,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/Telemetry.h"
 #include "nsPrintfCString.h"
-#include "GMPService.h"
+#include "GMPCrashHelper.h"
 
 namespace mozilla {
 
@@ -68,7 +69,7 @@ public:
     MOZ_ASSERT(aFunction);
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -132,10 +133,10 @@ private:
 
   void Decode();
   void OnMetadataRead(MetadataHolder* aMetadata);
-  void OnMetadataNotRead(ReadMetadataFailureReason aReason);
+  void OnMetadataNotRead(const MediaResult& aError);
   void RequestSample();
   void SampleDecoded(MediaData* aData);
-  void SampleNotDecoded(MediaDecoderReader::NotDecodedReason aReason);
+  void SampleNotDecoded(const MediaResult& aError);
   void FinishDecode();
   void AllocateBuffer();
   void CallbackTheResult();
@@ -310,7 +311,7 @@ MediaDecodeTask::OnMetadataRead(MetadataHolder* aMetadata)
 }
 
 void
-MediaDecodeTask::OnMetadataNotRead(ReadMetadataFailureReason aReason)
+MediaDecodeTask::OnMetadataNotRead(const MediaResult& aReason)
 {
   mDecoderReader->Shutdown();
   ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -337,15 +338,14 @@ MediaDecodeTask::SampleDecoded(MediaData* aData)
 }
 
 void
-MediaDecodeTask::SampleNotDecoded(MediaDecoderReader::NotDecodedReason aReason)
+MediaDecodeTask::SampleNotDecoded(const MediaResult& aError)
 {
   MOZ_ASSERT(!NS_IsMainThread());
-  if (aReason == MediaDecoderReader::DECODE_ERROR) {
+  if (aError == NS_ERROR_DOM_MEDIA_END_OF_STREAM) {
+    FinishDecode();
+  } else {
     mDecoderReader->Shutdown();
     ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
-  } else {
-    MOZ_ASSERT(aReason == MediaDecoderReader::END_OF_STREAM);
-    FinishDecode();
   }
 }
 
@@ -612,7 +612,11 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
   // Ignore errors in calling the callback, since there is not much that we can
   // do about it here.
   if (mFailureCallback) {
-    mFailureCallback->Call();
+    nsAutoCString errorString(errorMessage);
+    RefPtr<DOMException> exception =
+      DOMException::Create(NS_ERROR_DOM_ENCODING_NOT_SUPPORTED_ERR,
+                           errorString);
+    mFailureCallback->Call(*exception);
   }
 
   mPromise->MaybeReject(NS_ERROR_DOM_ENCODING_NOT_SUPPORTED_ERR);

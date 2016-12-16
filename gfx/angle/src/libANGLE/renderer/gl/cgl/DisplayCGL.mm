@@ -128,7 +128,8 @@ SurfaceImpl *DisplayCGL::createPbufferSurface(const egl::SurfaceState &state,
 
 SurfaceImpl *DisplayCGL::createPbufferFromClientBuffer(const egl::SurfaceState &state,
                                                        const egl::Config *configuration,
-                                                       EGLClientBuffer shareHandle,
+                                                       EGLenum buftype,
+                                                       EGLClientBuffer clientBuffer,
                                                        const egl::AttributeMap &attribs)
 {
     UNIMPLEMENTED();
@@ -212,12 +213,6 @@ egl::ConfigSet DisplayCGL::generateConfigs()
 
     configs.add(config);
     return configs;
-}
-
-bool DisplayCGL::isDeviceLost() const
-{
-    // TODO(cwallez) investigate implementing this
-    return false;
 }
 
 bool DisplayCGL::testDeviceLost()

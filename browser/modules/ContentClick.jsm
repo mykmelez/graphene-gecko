@@ -21,7 +21,7 @@ var ContentClick = {
     mm.addMessageListener("Content:Click", this);
   },
 
-  receiveMessage: function (message) {
+  receiveMessage: function(message) {
     switch (message.name) {
       case "Content:Click":
         this.contentAreaClick(message.json, message.target)
@@ -29,7 +29,7 @@ var ContentClick = {
     }
   },
 
-  contentAreaClick: function (json, browser) {
+  contentAreaClick: function(json, browser) {
     // This is heavily based on contentAreaClick from browser.js (Bug 903016)
     // The json is set up in a way to look like an Event.
     let window = browser.ownerGlobal;
@@ -77,11 +77,15 @@ var ContentClick = {
 
     // Todo(903022): code for where == save
 
-    let params = { charset: browser.characterSet,
-                   referrerURI: browser.documentURI,
-                   referrerPolicy: json.referrerPolicy,
-                   noReferrer: json.noReferrer,
-                   allowMixedContent: json.allowMixedContent };
+    let params = {
+      charset: browser.characterSet,
+      referrerURI: browser.documentURI,
+      referrerPolicy: json.referrerPolicy,
+      noReferrer: json.noReferrer,
+      allowMixedContent: json.allowMixedContent,
+      isContentWindowPrivate: json.isContentWindowPrivate,
+      originPrincipal: json.originPrincipal,
+    };
 
     // The new tab/window must use the same userContextId.
     if (json.originAttributes.userContextId) {

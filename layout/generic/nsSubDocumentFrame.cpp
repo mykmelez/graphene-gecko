@@ -41,9 +41,12 @@
 #include "nsIPermissionManager.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIDOMMutationEvent.h"
+#include "mozilla/Preferences.h"
 
 using namespace mozilla;
 using mozilla::layout::RenderFrameParent;
+
+static bool sShowPreviousPage = true;
 
 static nsIDocument*
 GetDocumentFromView(nsView* aView)
@@ -57,6 +60,7 @@ GetDocumentFromView(nsView* aView)
 
 nsSubDocumentFrame::nsSubDocumentFrame(nsStyleContext* aContext)
   : nsAtomicContainerFrame(aContext)
+  , mInnerView(nullptr)
   , mIsInline(false)
   , mPostedReflowCallback(false)
   , mDidCreateDoc(false)
@@ -80,7 +84,7 @@ class AsyncFrameInit : public Runnable
 {
 public:
   explicit AsyncFrameInit(nsIFrame* aFrame) : mFrame(aFrame) {}
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     PROFILER_LABEL("mozilla", "AsyncFrameInit::Run", js::ProfileEntry::Category::OTHER);
     if (mFrame.IsAlive()) {
@@ -106,6 +110,12 @@ nsSubDocumentFrame::Init(nsIContent*       aContent,
   // determine if we are a <frame> or <iframe>
   nsCOMPtr<nsIDOMHTMLFrameElement> frameElem = do_QueryInterface(aContent);
   mIsInline = frameElem ? false : true;
+
+  static bool addedShowPreviousPage = false;
+  if (!addedShowPreviousPage) {
+    Preferences::AddBoolVarCache(&sShowPreviousPage, "layout.show_previous_page", true);
+    addedShowPreviousPage = true;
+  }
 
   nsAtomicContainerFrame::Init(aContent, aParent, aPrevInFlow);
 
@@ -227,7 +237,7 @@ nsSubDocumentFrame::GetSubdocumentPresShellForPainting(uint32_t aFlags)
     }
     if (frame) {
       nsIPresShell* ps = frame->PresContext()->PresShell();
-      if (!presShell || (ps && !ps->IsPaintingSuppressed())) {
+      if (!presShell || (ps && !ps->IsPaintingSuppressed() && sShowPreviousPage)) {
         subdocView = nextView;
         subdocRootFrame = frame;
         presShell = ps;
@@ -298,31 +308,6 @@ nsSubDocumentFrame::GetSubdocumentSize()
   }
 }
 
-bool
-nsSubDocumentFrame::PassPointerEventsToChildren()
-{
-  // Limit use of mozpasspointerevents to documents with embedded:apps/chrome
-  // permission, because this could be used by the parent document to discover
-  // which parts of the subdocument are transparent to events (if subdocument
-  // uses pointer-events:none on its root element, which is admittedly
-  // unlikely)
-  if (mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::mozpasspointerevents)) {
-      if (PresContext()->IsChrome()) {
-        return true;
-      }
-
-      nsCOMPtr<nsIPermissionManager> permMgr =
-        services::GetPermissionManager();
-      if (permMgr) {
-        uint32_t permission = nsIPermissionManager::DENY_ACTION;
-        permMgr->TestPermissionFromPrincipal(GetContent()->NodePrincipal(),
-                                             "embed-apps", &permission);
-        return permission == nsIPermissionManager::ALLOW_ACTION;
-      }
-  }
-  return false;
-}
-
 static void
 WrapBackgroundColorInOwnLayer(nsDisplayListBuilder* aBuilder,
                               nsIFrame* aFrame,
@@ -371,22 +356,14 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     decorations.MoveTo(aLists);
   }
 
-  // We only care about mozpasspointerevents if we're doing hit-testing
-  // related things.
-  bool passPointerEventsToChildren =
-    (aBuilder->IsForEventDelivery() || aBuilder->IsBuildingLayerEventRegions())
-    ? PassPointerEventsToChildren() : false;
-
-  // If mozpasspointerevents is set, then we should allow subdocument content
-  // to handle events even if we're pointer-events:none.
-  if (aBuilder->IsForEventDelivery() && pointerEventsNone && !passPointerEventsToChildren) {
+  if (aBuilder->IsForEventDelivery() && pointerEventsNone) {
     return;
   }
 
   // If we're passing pointer events to children then we have to descend into
   // subdocuments no matter what, to determine which parts are transparent for
   // hit-testing or event regions.
-  bool needToDescend = aBuilder->GetDescendIntoSubdocuments() || passPointerEventsToChildren;
+  bool needToDescend = aBuilder->GetDescendIntoSubdocuments();
   if (!mInnerView || !needToDescend) {
     return;
   }
@@ -439,8 +416,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       }
     }
 
-    aBuilder->EnterPresShell(subdocRootFrame,
-                             pointerEventsNone && !passPointerEventsToChildren);
+    aBuilder->EnterPresShell(subdocRootFrame, pointerEventsNone);
   } else {
     dirty = aDirtyRect;
   }
@@ -530,7 +506,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   }
 
   if (subdocRootFrame) {
-    aBuilder->LeavePresShell(subdocRootFrame);
+    aBuilder->LeavePresShell(subdocRootFrame, &childItems);
 
     if (ignoreViewportScrolling) {
       aBuilder->SetIgnoreScrollFrame(savedIgnoreScrollFrame);
@@ -708,19 +684,19 @@ nsSubDocumentFrame::GetIntrinsicRatio()
 
 /* virtual */
 LogicalSize
-nsSubDocumentFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                                    WritingMode aWM,
-                                    const LogicalSize& aCBSize,
-                                    nscoord aAvailableISize,
-                                    const LogicalSize& aMargin,
-                                    const LogicalSize& aBorder,
-                                    const LogicalSize& aPadding,
-                                    bool aShrinkWrap)
+nsSubDocumentFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+                                    WritingMode         aWM,
+                                    const LogicalSize&  aCBSize,
+                                    nscoord             aAvailableISize,
+                                    const LogicalSize&  aMargin,
+                                    const LogicalSize&  aBorder,
+                                    const LogicalSize&  aPadding,
+                                    ComputeSizeFlags    aFlags)
 {
   if (!IsInline()) {
     return nsFrame::ComputeAutoSize(aRenderingContext, aWM, aCBSize,
                                     aAvailableISize, aMargin, aBorder,
-                                    aPadding, aShrinkWrap);
+                                    aPadding, aFlags);
   }
 
   const WritingMode wm = GetWritingMode();
@@ -731,25 +707,22 @@ nsSubDocumentFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
 
 /* virtual */
 LogicalSize
-nsSubDocumentFrame::ComputeSize(nsRenderingContext *aRenderingContext,
-                                WritingMode aWM,
-                                const LogicalSize& aCBSize,
-                                nscoord aAvailableISize,
-                                const LogicalSize& aMargin,
-                                const LogicalSize& aBorder,
-                                const LogicalSize& aPadding,
-                                ComputeSizeFlags aFlags)
+nsSubDocumentFrame::ComputeSize(nsRenderingContext* aRenderingContext,
+                                WritingMode         aWM,
+                                const LogicalSize&  aCBSize,
+                                nscoord             aAvailableISize,
+                                const LogicalSize&  aMargin,
+                                const LogicalSize&  aBorder,
+                                const LogicalSize&  aPadding,
+                                ComputeSizeFlags    aFlags)
 {
   nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
   if (subDocRoot) {
-    return nsLayoutUtils::ComputeSizeWithIntrinsicDimensions(aWM,
-                            aRenderingContext, this,
-                            subDocRoot->GetIntrinsicSize(),
-                            subDocRoot->GetIntrinsicRatio(),
-                            aCBSize,
-                            aMargin,
-                            aBorder,
-                            aPadding);
+    return ComputeSizeWithIntrinsicDimensions(aRenderingContext, aWM,
+                                              subDocRoot->GetIntrinsicSize(),
+                                              subDocRoot->GetIntrinsicRatio(),
+                                              aCBSize, aMargin, aBorder,
+                                              aPadding, aFlags);
   }
   return nsAtomicContainerFrame::ComputeSize(aRenderingContext, aWM,
                                              aCBSize, aAvailableISize,
@@ -904,16 +877,6 @@ nsSubDocumentFrame::AttributeChanged(int32_t aNameSpaceID,
     if (frameloader)
       frameloader->MarginsChanged(margins.width, margins.height);
   }
-  else if (aAttribute == nsGkAtoms::mozpasspointerevents) {
-    RefPtr<nsFrameLoader> frameloader = FrameLoader();
-    if (frameloader) {
-      if (aModType == nsIDOMMutationEvent::ADDITION) {
-        frameloader->ActivateUpdateHitRegion();
-      } else if (aModType == nsIDOMMutationEvent::REMOVAL) {
-        frameloader->DeactivateUpdateHitRegion();
-      }
-    }
-  }
 
   return NS_OK;
 }
@@ -942,7 +905,7 @@ public:
     NS_ASSERTION(mPresShell, "Must have a presshell");
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     // Flush frames, to ensure any pending display:none changes are made.
     // Note it can be unsafe to flush if we've destroyed the presentation
@@ -1038,9 +1001,7 @@ nsSubDocumentFrame::FrameLoader()
   if (!mFrameLoader) {
     nsCOMPtr<nsIFrameLoaderOwner> loaderOwner = do_QueryInterface(content);
     if (loaderOwner) {
-      nsCOMPtr<nsIFrameLoader> loader;
-      loaderOwner->GetFrameLoader(getter_AddRefs(loader));
-      mFrameLoader = static_cast<nsFrameLoader*>(loader.get());
+      mFrameLoader = loaderOwner->GetFrameLoader();
     }
   }
   return mFrameLoader;

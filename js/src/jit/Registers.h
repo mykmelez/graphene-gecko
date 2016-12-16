@@ -99,6 +99,11 @@ struct Register {
     }
 };
 
+#if defined(JS_NUNBOX32)
+static const uint32_t INT64LOW_OFFSET = 0 * sizeof(int32_t);
+static const uint32_t INT64HIGH_OFFSET = 1 * sizeof(int32_t);
+#endif
+
 struct Register64
 {
 #ifdef JS_PUNBOX64
@@ -118,11 +123,10 @@ struct Register64
     bool operator !=(Register64 other) const {
         return reg != other.reg;
     }
+    static Register64 Invalid() {
+        return Register64(Register::Invalid());
+    }
 #else
-    explicit Register64(Register r)
-      : high(Register::Invalid()), low(Register::Invalid())
-    {}
-
     constexpr Register64(Register h, Register l)
       : high(h), low(l)
     {}
@@ -131,6 +135,9 @@ struct Register64
     }
     bool operator !=(Register64 other) const {
         return high != other.high || low != other.low;
+    }
+    static Register64 Invalid() {
+        return Register64(Register::Invalid(), Register::Invalid());
     }
 #endif
 };

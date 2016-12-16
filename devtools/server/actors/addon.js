@@ -9,7 +9,7 @@ var Services = require("Services");
 var { ActorPool } = require("devtools/server/actors/common");
 var { TabSources } = require("./utils/TabSources");
 var makeDebugger = require("./utils/make-debugger");
-var { ConsoleAPIListener } = require("devtools/shared/webconsole/utils");
+var { ConsoleAPIListener } = require("devtools/server/actors/utils/webconsole-listeners");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var { assert, update } = DevToolsUtils;
 
@@ -70,7 +70,6 @@ BrowserAddonActor.prototype = {
     return this._sources;
   },
 
-
   form: function BAA_form() {
     assert(this.actorID, "addon should have an actorID.");
     if (!this._consoleActor) {
@@ -95,7 +94,7 @@ BrowserAddonActor.prototype = {
     };
   },
 
-  disconnect: function BAA_disconnect() {
+  destroy() {
     this.conn.removeActorPool(this._contextPool);
     this._contextPool = null;
     this._consoleActor = null;
@@ -108,6 +107,15 @@ BrowserAddonActor.prototype = {
     if ("global" in aOptions) {
       this._global = aOptions.global;
     }
+  },
+
+  onInstalled: function BAA_updateAddonWrapper(aAddon) {
+    if (aAddon.id != this._addon.id) {
+      return;
+    }
+
+    // Update the AddonManager's addon object on reload/update.
+    this._addon = aAddon;
   },
 
   onDisabled: function BAA_onDisabled(aAddon) {
@@ -125,10 +133,13 @@ BrowserAddonActor.prototype = {
 
     if (this.attached) {
       this.onDetach();
+
+      // The BrowserAddonActor is not a TabActor and it has to send
+      // "tabDetached" directly to close the devtools toolbox window.
       this.conn.send({ from: this.actorID, type: "tabDetached" });
     }
 
-    this.disconnect();
+    this.destroy();
   },
 
   onAttach: function BAA_onAttach() {
@@ -297,9 +308,8 @@ update(AddonConsoleActor.prototype, {
   /**
    * Destroy the current AddonConsoleActor instance.
    */
-  disconnect: function ACA_disconnect()
-  {
-    WebConsoleActor.prototype.disconnect.call(this);
+  destroy() {
+    WebConsoleActor.prototype.destroy.call(this);
     this.addon = null;
   },
 

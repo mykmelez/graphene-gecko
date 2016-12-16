@@ -103,21 +103,6 @@ gfxDWriteFont::gfxDWriteFont(gfxFontEntry *aFontEntry,
         return;
     }
 
-    mFont = fe->GetFont();
-    if (!mFont) {
-        gfxPlatformFontList* fontList = gfxPlatformFontList::PlatformFontList();
-        gfxDWriteFontFamily* defaultFontFamily =
-            static_cast<gfxDWriteFontFamily*>(fontList->GetDefaultFont(aFontStyle));
-
-        mFont = defaultFontFamily->GetDefaultFont();
-        NS_WARNING("Using default font");
-    }
-
-    HRESULT hr = mFont->GetFontFamily(getter_AddRefs(mFontFamily));
-    if (FAILED(hr)) {
-        MOZ_ASSERT(false);
-    }
-
     ComputeMetrics(anAAOption);
 }
 
@@ -216,6 +201,7 @@ gfxDWriteFont::ComputeMetrics(AntialiasOption anAAOption)
     mFUnitsConvFactor = float(mAdjustedSize / fontMetrics.designUnitsPerEm);
 
     mMetrics->xHeight = fontMetrics.xHeight * mFUnitsConvFactor;
+    mMetrics->capHeight = fontMetrics.capHeight * mFUnitsConvFactor;
 
     mMetrics->maxAscent = ceil(fontMetrics.ascent * mFUnitsConvFactor);
     mMetrics->maxDescent = ceil(fontMetrics.descent * mFUnitsConvFactor);
@@ -311,8 +297,9 @@ gfxDWriteFont::ComputeMetrics(AntialiasOption anAAOption)
     printf("    emHeight: %f emAscent: %f emDescent: %f\n", mMetrics->emHeight, mMetrics->emAscent, mMetrics->emDescent);
     printf("    maxAscent: %f maxDescent: %f maxAdvance: %f\n", mMetrics->maxAscent, mMetrics->maxDescent, mMetrics->maxAdvance);
     printf("    internalLeading: %f externalLeading: %f\n", mMetrics->internalLeading, mMetrics->externalLeading);
-    printf("    spaceWidth: %f aveCharWidth: %f zeroOrAve: %f xHeight: %f\n",
-           mMetrics->spaceWidth, mMetrics->aveCharWidth, mMetrics->zeroOrAveCharWidth, mMetrics->xHeight);
+    printf("    spaceWidth: %f aveCharWidth: %f zeroOrAve: %f\n",
+           mMetrics->spaceWidth, mMetrics->aveCharWidth, mMetrics->zeroOrAveCharWidth);
+    printf("    xHeight: %f capHeight: %f\n", mMetrics->xHeight, mMetrics->capHeight);
     printf("    uOff: %f uSize: %f stOff: %f stSize: %f\n",
            mMetrics->underlineOffset, mMetrics->underlineSize, mMetrics->strikeoutOffset, mMetrics->strikeoutSize);
 #endif
@@ -700,9 +687,16 @@ gfxDWriteFont::GetScaledFont(mozilla::gfx::DrawTarget *aTarget)
                                                         GetAdjustedSize(),
                                                         GetCairoScaledFont());
   } else if (aTarget->GetBackendType() == BackendType::SKIA) {
+    gfxDWriteFontEntry *fe =
+        static_cast<gfxDWriteFontEntry*>(mFontEntry.get());
+    bool useEmbeddedBitmap = (fe->IsCJKFont() && HasBitmapStrikeForSize(NS_lround(mAdjustedSize)));
+
+    const gfxFontStyle* fontStyle = GetStyle();
     mAzureScaledFont =
-            Factory::CreateScaledFontForDWriteFont(mFont, mFontFamily,
-                                                   mFontFace, GetAdjustedSize());
+            Factory::CreateScaledFontForDWriteFont(mFontFace, fontStyle,
+                                                   GetAdjustedSize(),
+                                                   useEmbeddedBitmap,
+                                                   GetForceGDIClassic());
   } else {
     mAzureScaledFont = Factory::CreateScaledFontForNativeFont(nativeFont,
                                                             GetAdjustedSize());

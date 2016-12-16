@@ -18,6 +18,7 @@ Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/TelemetryController.jsm");
 Cu.import("resource://gre/modules/FxAccounts.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/osfile.jsm", this);
 
 let constants = {};
 Cu.import("resource://services-sync/constants.js", constants);
@@ -32,7 +33,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
 const log = Log.repository.getLogger("Sync.Telemetry");
 
 const TOPICS = [
-  "xpcom-shutdown",
+  "profile-before-change",
   "weave:service:sync:start",
   "weave:service:sync:finish",
   "weave:service:sync:error",
@@ -42,26 +43,23 @@ const TOPICS = [
   "weave:engine:sync:error",
   "weave:engine:sync:applied",
   "weave:engine:sync:uploaded",
+  "weave:engine:validate:finish",
+  "weave:engine:validate:error",
 ];
 
 const PING_FORMAT_VERSION = 1;
 
 // The set of engines we record telemetry for - any other engines are ignored.
 const ENGINES = new Set(["addons", "bookmarks", "clients", "forms", "history",
-                         "passwords", "prefs", "tabs"]);
+                         "passwords", "prefs", "tabs", "extension-storage"]);
 
-// is it a wrapped auth error from browserid_identity?
-function isBrowerIdAuthError(error) {
-  // I can't think of what could throw on String conversion
-  // but we have absolutely no clue about the type, and
-  // there's probably some things out there that would
-  try {
-    if (String(error).startsWith("AuthenticationError")) {
-      return true;
-    }
-  } catch (e) {}
-  return false;
-}
+// A regex we can use to replace the profile dir in error messages. We use a
+// regexp so we can simply replace all case-insensitive occurences.
+// This escaping function is from:
+// https://developer.mozilla.org/en/docs/Web/JavaScript/Guide/Regular_Expressions
+const reProfileDir = new RegExp(
+        OS.Constants.Path.profileDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "gi");
 
 function transformError(error, engineName) {
   if (Async.isShutdownException(error)) {
@@ -73,7 +71,9 @@ function transformError(error, engineName) {
       // This is hacky, but I can't imagine that it's not also accurate.
       return { name: "othererror", error };
     }
-
+    // There's a chance the profiledir is in the error string which is PII we
+    // want to avoid including in the ping.
+    error = error.replace(reProfileDir, "[profileDir]");
     return { name: "unexpectederror", error };
   }
 
@@ -83,6 +83,10 @@ function transformError(error, engineName) {
 
   if (error instanceof AuthenticationError) {
     return { name: "autherror", from: error.source };
+  }
+
+  if (error instanceof Ci.mozIStorageError) {
+    return { name: "sqlerror", code: error.result };
   }
 
   let httpCode = error.status ||
@@ -99,7 +103,8 @@ function transformError(error, engineName) {
 
   return {
     name: "unexpectederror",
-    error: String(error),
+    // as above, remove the profile dir value.
+    error: String(error).replace(reProfileDir, "[profileDir]")
   }
 }
 
@@ -167,6 +172,37 @@ class EngineRecord {
     }
   }
 
+  recordValidation(validationResult) {
+    if (this.validation) {
+      log.error(`Multiple validations occurred for engine ${this.name}!`);
+      return;
+    }
+    let { problems, version, duration, recordCount } = validationResult;
+    let validation = {
+      version: version || 0,
+      checked: recordCount || 0,
+    };
+    if (duration > 0) {
+      validation.took = Math.round(duration);
+    }
+    let summarized = problems.getSummary(true).filter(({count}) => count > 0);
+    if (summarized.length) {
+      validation.problems = summarized;
+    }
+    this.validation = validation;
+  }
+
+  recordValidationError(e) {
+    if (this.validation) {
+      log.error(`Multiple validations occurred for engine ${this.name}!`);
+      return;
+    }
+
+    this.validation = {
+      failureReason: transformError(e)
+    };
+  }
+
   recordUploaded(counts) {
     if (counts.sent || counts.failed) {
       if (!this.outgoing) {
@@ -198,15 +234,15 @@ class TelemetryRecord {
     this.currentEngine = null;
   }
 
-  // toJSON returns the actual payload we will submit.
   toJSON() {
     let result = {
       when: this.when,
       uid: this.uid,
       took: this.took,
-      version: PING_FORMAT_VERSION,
       failureReason: this.failureReason,
       status: this.status,
+      deviceID: this.deviceID,
+      devices: this.devices,
     };
     let engines = [];
     for (let engine of this.engines) {
@@ -229,10 +265,31 @@ class TelemetryRecord {
       this.failureReason = transformError(error);
     }
 
+    // We don't bother including the "devices" field if we can't come up with a
+    // UID or device ID for *this* device -- If that's the case, any data we'd
+    // put there would be likely to be full of garbage anyway.
+    // Note that we currently use the "sync device GUID" rather than the "FxA
+    // device ID" as the latter isn't stable enough for our purposes - see bug
+    // 1316535.
+    let includeDeviceInfo = false;
     try {
-      this.uid = Weave.Service.identity.userUID();
+      this.uid = Weave.Service.identity.hashedUID();
+      this.deviceID = Weave.Service.identity.hashedDeviceID(Weave.Service.clientsEngine.localID);
+      includeDeviceInfo = true;
     } catch (e) {
       this.uid = "0".repeat(32);
+      this.deviceID = undefined;
+    }
+
+    if (includeDeviceInfo) {
+      let remoteDevices = Weave.Service.clientsEngine.remoteClients;
+      this.devices = remoteDevices.map(device => {
+        return {
+          os: device.os,
+          version: device.version,
+          id: Weave.Service.identity.hashedDeviceID(device.id),
+        };
+      });
     }
 
     // Check for engine statuses. -- We do this now, and not in engine.finished
@@ -272,13 +329,18 @@ class TelemetryRecord {
   }
 
   onEngineStop(engineName, error) {
-    if (error && !this.currentEngine) {
-      log.error(`Error triggered on ${engineName} when no current engine exists: ${error}`);
+    // We only care if it's the current engine if we have a current engine.
+    if (this._shouldIgnoreEngine(engineName, !!this.currentEngine)) {
+      return;
+    }
+    if (!this.currentEngine) {
       // It's possible for us to get an error before the start message of an engine
       // (somehow), in which case we still want to record that error.
+      if (!error) {
+        return;
+      }
+      log.error(`Error triggered on ${engineName} when no current engine exists: ${error}`);
       this.currentEngine = new EngineRecord(engineName);
-    } else if (!this.currentEngine || (engineName && this._shouldIgnoreEngine(engineName, true))) {
-      return;
     }
     this.currentEngine.finished(error);
     this.engines.push(this.currentEngine);
@@ -290,6 +352,36 @@ class TelemetryRecord {
       return;
     }
     this.currentEngine.recordApplied(counts);
+  }
+
+  onEngineValidated(engineName, validationData) {
+    if (this._shouldIgnoreEngine(engineName, false)) {
+      return;
+    }
+    let engine = this.engines.find(e => e.name === engineName);
+    if (!engine && this.currentEngine && engineName === this.currentEngine.name) {
+      engine = this.currentEngine;
+    }
+    if (engine) {
+      engine.recordValidation(validationData);
+    } else {
+      log.warn(`Validation event triggered for engine ${engineName}, which hasn't been synced!`);
+    }
+  }
+
+  onEngineValidateError(engineName, error) {
+    if (this._shouldIgnoreEngine(engineName, false)) {
+      return;
+    }
+    let engine = this.engines.find(e => e.name === engineName);
+    if (!engine && this.currentEngine && engineName === this.currentEngine.name) {
+      engine = this.currentEngine;
+    }
+    if (engine) {
+      engine.recordValidationError(error);
+    } else {
+      log.warn(`Validation failure event triggered for engine ${engineName}, which hasn't been synced!`);
+    }
   }
 
   onEngineUploaded(engineName, counts) {
@@ -321,6 +413,30 @@ class SyncTelemetryImpl {
     this.allowedEngines = allowedEngines;
     this.current = null;
     this.setupObservers();
+
+    this.payloads = [];
+    this.discarded = 0;
+    this.maxPayloadCount = Svc.Prefs.get("telemetry.maxPayloadCount");
+    this.submissionInterval = Svc.Prefs.get("telemetry.submissionInterval") * 1000;
+    this.lastSubmissionTime = Telemetry.msSinceProcessStart();
+  }
+
+  getPingJSON(reason) {
+    return {
+      why: reason,
+      discarded: this.discarded || undefined,
+      version: PING_FORMAT_VERSION,
+      syncs: this.payloads.slice(),
+    };
+  }
+
+  finish(reason) {
+    // Note that we might be in the middle of a sync right now, and so we don't
+    // want to touch this.current.
+    let result = this.getPingJSON(reason);
+    this.payloads = [];
+    this.discarded = 0;
+    this.submit(result);
   }
 
   setupObservers() {
@@ -330,19 +446,27 @@ class SyncTelemetryImpl {
   }
 
   shutdown() {
+    this.finish("shutdown");
     for (let topic of TOPICS) {
       Observers.remove(topic, this, this);
     }
   }
 
   submit(record) {
-    TelemetryController.submitExternalPing("sync", record);
+    // We still call submit() with possibly illegal payloads so that tests can
+    // know that the ping was built. We don't end up submitting them, however.
+    if (record.syncs.length) {
+      log.trace(`submitting ${record.syncs.length} sync record(s) to telemetry`);
+      TelemetryController.submitExternalPing("sync", record);
+    }
   }
+
 
   onSyncStarted() {
     if (this.current) {
       log.warn("Observed weave:service:sync:start, but we're already recording a sync!");
       // Just discard the old record, consistent with our handling of engines, above.
+      this.current = null;
     }
     this.current = new TelemetryRecord(this.allowedEngines);
   }
@@ -361,16 +485,23 @@ class SyncTelemetryImpl {
       return;
     }
     this.current.finished(error);
-    let current = this.current;
+    if (this.payloads.length < this.maxPayloadCount) {
+      this.payloads.push(this.current.toJSON());
+    } else {
+      ++this.discarded;
+    }
     this.current = null;
-    this.submit(current.toJSON());
+    if ((Telemetry.msSinceProcessStart() - this.lastSubmissionTime) > this.submissionInterval) {
+      this.finish("schedule");
+      this.lastSubmissionTime = Telemetry.msSinceProcessStart();
+    }
   }
 
   observe(subject, topic, data) {
     log.trace(`observed ${topic} ${data}`);
 
     switch (topic) {
-      case "xpcom-shutdown":
+      case "profile-before-change":
         this.shutdown();
         break;
 
@@ -419,6 +550,18 @@ class SyncTelemetryImpl {
       case "weave:engine:sync:uploaded":
         if (this._checkCurrent(topic)) {
           this.current.onEngineUploaded(data, subject);
+        }
+        break;
+
+      case "weave:engine:validate:finish":
+        if (this._checkCurrent(topic)) {
+          this.current.onEngineValidated(data, subject);
+        }
+        break;
+
+      case "weave:engine:validate:error":
+        if (this._checkCurrent(topic)) {
+          this.current.onEngineValidateError(data, subject || "Unknown");
         }
         break;
 

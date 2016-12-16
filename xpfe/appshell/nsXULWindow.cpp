@@ -14,10 +14,10 @@
 #include "nsPrintfCString.h"
 #include "nsString.h"
 #include "nsWidgetsCID.h"
-#include "prprf.h"
 #include "nsThreadUtils.h"
 #include "nsNetCID.h"
 #include "nsQueryObject.h"
+#include "mozilla/Sprintf.h"
 
 //Interfaces needed to be included
 #include "nsIAppShell.h"
@@ -105,7 +105,6 @@ nsXULWindow::nsXULWindow(uint32_t aChromeFlags)
     mIgnoreXULSizeMode(false),
     mDestroying(false),
     mRegistered(false),
-    mContextFlags(0),
     mPersistentAttributesDirty(0),
     mPersistentAttributesMask(0),
     mChromeFlags(aChromeFlags)
@@ -254,19 +253,6 @@ NS_IMETHODIMP nsXULWindow::SetZLevel(uint32_t aLevel)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsXULWindow::GetContextFlags(uint32_t *aContextFlags)
-{
-  NS_ENSURE_ARG_POINTER(aContextFlags);
-  *aContextFlags = mContextFlags;
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsXULWindow::SetContextFlags(uint32_t aContextFlags)
-{
-  mContextFlags = aContextFlags;
-  return NS_OK;
-}
-
 NS_IMETHODIMP nsXULWindow::GetChromeFlags(uint32_t *aChromeFlags)
 {
   NS_ENSURE_ARG_POINTER(aChromeFlags);
@@ -356,25 +342,6 @@ nsXULWindow::GetPrimaryTabParent(nsITabParent** aTab)
   nsCOMPtr<nsITabParent> tab = mPrimaryTabParent;
   tab.forget(aTab);
   return NS_OK;
-}
-
-NS_IMETHODIMP nsXULWindow::GetContentShellById(const char16_t* aID, 
-   nsIDocShellTreeItem** aDocShellTreeItem)
-{
-  NS_ENSURE_ARG_POINTER(aDocShellTreeItem);
-  *aDocShellTreeItem = nullptr;
-
-  uint32_t count = mContentShells.Length();
-  for (uint32_t i = 0; i < count; i++) {
-    nsContentShellInfo* shellInfo = mContentShells.ElementAt(i);
-    if (shellInfo->id.Equals(aID)) {
-      *aDocShellTreeItem = nullptr;
-      if (shellInfo->child)
-        CallQueryReferent(shellInfo->child.get(), aDocShellTreeItem);
-      return NS_OK;
-    }
-  }
-  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP nsXULWindow::AddChildWindow(nsIXULWindow *aChild)
@@ -524,13 +491,6 @@ NS_IMETHODIMP nsXULWindow::Destroy()
     mDocShell = nullptr; // this can cause reentrancy of this function
   }
 
-  // Remove our ref on the content shells
-  uint32_t count = mContentShells.Length();
-  for (uint32_t i = 0; i < count; i++) {
-    nsContentShellInfo* shellInfo = mContentShells.ElementAt(i);
-    delete shellInfo;
-  }
-  mContentShells.Clear();
   mPrimaryContentShell = nullptr;
 
   if (mContentTreeOwner) {
@@ -673,12 +633,11 @@ NS_IMETHODIMP nsXULWindow::SetPositionAndSize(int32_t aX, int32_t aY,
 NS_IMETHODIMP nsXULWindow::GetPositionAndSize(int32_t* x, int32_t* y, int32_t* cx,
    int32_t* cy)
 {
-  LayoutDeviceIntRect rect;
 
   if (!mWindow)
     return NS_ERROR_FAILURE;
 
-  mWindow->GetScreenBounds(rect);
+  LayoutDeviceIntRect rect = mWindow->GetScreenBounds();
 
   if (x)
     *x = rect.x;
@@ -1601,8 +1560,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
   // (only for size elements which are persisted)
   if ((mPersistentAttributesDirty & PAD_POSITION) && gotRestoredBounds) {
     if (persistString.Find("screenX") >= 0) {
-      PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d",
-                  NSToIntRound(rect.x / posScale.scale));
+      SprintfLiteral(sizeBuf, "%d", NSToIntRound(rect.x / posScale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(SCREENX_ATTRIBUTE, sizeString, rv);
       if (shouldPersist) {
@@ -1610,8 +1568,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       }
     }
     if (persistString.Find("screenY") >= 0) {
-      PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d",
-                  NSToIntRound(rect.y / posScale.scale));
+      SprintfLiteral(sizeBuf, "%d", NSToIntRound(rect.y / posScale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(SCREENY_ATTRIBUTE, sizeString, rv);
       if (shouldPersist) {
@@ -1622,8 +1579,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
 
   if ((mPersistentAttributesDirty & PAD_SIZE) && gotRestoredBounds) {
     if (persistString.Find("width") >= 0) {
-      PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d",
-                  NSToIntRound(rect.width / sizeScale.scale));
+      SprintfLiteral(sizeBuf, "%d", NSToIntRound(rect.width / sizeScale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(WIDTH_ATTRIBUTE, sizeString, rv);
       if (shouldPersist) {
@@ -1631,8 +1587,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       }
     }
     if (persistString.Find("height") >= 0) {
-      PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d",
-                  NSToIntRound(rect.height / sizeScale.scale));
+      SprintfLiteral(sizeBuf, "%d", NSToIntRound(rect.height / sizeScale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(HEIGHT_ATTRIBUTE, sizeString, rv);
       if (shouldPersist) {
@@ -1661,7 +1616,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       nsCOMPtr<nsIWindowMediator> mediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
       if (mediator) {
         mediator->GetZLevel(this, &zLevel);
-        PR_snprintf(sizeBuf, sizeof(sizeBuf), "%lu", (unsigned long)zLevel);
+        SprintfLiteral(sizeBuf, "%" PRIu32, zLevel);
         sizeString.AssignWithConversion(sizeBuf);
         docShellElement->SetAttribute(ZLEVEL_ATTRIBUTE, sizeString, rv);
         if (shouldPersist) {
@@ -1704,28 +1659,8 @@ nsXULWindow::GetWindowDOMElement() const
 }
 
 nsresult nsXULWindow::ContentShellAdded(nsIDocShellTreeItem* aContentShell,
-   bool aPrimary, bool aTargetable, const nsAString& aID)
+   bool aPrimary)
 {
-  nsContentShellInfo* shellInfo = nullptr;
-
-  uint32_t i, count = mContentShells.Length();
-  nsWeakPtr contentShellWeak = do_GetWeakReference(aContentShell);
-  for (i = 0; i < count; i++) {
-    nsContentShellInfo* info = mContentShells.ElementAt(i);
-    if (info->id.Equals(aID)) {
-      // We already exist. Do a replace.
-      info->child = contentShellWeak;
-      shellInfo = info;
-    }
-    else if (info->child == contentShellWeak)
-      info->child = nullptr;
-  }
-
-  if (!shellInfo) {
-    shellInfo = new nsContentShellInfo(aID, contentShellWeak);
-    mContentShells.AppendElement(shellInfo);
-  }
-    
   // Set the default content tree owner
   if (aPrimary) {
     NS_ENSURE_SUCCESS(EnsurePrimaryContentTreeOwner(), NS_ERROR_FAILURE);
@@ -1740,37 +1675,6 @@ nsresult nsXULWindow::ContentShellAdded(nsIDocShellTreeItem* aContentShell,
       mPrimaryContentShell = nullptr;
   }
 
-  if (aTargetable) {
-#ifdef DEBUG
-    int32_t debugCount = mTargetableShells.Count();
-    int32_t debugCounter;
-    for (debugCounter = debugCount - 1; debugCounter >= 0; --debugCounter) {
-      nsCOMPtr<nsIDocShellTreeItem> curItem =
-        do_QueryReferent(mTargetableShells[debugCounter]);
-      NS_ASSERTION(!SameCOMIdentity(curItem, aContentShell),
-                   "Adding already existing item to mTargetableShells");
-    }
-#endif
-    
-    // put the new shell at the start of the targetable shells list if either
-    // it's the new primary shell or there is no existing primary shell (which
-    // means that chances are this one just stopped being primary).  If we
-    // really cared, we could keep track of the "last no longer primary shell"
-    // explicitly, but it probably doesn't matter enough: the difference would
-    // only be felt in a situation where all shells were non-primary, which
-    // doesn't happen much.  In a situation where there is one and only one
-    // primary shell, and in which shells get unmarked as primary before some
-    // other shell gets marked as primary, this effectively stores the list of
-    // targetable shells in "most recently primary first" order.
-    bool inserted;
-    if (aPrimary || !mPrimaryContentShell) {
-      inserted = mTargetableShells.InsertObjectAt(contentShellWeak, 0);
-    } else {
-      inserted = mTargetableShells.AppendObject(contentShellWeak);
-    }
-    NS_ENSURE_TRUE(inserted, NS_ERROR_OUT_OF_MEMORY);
-  }
-
   return NS_OK;
 }
 
@@ -1779,26 +1683,6 @@ nsresult nsXULWindow::ContentShellRemoved(nsIDocShellTreeItem* aContentShell)
   if (mPrimaryContentShell == aContentShell) {
     mPrimaryContentShell = nullptr;
   }
-
-  int32_t i, count = mContentShells.Length();
-  for (i = count - 1; i >= 0; --i) {
-    nsContentShellInfo* info = mContentShells.ElementAt(i);
-    nsCOMPtr<nsIDocShellTreeItem> curItem = do_QueryReferent(info->child);
-    if (!curItem || SameCOMIdentity(curItem, aContentShell)) {
-      mContentShells.RemoveElementAt(i);
-      delete info;
-    }
-  }
-
-  count = mTargetableShells.Count();
-  for (i = count - 1; i >= 0; --i) {
-    nsCOMPtr<nsIDocShellTreeItem> curItem =
-      do_QueryReferent(mTargetableShells[i]);
-    if (!curItem || SameCOMIdentity(curItem, aContentShell)) {
-      mTargetableShells.RemoveObjectAt(i);
-    }
-  }
-  
   return NS_OK;
 }
 
@@ -1925,29 +1809,30 @@ NS_IMETHODIMP nsXULWindow::ExitModalLoop(nsresult aStatus)
 // top-level function to create a new window
 NS_IMETHODIMP nsXULWindow::CreateNewWindow(int32_t aChromeFlags,
                                            nsITabParent *aOpeningTab,
+                                           mozIDOMWindowProxy *aOpener,
                                            nsIXULWindow **_retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
 
   if (aChromeFlags & nsIWebBrowserChrome::CHROME_OPENAS_CHROME)
-    return CreateNewChromeWindow(aChromeFlags, aOpeningTab, _retval);
-  return CreateNewContentWindow(aChromeFlags, aOpeningTab, _retval);
+    return CreateNewChromeWindow(aChromeFlags, aOpeningTab, aOpener, _retval);
+  return CreateNewContentWindow(aChromeFlags, aOpeningTab, aOpener, _retval);
 }
 
 NS_IMETHODIMP nsXULWindow::CreateNewChromeWindow(int32_t aChromeFlags,
                                                  nsITabParent *aOpeningTab,
+                                                 mozIDOMWindowProxy *aOpener,
                                                  nsIXULWindow **_retval)
 {
   nsCOMPtr<nsIAppShellService> appShell(do_GetService(NS_APPSHELLSERVICE_CONTRACTID));
   NS_ENSURE_TRUE(appShell, NS_ERROR_FAILURE);
 
   // Just do a normal create of a window and return.
-
   nsCOMPtr<nsIXULWindow> newWindow;
   appShell->CreateTopLevelWindow(this, nullptr, aChromeFlags,
                                  nsIAppShellService::SIZE_TO_CONTENT,
                                  nsIAppShellService::SIZE_TO_CONTENT,
-                                 aOpeningTab,
+                                 aOpeningTab, aOpener,
                                  getter_AddRefs(newWindow));
 
   NS_ENSURE_TRUE(newWindow, NS_ERROR_FAILURE);
@@ -1960,6 +1845,7 @@ NS_IMETHODIMP nsXULWindow::CreateNewChromeWindow(int32_t aChromeFlags,
 
 NS_IMETHODIMP nsXULWindow::CreateNewContentWindow(int32_t aChromeFlags,
                                                   nsITabParent *aOpeningTab,
+                                                  mozIDOMWindowProxy *aOpener,
                                                   nsIXULWindow **_retval)
 {
   nsCOMPtr<nsIAppShellService> appShell(do_GetService(NS_APPSHELLSERVICE_CONTRACTID));
@@ -1990,9 +1876,12 @@ NS_IMETHODIMP nsXULWindow::CreateNewContentWindow(int32_t aChromeFlags,
   nsCOMPtr<nsIXULWindow> newWindow;
   {
     AutoNoJSAPI nojsapi;
+    // We actually want this toplevel window which we are creating to have a
+    // null opener, as we will be creating the content xul:browser window inside
+    // of it, so we pass nullptr as our aOpener.
     appShell->CreateTopLevelWindow(this, uri,
                                    aChromeFlags, 615, 480,
-                                   aOpeningTab,
+                                   aOpeningTab, nullptr,
                                    getter_AddRefs(newWindow));
     NS_ENSURE_TRUE(newWindow, NS_ERROR_FAILURE);
   }
@@ -2001,6 +1890,17 @@ NS_IMETHODIMP nsXULWindow::CreateNewContentWindow(int32_t aChromeFlags,
   nsXULWindow *xulWin = static_cast<nsXULWindow*>
                                    (static_cast<nsIXULWindow*>
                                                (newWindow));
+
+  if (aOpener) {
+    nsCOMPtr<nsIDocShell> docShell;
+    xulWin->GetDocShell(getter_AddRefs(docShell));
+    MOZ_ASSERT(docShell);
+    nsCOMPtr<nsIDOMChromeWindow> chromeWindow =
+      do_QueryInterface(docShell->GetWindow());
+    MOZ_ASSERT(chromeWindow);
+
+    chromeWindow->SetOpenerForInitialContentBrowser(aOpener);
+  }
 
   xulWin->LockUntilChromeLoad();
 
@@ -2303,20 +2203,14 @@ void nsXULWindow::SizeShellToWithLimit(int32_t aDesiredWidth,
   }
 }
 
-//*****************************************************************************
-//*** nsContentShellInfo: Object Management
-//*****************************************************************************   
-
-nsContentShellInfo::nsContentShellInfo(const nsAString& aID,
-                                       nsIWeakReference* aContentShell)
-  : id(aID),
-    child(aContentShell)
+nsresult
+nsXULWindow::GetTabCount(uint32_t* aResult)
 {
-  MOZ_COUNT_CTOR(nsContentShellInfo);
+  if (mXULBrowserWindow) {
+    return mXULBrowserWindow->GetTabCount(aResult);
+  }
+
+  *aResult = 0;
+  return NS_OK;
 }
 
-nsContentShellInfo::~nsContentShellInfo()
-{
-  MOZ_COUNT_DTOR(nsContentShellInfo);
-   //XXX Set Tree Owner to null if the tree owner is nsXULWindow->mContentTreeOwner
-} 

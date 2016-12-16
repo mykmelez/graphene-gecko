@@ -1,4 +1,6 @@
-
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 <!DOCTYPE HTML>
 <html>
 <!--
@@ -20,11 +22,12 @@ Test ArrayRep rep
 window.onload = Task.async(function* () {
   let { Rep } = browserRequire("devtools/client/shared/components/reps/rep");
   let { ArrayRep } = browserRequire("devtools/client/shared/components/reps/array");
+  const { MODE } = browserRequire("devtools/client/shared/components/reps/constants");
 
   let componentUnderTest = ArrayRep;
   const maxLength = {
     short: 3,
-    long: 300
+    long: 10
   };
 
   try {
@@ -63,15 +66,15 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultOutput,
       }
     ];
@@ -81,7 +84,7 @@ window.onload = Task.async(function* () {
 
   function testMaxProps() {
     const stub = [1, "foo", {}];
-    const defaultOutput = `[1, "foo", Object]`;
+    const defaultOutput = `[ 1, "foo", Object ]`;
 
     const modeTests = [
       {
@@ -89,15 +92,15 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[3]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultOutput,
       }
     ];
@@ -107,7 +110,7 @@ window.onload = Task.async(function* () {
 
   function testMoreThanShortMaxProps() {
     const stub = Array(maxLength.short + 1).fill("foo");
-    const defaultShortOutput = `[${Array(maxLength.short).fill("\"foo\"").join(", ")}, more…]`;
+    const defaultShortOutput = `[ ${Array(maxLength.short).fill("\"foo\"").join(", ")}, 1 more… ]`;
 
     const modeTests = [
       {
@@ -115,16 +118,16 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultShortOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[${maxLength.short + 1}]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultShortOutput,
       },
       {
-        mode: "long",
-        expectedOutput: `[${Array(maxLength.short + 1).fill("\"foo\"").join(", ")}]`,
+        mode: MODE.LONG,
+        expectedOutput: `[ ${Array(maxLength.short + 1).fill("\"foo\"").join(", ")} ]`,
       }
     ];
 
@@ -133,8 +136,8 @@ window.onload = Task.async(function* () {
 
   function testMoreThanLongMaxProps() {
     const stub = Array(maxLength.long + 1).fill("foo");
-    const defaultShortOutput = `[${Array(maxLength.short).fill("\"foo\"").join(", ")}, more…]`;
-    const defaultLongOutput = `[${Array(maxLength.long).fill("\"foo\"").join(", ")}, more…]`;
+    const defaultShortOutput = `[ ${Array(maxLength.short).fill("\"foo\"").join(", ")}, ${maxLength.long + 1 - maxLength.short} more… ]`;
+    const defaultLongOutput = `[ ${Array(maxLength.long).fill("\"foo\"").join(", ")}, 1 more… ]`;
 
     const modeTests = [
       {
@@ -142,15 +145,15 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultShortOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[${maxLength.long + 1}]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultShortOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultLongOutput,
       }
     ];
@@ -161,7 +164,7 @@ window.onload = Task.async(function* () {
   function testRecursiveArray() {
     let stub = [1];
     stub.push(stub);
-    const defaultOutput = `[1, […]]`;
+    const defaultOutput = `[ 1, [2] ]`;
 
     const modeTests = [
       {
@@ -169,15 +172,15 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[2]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultOutput,
       }
     ];
@@ -194,7 +197,7 @@ window.onload = Task.async(function* () {
         p4: "s4"
       }
     ];
-    const defaultOutput = `[Object{p1: "s1", p3: "s3", p4: "s4", more…}]`;
+    const defaultOutput = `[ Object ]`;
 
     const modeTests = [
       {
@@ -202,15 +205,15 @@ window.onload = Task.async(function* () {
         expectedOutput: defaultOutput,
       },
       {
-        mode: "tiny",
+        mode: MODE.TINY,
         expectedOutput: `[1]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: defaultOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultOutput,
       }
     ];
@@ -220,14 +223,10 @@ window.onload = Task.async(function* () {
 
   function testArray() {
     let stub = [
-      "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-      "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"
-    ];
+      "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
 
-    const defaultOutput = `["a", "b", "c", "d", "e", "f", "g", "h", "i", "j",` +
-                          ` "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",` +
-                          ` "u", "v", "w", "x", "y", "z"]`;
-    const shortOutput = `["a", "b", "c", more…]`;
+    const defaultOutput = `[ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" ]`;
+    const shortOutput = `[ "a", "b", "c", 7 more… ]`;
 
     const modeTests = [
       {
@@ -235,15 +234,15 @@ window.onload = Task.async(function* () {
         expectedOutput: shortOutput,
       },
       {
-        mode: "tiny",
-        expectedOutput: `[26]`,
+        mode: MODE.TINY,
+        expectedOutput: `[10]`,
       },
       {
-        mode: "short",
+        mode: MODE.SHORT,
         expectedOutput: shortOutput,
       },
       {
-        mode: "long",
+        mode: MODE.LONG,
         expectedOutput: defaultOutput,
       }
     ];

@@ -23,6 +23,7 @@ const {
   normalizeTime,
   runSafeSync,
   SingletonEventManager,
+  PlatformInfo,
 } = ExtensionUtils;
 
 const DOWNLOAD_ITEM_FIELDS = ["id", "url", "referrer", "filename", "incognito",
@@ -37,6 +38,14 @@ const DOWNLOAD_ITEM_FIELDS = ["id", "url", "referrer", "filename", "incognito",
 const DOWNLOAD_ITEM_CHANGE_FIELDS = ["endTime", "state", "paused", "canResume",
                                      "error", "exists"];
 
+// From https://fetch.spec.whatwg.org/#forbidden-header-name
+const FORBIDDEN_HEADERS = ["ACCEPT-CHARSET", "ACCEPT-ENCODING",
+  "ACCESS-CONTROL-REQUEST-HEADERS", "ACCESS-CONTROL-REQUEST-METHOD",
+  "CONNECTION", "CONTENT-LENGTH", "COOKIE", "COOKIE2", "DATE", "DNT",
+  "EXPECT", "HOST", "KEEP-ALIVE", "ORIGIN", "REFERER", "TE", "TRAILER",
+  "TRANSFER-ENCODING", "UPGRADE", "VIA"];
+
+const FORBIDDEN_PREFIXES = /^PROXY-|^SEC-/i;
 
 class DownloadItem {
   constructor(id, download, extension) {
@@ -245,9 +254,8 @@ function downloadQuery(query) {
   function normalizeDownloadTime(arg, before) {
     if (arg == null) {
       return before ? Number.MAX_VALUE : 0;
-    } else {
-      return normalizeTime(arg).getTime();
     }
+    return normalizeTime(arg).getTime();
   }
 
   const startedBefore = normalizeDownloadTime(query.startedBefore, true);
@@ -279,9 +287,8 @@ function downloadQuery(query) {
     value = value.toLowerCase();
     if (re.test(value)) {
       return input => (value == input);
-    } else {
-      return input => false;
     }
+    return input => false;
   }
 
   const matchFilename = makeMatch(query.filenameRegex, query.filename, "filename");
@@ -388,16 +395,23 @@ function queryHelper(query) {
   });
 }
 
-extensions.registerSchemaAPI("downloads", (extension, context) => {
+extensions.registerSchemaAPI("downloads", "addon_parent", context => {
+  let {extension} = context;
   return {
     downloads: {
       download(options) {
-        if (options.filename != null) {
-          if (options.filename.length == 0) {
+        let {filename} = options;
+        if (filename && PlatformInfo.os === "win") {
+          // cross platform javascript code uses "/"
+          filename = filename.replace(/\//g, "\\");
+        }
+
+        if (filename != null) {
+          if (filename.length == 0) {
             return Promise.reject({message: "filename must not be empty"});
           }
 
-          let path = OS.Path.split(options.filename);
+          let path = OS.Path.split(filename);
           if (path.absolute) {
             return Promise.reject({message: "filename must not be an absolute path"});
           }
@@ -412,28 +426,61 @@ extensions.registerSchemaAPI("downloads", (extension, context) => {
           return Promise.reject({message: "conflictAction prompt not yet implemented"});
         }
 
-        function createTarget(downloadsDir) {
-          // TODO
-          // if (options.saveAs) { }
+        if (options.headers) {
+          for (let {name} of options.headers) {
+            if (FORBIDDEN_HEADERS.includes(name.toUpperCase()) || name.match(FORBIDDEN_PREFIXES)) {
+              return Promise.reject({message: "Forbidden request header name"});
+            }
+          }
+        }
 
+        // Handle method, headers and body options.
+        function adjustChannel(channel) {
+          if (channel instanceof Ci.nsIHttpChannel) {
+            const method = options.method || "GET";
+            channel.requestMethod = method;
+
+            if (options.headers) {
+              for (let {name, value} of options.headers) {
+                channel.setRequestHeader(name, value, false);
+              }
+            }
+
+            if (options.body != null) {
+              const stream = Cc["@mozilla.org/io/string-input-stream;1"]
+                             .createInstance(Ci.nsIStringInputStream);
+              stream.setData(options.body, options.body.length);
+
+              channel.QueryInterface(Ci.nsIUploadChannel2);
+              channel.explicitSetUploadStream(stream, null, -1, method, false);
+            }
+          }
+          return Promise.resolve();
+        }
+
+        function createTarget(downloadsDir) {
           let target;
-          if (options.filename) {
-            target = OS.Path.join(downloadsDir, options.filename);
+          if (filename) {
+            target = OS.Path.join(downloadsDir, filename);
           } else {
             let uri = NetUtil.newURI(options.url);
 
-            let filename;
+            let remote = "download";
             if (uri instanceof Ci.nsIURL) {
-              filename = uri.fileName;
+              remote = uri.fileName;
             }
-            target = OS.Path.join(downloadsDir, filename || "download");
+            target = OS.Path.join(downloadsDir, remote);
           }
 
-          // This has a race, something else could come along and create
-          // the file between this test and them time the download code
-          // creates the target file.  But we can't easily fix it without
-          // modifying DownloadCore so we live with it for now.
-          return OS.File.exists(target).then(exists => {
+          // Create any needed subdirectories if required by filename.
+          const dir = OS.Path.dirname(target);
+          return OS.File.makeDir(dir, {from: downloadsDir}).then(() => {
+            return OS.File.exists(target);
+          }).then(exists => {
+            // This has a race, something else could come along and create
+            // the file between this test and them time the download code
+            // creates the target file.  But we can't easily fix it without
+            // modifying DownloadCore so we live with it for now.
             if (exists) {
               switch (options.conflictAction) {
                 case "uniquify":
@@ -445,20 +492,52 @@ extensions.registerSchemaAPI("downloads", (extension, context) => {
                   break;
               }
             }
-            return target;
+          }).then(() => {
+            if (!options.saveAs) {
+              return Promise.resolve(target);
+            }
+
+            // Setup the file picker Save As dialog.
+            const picker = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+            const window = Services.wm.getMostRecentWindow("navigator:browser");
+            picker.init(window, null, Ci.nsIFilePicker.modeSave);
+            picker.displayDirectory = new FileUtils.File(dir);
+            picker.appendFilters(Ci.nsIFilePicker.filterAll);
+            picker.defaultString = OS.Path.basename(target);
+
+            // Open the dialog and resolve/reject with the result.
+            return new Promise((resolve, reject) => {
+              picker.open(result => {
+                if (result === Ci.nsIFilePicker.returnCancel) {
+                  reject({message: "Download canceled by the user"});
+                } else {
+                  resolve(picker.file.path);
+                }
+              });
+            });
           });
         }
 
         let download;
         return Downloads.getPreferredDownloadsDirectory()
           .then(downloadsDir => createTarget(downloadsDir))
-          .then(target => Downloads.createDownload({
-            source: options.url,
-            target: {
-              path: target,
-              partFilePath: target + ".part",
-            },
-          })).then(dl => {
+          .then(target => {
+            const source = {
+              url: options.url,
+            };
+
+            if (options.method || options.headers || options.body) {
+              source.adjustChannel = adjustChannel;
+            }
+
+            return Downloads.createDownload({
+              source,
+              target: {
+                path: target,
+                partFilePath: target + ".part",
+              },
+            });
+          }).then(dl => {
             download = dl;
             return DownloadMap.getDownloadList();
           }).then(list => {
@@ -570,9 +649,8 @@ extensions.registerSchemaAPI("downloads", (extension, context) => {
           let download = DownloadMap.fromId(downloadId).download;
           if (download.succeeded) {
             return download.launch();
-          } else {
-            return Promise.reject({message: "Download has not completed."});
           }
+          return Promise.reject({message: "Download has not completed."});
         }).catch((error) => {
           return Promise.reject({message: error.message});
         });

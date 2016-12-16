@@ -11,11 +11,20 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <mutex>
+#include <type_traits>
+#if defined(WIN32)
+#include "cubeb_utils_win.h"
+#else
+#include "cubeb_utils_unix.h"
+#endif
 
 /** Similar to memcpy, but accounts for the size of an element. */
 template<typename T>
 void PodCopy(T * destination, const T * source, size_t count)
 {
+  static_assert(std::is_trivial<T>::value, "Requires trivial type");
+  assert(destination && source);
   memcpy(destination, source, count * sizeof(T));
 }
 
@@ -23,6 +32,8 @@ void PodCopy(T * destination, const T * source, size_t count)
 template<typename T>
 void PodMove(T * destination, const T * source, size_t count)
 {
+  static_assert(std::is_trivial<T>::value, "Requires trivial type");
+  assert(destination && source);
   memmove(destination, source, count * sizeof(T));
 }
 
@@ -30,6 +41,8 @@ void PodMove(T * destination, const T * source, size_t count)
 template<typename T>
 void PodZero(T * destination, size_t count)
 {
+  static_assert(std::is_trivial<T>::value, "Requires trivial type");
+  assert(destination);
   memset(destination, 0,  count * sizeof(T));
 }
 
@@ -188,5 +201,7 @@ private:
   /** The number of elements the array contains. */
   size_t length_;
 };
+
+using auto_lock = std::lock_guard<owned_critical_section>;
 
 #endif /* CUBEB_UTILS */

@@ -285,9 +285,10 @@ typedef uint32_t nsReflowStatus;
 #define NS_INLINE_IS_BREAK_BEFORE(_status) \
   (NS_INLINE_BREAK == ((_status) & (NS_INLINE_BREAK|NS_INLINE_BREAK_AFTER)))
 
-#define NS_INLINE_GET_BREAK_TYPE(_status) (((_status) >> 12) & 0xF)
+#define NS_INLINE_GET_BREAK_TYPE(_status) \
+  (static_cast<StyleClear>(((_status) >> 12) & 0xF))
 
-#define NS_INLINE_MAKE_BREAK_TYPE(_type)  ((_type) << 12)
+#define NS_INLINE_MAKE_BREAK_TYPE(_type)  (static_cast<int>(_type) << 12)
 
 // Construct a line-break-before status. Note that there is no
 // completion status for a line-break before because we *know* that
@@ -295,7 +296,7 @@ typedef uint32_t nsReflowStatus;
 // status doesn't matter.
 #define NS_INLINE_LINE_BREAK_BEFORE()                                   \
   (NS_INLINE_BREAK | NS_INLINE_BREAK_BEFORE |                           \
-   NS_INLINE_MAKE_BREAK_TYPE(NS_STYLE_CLEAR_LINE))
+   NS_INLINE_MAKE_BREAK_TYPE(StyleClear::Line))
 
 // Take a completion status and add to it the desire to have a
 // line-break after. For this macro we do need the completion status
@@ -303,7 +304,7 @@ typedef uint32_t nsReflowStatus;
 // continue the frame or not.
 #define NS_INLINE_LINE_BREAK_AFTER(_completionStatus)                   \
   ((_completionStatus) | NS_INLINE_BREAK | NS_INLINE_BREAK_AFTER |      \
-   NS_INLINE_MAKE_BREAK_TYPE(NS_STYLE_CLEAR_LINE))
+   NS_INLINE_MAKE_BREAK_TYPE(StyleClear::Line))
 
 // A frame is "truncated" if the part of the frame before the first
 // possible break point was unable to fit in the available vertical
@@ -349,6 +350,72 @@ enum class nsDidReflowStatus : uint32_t {
 #define NS_FRAME_OVERFLOW_LARGE   0x000000ff // overflow is stored as a
                                              // separate rect property
 
+/**
+ * nsBidiLevel is the type of the level values in our Unicode Bidi
+ * implementation.
+ * It holds an embedding level and indicates the visual direction
+ * by its bit 0 (even/odd value).<p>
+ *
+ * <li><code>aParaLevel</code> can be set to the
+ * pseudo-level values <code>NSBIDI_DEFAULT_LTR</code>
+ * and <code>NSBIDI_DEFAULT_RTL</code>.</li></ul>
+ *
+ * @see nsBidi::SetPara
+ *
+ * <p>The related constants are not real, valid level values.
+ * <code>NSBIDI_DEFAULT_XXX</code> can be used to specify
+ * a default for the paragraph level for
+ * when the <code>SetPara</code> function
+ * shall determine it but there is no
+ * strongly typed character in the input.<p>
+ *
+ * Note that the value for <code>NSBIDI_DEFAULT_LTR</code> is even
+ * and the one for <code>NSBIDI_DEFAULT_RTL</code> is odd,
+ * just like with normal LTR and RTL level values -
+ * these special values are designed that way. Also, the implementation
+ * assumes that NSBIDI_MAX_EXPLICIT_LEVEL is odd.
+ *
+ * @see NSBIDI_DEFAULT_LTR
+ * @see NSBIDI_DEFAULT_RTL
+ * @see NSBIDI_LEVEL_OVERRIDE
+ * @see NSBIDI_MAX_EXPLICIT_LEVEL
+ */
+typedef uint8_t nsBidiLevel;
+
+/** Paragraph level setting.
+ *  If there is no strong character, then set the paragraph level to 0 (left-to-right).
+ */
+#define NSBIDI_DEFAULT_LTR 0xfe
+
+/** Paragraph level setting.
+ *  If there is no strong character, then set the paragraph level to 1 (right-to-left).
+ */
+#define NSBIDI_DEFAULT_RTL 0xff
+
+/**
+ * Maximum explicit embedding level.
+ * (The maximum resolved level can be up to <code>NSBIDI_MAX_EXPLICIT_LEVEL+1</code>).
+ *
+ */
+#define NSBIDI_MAX_EXPLICIT_LEVEL 125
+
+/** Bit flag for level input.
+ *  Overrides directional properties.
+ */
+#define NSBIDI_LEVEL_OVERRIDE 0x80
+
+/**
+ * <code>nsBidiDirection</code> values indicate the text direction.
+ */
+enum nsBidiDirection {
+  /** All left-to-right text This is a 0 value. */
+  NSBIDI_LTR,
+  /** All right-to-left text This is a 1 value. */
+  NSBIDI_RTL,
+  /** Mixed-directional text. */
+  NSBIDI_MIXED
+};
+
 namespace mozilla {
 /*
  * For replaced elements only. Gets the intrinsic dimensions of this element.
@@ -375,6 +442,19 @@ struct IntrinsicSize {
   bool operator!=(const IntrinsicSize& rhs) {
     return !(*this == rhs);
   }
+};
+
+// Pseudo bidi embedding level indicating nonexistence.
+static const nsBidiLevel kBidiLevelNone = 0xff;
+
+struct FrameBidiData
+{
+  nsBidiLevel baseLevel;
+  nsBidiLevel embeddingLevel;
+  // The embedding level of virtual bidi formatting character before
+  // this frame if any. kBidiLevelNone is used to indicate nonexistence
+  // or unnecessity of such virtual character.
+  nsBidiLevel precedingControl;
 };
 
 } // namespace mozilla
@@ -427,7 +507,6 @@ public:
   using ReflowInput = mozilla::ReflowInput;
   using ReflowOutput = mozilla::ReflowOutput;
   using Visibility = mozilla::Visibility;
-  using VisibilityCounter = mozilla::VisibilityCounter;
 
   typedef mozilla::FrameProperties FrameProperties;
   typedef mozilla::layers::Layer Layer;
@@ -443,6 +522,17 @@ public:
   typedef mozilla::LogicalSides LogicalSides;
 
   NS_DECL_QUERYFRAME_TARGET(nsIFrame)
+
+  nsIFrame()
+    : mRect()
+    , mContent(nullptr)
+    , mStyleContext(nullptr)
+    , mParent(nullptr)
+    , mNextSibling(nullptr)
+    , mPrevSibling(nullptr)
+  {
+    mozilla::PodZero(&mOverflow);
+  }
 
   nsPresContext* PresContext() const {
     return StyleContext()->PresContext();
@@ -617,7 +707,7 @@ public:
   #undef STYLE_STRUCT
 
   /** Also forward GetVisitedDependentColor to the style context */
-  nscolor GetVisitedDependentColor(nsCSSProperty aProperty)
+  nscolor GetVisitedDependentColor(nsCSSPropertyID aProperty)
     { return mStyleContext->GetVisitedDependentColor(aProperty); }
 
   /**
@@ -947,11 +1037,31 @@ public:
 
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(FragStretchBSizeProperty, nscoord)
 
+  // The block-axis margin-box size associated with eBClampMarginBoxMinSize.
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BClampMarginBoxMinSizeProperty, nscoord)
+
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(IBaselinePadProperty, nscoord)
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BBaselinePadProperty, nscoord)
 
   NS_DECLARE_FRAME_PROPERTY_WITH_DTOR(GenConProperty, ContentArray,
                                       DestroyContentArray)
+
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BidiDataProperty, mozilla::FrameBidiData)
+
+  mozilla::FrameBidiData GetBidiData()
+  {
+    return Properties().Get(BidiDataProperty());
+  }
+
+  nsBidiLevel GetBaseLevel()
+  {
+    return GetBidiData().baseLevel;
+  }
+
+  nsBidiLevel GetEmbeddingLevel()
+  {
+    return GetBidiData().embeddingLevel;
+  }
 
   nsTArray<nsIContent*>* GetGenConPseudos() {
     return Properties().Get(GenConProperty());
@@ -1073,15 +1183,20 @@ public:
    * Indices into aRadii are the NS_CORNER_* constants in nsStyleConsts.h
    * aSkipSides is a union of SIDE_BIT_LEFT/RIGHT/TOP/BOTTOM bits that says
    * which side(s) to skip.
+   *
+   * Note: GetMarginBoxBorderRadii() and GetShapeBoxBorderRadii() work only
+   * on frames that establish block formatting contexts since they don't
+   * participate in margin-collapsing.
    */
   virtual bool GetBorderRadii(const nsSize& aFrameSize,
                               const nsSize& aBorderArea,
                               Sides aSkipSides,
                               nscoord aRadii[8]) const;
   bool GetBorderRadii(nscoord aRadii[8]) const;
-
+  bool GetMarginBoxBorderRadii(nscoord aRadii[8]) const;
   bool GetPaddingBoxBorderRadii(nscoord aRadii[8]) const;
   bool GetContentBoxBorderRadii(nscoord aRadii[8]) const;
+  bool GetShapeBoxBorderRadii(nscoord aRadii[8]) const;
 
   /**
    * Get the position of the frame's baseline, relative to the top of
@@ -1114,15 +1229,6 @@ public:
   /// for the possible return values and their meanings.
   Visibility GetVisibility() const;
 
-  /// @return true if this frame is either in the displayport now or may
-  /// become visible soon.
-  bool IsVisibleOrMayBecomeVisibleSoon() const
-  {
-    Visibility visibility = GetVisibility();
-    return visibility == Visibility::MAY_BECOME_VISIBLE ||
-           visibility == Visibility::IN_DISPLAYPORT;
-  }
-
   /// Update the visibility state of this frame synchronously.
   /// XXX(seth): Avoid using this method; we should be relying on the refresh
   /// driver for visibility updates. This method, which replaces
@@ -1131,17 +1237,11 @@ public:
   /// the old image visibility code.
   void UpdateVisibilitySynchronously();
 
-  struct VisibilityState
-  {
-    unsigned int mApproximateCounter : 16;
-    unsigned int mInDisplayPortCounter : 16;
-  };
-
-  // A frame property which stores the visibility state of this frame, which
-  // consists of a VisibilityState value that stores counters for each type of
-  // visibility we track. When the visibility of this frame is not being
-  // tracked, this property is absent.
-  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(VisibilityStateProperty, VisibilityState);
+  // A frame property which stores the visibility state of this frame. Right
+  // now that consists of an approximate visibility counter represented as a
+  // uint32_t. When the visibility of this frame is not being tracked, this
+  // property is absent.
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(VisibilityStateProperty, uint32_t);
 
 protected:
 
@@ -1165,7 +1265,6 @@ protected:
    * Called when a frame transitions between visibility states (for example,
    * from nonvisible to visible, or from visible to nonvisible).
    *
-   * @param aOldVisibility    The previous visibility state.
    * @param aNewVisibility    The new visibility state.
    * @param aNonvisibleAction A requested action if the frame has become
    *                          nonvisible. If Nothing(), no action is
@@ -1177,8 +1276,7 @@ protected:
    * Subclasses which override this method should call their parent class's
    * implementation.
    */
-  virtual void OnVisibilityChange(Visibility aOldVisibility,
-                                  Visibility aNewVisibility,
+  virtual void OnVisibilityChange(Visibility aNewVisibility,
                                   Maybe<OnNonvisible> aNonvisibleAction = Nothing());
 
 public:
@@ -1188,19 +1286,12 @@ public:
   ///////////////////////////////////////////////////////////////////////////////
 
   /**
-   * We track the visibility of frames using counters; if any of the counters
-   * are non-zero, then the frame is considered visible. Using counters allows
-   * us to account for situations where the frame may be visible in more than
-   * one place (for example, via -moz-element), and it simplifies the
+   * We track the approximate visibility of frames using a counter; if it's
+   * non-zero, then the frame is considered visible. Using a counter allows us
+   * to account for situations where the frame may be visible in more than one
+   * place (for example, via -moz-element), and it simplifies the
    * implementation of our approximate visibility tracking algorithms.
    *
-   * There are two visibility counters for each frame: the approximate counter
-   * (which is based on our heuristics for which frames may become visible
-   * "soon"), and the in-displayport counter (which records if the frame was
-   * within the displayport at the last paint).
-   *
-   *
-   * @param aCounter          Which counter to increment or decrement.
    * @param aNonvisibleAction A requested action if the frame has become
    *                          nonvisible. If Nothing(), no action is
    *                          requested. If DISCARD_IMAGES is specified, the
@@ -1208,9 +1299,8 @@ public:
    *                          associated with to discard their surfaces if
    *                          possible.
    */
-  void DecVisibilityCount(VisibilityCounter aCounter,
-                          Maybe<OnNonvisible> aNonvisibleAction = Nothing());
-  void IncVisibilityCount(VisibilityCounter aCounter);
+  void DecApproximateVisibleCount(Maybe<OnNonvisible> aNonvisibleAction = Nothing());
+  void IncApproximateVisibleCount();
 
 
   /**
@@ -1533,6 +1623,7 @@ public:
     nsCOMPtr<imgIContainer> mContainer;
     int32_t                 mCursor;
     bool                    mHaveHotspot;
+    bool                    mLoading;
     float                   mHotspotX, mHotspotY;
   };
   /**
@@ -1827,10 +1918,17 @@ public:
   };
 
   struct InlinePrefISizeData : public InlineIntrinsicISizeData {
+    InlinePrefISizeData()
+      : mLineIsEmpty(true)
+    {}
+
     void ForceBreak();
 
     // The default implementation for nsIFrame::AddInlinePrefISize.
     void DefaultAddInlinePrefISize(nscoord aISize);
+
+    // True if the current line contains nothing other than placeholders.
+    bool mLineIsEmpty;
   };
 
   /**
@@ -1893,7 +1991,7 @@ public:
 
   virtual mozilla::IntrinsicSize GetIntrinsicSize() = 0;
 
-  /*
+  /**
    * Get the intrinsic ratio of this element, or nsSize(0,0) if it has
    * no intrinsic ratio.  The intrinsic ratio is the ratio of the
    * height/width of a box with an intrinsic size or the intrinsic
@@ -1909,14 +2007,25 @@ public:
    */
   enum ComputeSizeFlags {
     eDefault =           0,
-    /* Set if the frame is in a context where non-replaced blocks should
+    /**
+     * Set if the frame is in a context where non-replaced blocks should
      * shrink-wrap (e.g., it's floating, absolutely positioned, or
-     * inline-block). */
+     * inline-block).
+     */
     eShrinkWrap =        1 << 0,
-    /* Set if we'd like to compute our 'auto' bsize, regardless of our actual
+    /**
+     * Set if we'd like to compute our 'auto' bsize, regardless of our actual
      * corresponding computed value. (e.g. to get an intrinsic height for flex
-     * items with "min-height: auto" to use during flexbox layout.) */
-    eUseAutoBSize =      1 << 1
+     * items with "min-height: auto" to use during flexbox layout.)
+     */
+    eUseAutoBSize =      1 << 1,
+    /**
+     * Indicates that we should clamp the margin-box min-size to the given CB
+     * size.  This is used for implementing the grid area clamping here:
+     * https://drafts.csswg.org/css-grid/#min-size-auto
+     */
+    eIClampMarginBoxMinSize = 1 << 2, // clamp in our inline axis
+    eBClampMarginBoxMinSize = 1 << 3, // clamp in our block axis
   };
 
   /**
@@ -2020,7 +2129,7 @@ public:
    * If a difference in available size from the previous reflow causes
    * the frame's size to change, it should reflow descendants as needed.
    *
-   * @param aReflowMetrics <i>out</i> parameter where you should return the
+   * @param aReflowOutput <i>out</i> parameter where you should return the
    *          desired size and ascent/descent info. You should include any
    *          space you want for border/padding in the desired size you return.
    *
@@ -2048,7 +2157,7 @@ public:
    *          and whether the next-in-flow is dirty and needs to be reflowed
    */
   virtual void Reflow(nsPresContext*           aPresContext,
-                      ReflowOutput&     aReflowMetrics,
+                      ReflowOutput&     aReflowOutput,
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) = 0;
 
@@ -2523,8 +2632,8 @@ public:
 
   /**
    * Returns a rect that encompasses everything that might be painted by
-   * this frame.  This includes this frame, all its descendent frames, this
-   * frame's outline, and descentant frames' outline, but does not include
+   * this frame.  This includes this frame, all its descendant frames, this
+   * frame's outline, and descendant frames' outline, but does not include
    * areas clipped out by the CSS "overflow" and "clip" properties.
    *
    * HasOverflowRects() (below) will return true when this overflow
@@ -2683,13 +2792,14 @@ public:
   /**
    *  called to discover where this frame, or a parent frame has user-select style
    *  applied, which affects that way that it is selected.
-   *    
-   *  @param aIsSelectable out param. Set to true if the frame can be selected
-   *                       (i.e. is not affected by user-select: none)
+   *
    *  @param aSelectStyle  out param. Returns the type of selection style found
    *                        (using values defined in nsStyleConsts.h).
+   *
+   *  @return Whether the frame can be selected (i.e. is not affected by
+   *          user-select: none)
    */
-  virtual nsresult  IsSelectable(bool* aIsSelectable, uint8_t* aSelectStyle) const = 0;
+  bool IsSelectable(mozilla::StyleUserSelect* aSelectStyle) const;
 
   /** 
    *  Called to retrieve the SelectionController associated with the frame.
@@ -2860,7 +2970,7 @@ public:
    * @param aParentContent the content node corresponding to the parent frame
    * @return whether the frame is a pseudo frame
    */   
-  bool IsPseudoFrame(nsIContent* aParentContent) {
+  bool IsPseudoFrame(const nsIContent* aParentContent) {
     return mContent == aParentContent;
   }
 
@@ -2876,20 +2986,18 @@ public:
   virtual bool SupportsVisibilityHidden() { return true; }
 
   /**
-   * Returns true if the frame has a valid clip rect set via the 'clip'
-   * property, and the 'clip' property applies to this frame. The 'clip'
-   * property applies to HTML frames if they are absolutely positioned. The
-   * 'clip' property applies to SVG frames regardless of the value of the
-   * 'position' property.
+   * Returns the clip rect set via the 'clip' property, if the 'clip' property
+   * applies to this frame; otherwise returns Nothing(). The 'clip' property
+   * applies to HTML frames if they are absolutely positioned. The 'clip'
+   * property applies to SVG frames regardless of the value of the 'position'
+   * property.
    *
-   * If this method returns true, then we also set aRect to the computed clip
-   * rect, with coordinates relative to this frame's origin. aRect must not be
-   * null!
+   * The coordinates of the returned rectangle are relative to this frame's
+   * origin.
    */
-  bool GetClipPropClipRect(const nsStyleDisplay* aDisp,
-                           const nsStyleEffects* aEffects,
-                           nsRect* aRect,
-                           const nsSize& aSize) const;
+  Maybe<nsRect> GetClipPropClipRect(const nsStyleDisplay* aDisp,
+                                    const nsStyleEffects* aEffects,
+                                    const nsSize& aSize) const;
 
   /**
    * Check if this frame is focusable and in the current tab order.
@@ -3172,9 +3280,10 @@ public:
   inline bool IsBlockInside() const;
   inline bool IsBlockOutside() const;
   inline bool IsInlineOutside() const;
-  inline uint8_t GetDisplay() const;
+  inline mozilla::StyleDisplay GetDisplay() const;
   inline bool IsFloating() const;
-  inline bool IsAbsPosContaininingBlock() const;
+  inline bool IsAbsPosContainingBlock() const;
+  inline bool IsFixedPosContainingBlock() const;
   inline bool IsRelativelyPositioned() const;
   inline bool IsAbsolutelyPositioned() const;
 
@@ -3273,6 +3382,26 @@ public:
    */
   bool IsScrolledOutOfView();
 
+  /**
+   * If this returns true, the frame it's called on should get the
+   * NS_FRAME_HAS_DIRTY_CHILDREN bit set on it by the caller; either directly
+   * if it's already in reflow, or via calling FrameNeedsReflow() to schedule a
+   * reflow.
+   */
+  virtual bool RenumberFrameAndDescendants(int32_t* aOrdinal,
+                                           int32_t aDepth,
+                                           int32_t aIncrement,
+                                           bool aForCounting) { return false; }
+
+  /**
+   * Helper function - computes the content-box inline size for aCoord.
+   */
+  nscoord ComputeISizeValue(nsRenderingContext* aRenderingContext,
+                            nscoord             aContainingBlockISize,
+                            nscoord             aContentEdgeToBoxSizing,
+                            nscoord             aBoxSizingToMarginEdge,
+                            const nsStyleCoord& aCoord,
+                            ComputeSizeFlags    aFlags = eDefault);
 protected:
   // Members
   nsRect           mRect;

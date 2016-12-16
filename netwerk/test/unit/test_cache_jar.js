@@ -26,22 +26,6 @@ function makeChan(url, appId, inIsolatedMozBrowser, userContextId) {
                                      inIsolatedMozBrowser: inIsolatedMozBrowser,
                                      userContextId: userContextId,
                                    };
-  chan.notificationCallbacks = {
-    appId: appId,
-    isInIsolatedMozBrowserElement: inIsolatedMozBrowser,
-    userContextId: userContextId,
-    originAttributes: {
-      appId: appId,
-      inIsolatedMozBrowser: inIsolatedMozBrowser,
-      userContextId: userContextId,
-    },
-    QueryInterface: function(iid) {
-      if (iid.equals(Ci.nsILoadContext))
-        return this;
-      throw Cr.NS_ERROR_NO_INTERFACE;
-    },
-    getInterface: function(iid) { return this.QueryInterface(iid); }
-  };
   return chan;
 }
 
@@ -80,7 +64,7 @@ function run_all_tests() {
   let attrs_inBrowser = JSON.stringify({ appId:1, inIsolatedMozBrowser:true });
   let attrs_notInBrowser = JSON.stringify({ appId:1 });
 
-  Services.obs.notifyObservers(null, "clear-origin-data", attrs_inBrowser);
+  Services.obs.notifyObservers(null, "clear-origin-attributes-data", attrs_inBrowser);
 
   for (let test of secondTests) {
     handlers_called = 0;
@@ -89,8 +73,8 @@ function run_all_tests() {
     yield undefined;
   }
 
-  Services.obs.notifyObservers(null, "clear-origin-data", attrs_notInBrowser);
-  Services.obs.notifyObservers(null, "clear-origin-data", attrs_inBrowser);
+  Services.obs.notifyObservers(null, "clear-origin-attributes-data", attrs_notInBrowser);
+  Services.obs.notifyObservers(null, "clear-origin-attributes-data", attrs_inBrowser);
 
   for (let test of thirdTests) {
     handlers_called = 0;
@@ -100,7 +84,7 @@ function run_all_tests() {
   }
 
   let attrs_userContextId = JSON.stringify({ userContextId: 1 });
-  Services.obs.notifyObservers(null, "clear-origin-data", attrs_userContextId);
+  Services.obs.notifyObservers(null, "clear-origin-attributes-data", attrs_userContextId);
 
   for (let test of fourthTests) {
     handlers_called = 0;
@@ -127,8 +111,8 @@ function run_test() {
 
 function doneFirstLoad(req, buffer, expected) {
   // Load it again, make sure it hits the cache
-  var nc = req.notificationCallbacks.getInterface(Ci.nsILoadContext);
-  var chan = makeChan(URL, nc.appId, nc.isInIsolatedMozBrowserElement, nc.userContextId);
+  var oa = req.loadInfo.originAttributes;
+  var chan = makeChan(URL, oa.appId, oa.isInIsolatedMozBrowserElement, oa.userContextId);
   chan.asyncOpen2(new ChannelListener(doneSecondLoad, expected));
 }
 

@@ -9,6 +9,7 @@
 #include "mozilla/PodOperations.h"
 
 #include "jit/JitFrames.h"
+#include "vm/AsyncFunction.h"
 #include "vm/GlobalObject.h"
 #include "vm/Stack.h"
 
@@ -86,8 +87,10 @@ ArgumentsObject::MaybeForwardToCallObject(AbstractFramePtr frame, ArgumentsObjec
     JSScript* script = frame.script();
     if (frame.callee()->needsCallObject() && script->argumentsAliasesFormals()) {
         obj->initFixedSlot(MAYBE_CALL_SLOT, ObjectValue(frame.callObj()));
-        for (AliasedFormalIter fi(script); fi; fi++)
-            data->args[fi.frameIndex()] = MagicScopeSlotValue(fi.scopeSlot());
+        for (PositionalFormalParameterIter fi(script); fi; fi++) {
+            if (fi.closedOver())
+                data->args[fi.argumentSlot()] = MagicEnvSlotValue(fi.location().slot());
+        }
     }
 }
 
@@ -100,8 +103,10 @@ ArgumentsObject::MaybeForwardToCallObject(jit::JitFrameLayout* frame, HandleObje
     if (callee->needsCallObject() && script->argumentsAliasesFormals()) {
         MOZ_ASSERT(callObj && callObj->is<CallObject>());
         obj->initFixedSlot(MAYBE_CALL_SLOT, ObjectValue(*callObj.get()));
-        for (AliasedFormalIter fi(script); fi; fi++)
-            data->args[fi.frameIndex()] = MagicScopeSlotValue(fi.scopeSlot());
+        for (PositionalFormalParameterIter fi(script); fi; fi++) {
+            if (fi.closedOver())
+                data->args[fi.argumentSlot()] = MagicEnvSlotValue(fi.location().slot());
+        }
     }
 }
 
@@ -223,9 +228,8 @@ ArgumentsObject::createTemplateObject(JSContext* cx, bool mapped)
         return nullptr;
 
     AutoSetNewObjectMetadata metadata(cx);
-    JSObject* base = JSObject::create(cx, FINALIZE_KIND, gc::TenuredHeap, shape, group);
-    if (!base)
-        return nullptr;
+    JSObject* base;
+    JS_TRY_VAR_OR_RETURN_NULL(cx, base, JSObject::create(cx, FINALIZE_KIND, gc::TenuredHeap, shape, group));
 
     ArgumentsObject* obj = &base->as<js::ArgumentsObject>();
     obj->initFixedSlot(ArgumentsObject::DATA_SLOT, PrivateValue(nullptr));
@@ -279,9 +283,8 @@ ArgumentsObject::create(JSContext* cx, HandleFunction callee, unsigned numActual
         // to make sure we set the metadata for this arguments object first.
         AutoSetNewObjectMetadata metadata(cx);
 
-        JSObject* base = JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, shape, group);
-        if (!base)
-            return nullptr;
+        JSObject* base;
+        JS_TRY_VAR_OR_RETURN_NULL(cx, base, JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, shape, group));
         obj = &base->as<ArgumentsObject>();
 
         data =
@@ -379,7 +382,9 @@ ArgumentsObject::finishForIon(JSContext* cx, jit::JitFrameLayout* frame,
     ArgumentsData* data =
         reinterpret_cast<ArgumentsData*>(AllocateObjectBuffer<uint8_t>(cx, obj, numBytes));
     if (!data) {
-        // Make the object safe for GC.
+        // Make the object safe for GC. Don't report OOM, the slow path will
+        // retry the allocation.
+        cx->recoverFromOutOfMemory();
         obj->initFixedSlot(DATA_SLOT, PrivateValue(nullptr));
         return nullptr;
     }
@@ -440,8 +445,13 @@ MappedArgGetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue
             vp.setInt32(argsobj.initialLength());
     } else {
         MOZ_ASSERT(JSID_IS_ATOM(id, cx->names().callee));
-        if (!argsobj.hasOverriddenCallee())
-            vp.setObject(argsobj.callee());
+        if (!argsobj.hasOverriddenCallee()) {
+            RootedFunction callee(cx, &argsobj.callee());
+            if (callee->isAsync())
+                vp.setObject(*GetWrappedAsyncFunction(callee));
+            else
+                vp.setObject(*callee);
+        }
     }
     return true;
 }
@@ -463,7 +473,7 @@ MappedArgSetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue
     attrs &= (JSPROP_ENUMERATE | JSPROP_PERMANENT); /* only valid attributes */
 
     RootedFunction callee(cx, &argsobj->callee());
-    RootedScript script(cx, callee->getOrCreateScript(cx));
+    RootedScript script(cx, JSFunction::getOrCreateScript(cx, callee));
     if (!script)
         return false;
 
@@ -576,6 +586,64 @@ MappedArgumentsObject::obj_enumerate(JSContext* cx, HandleObject obj)
     }
 
     return true;
+}
+
+// ES 2017 draft 9.4.4.2
+/* static */ bool
+MappedArgumentsObject::obj_defineProperty(JSContext* cx, HandleObject obj, HandleId id,
+                                          Handle<PropertyDescriptor> desc, ObjectOpResult& result)
+{
+    // Step 1.
+    Rooted<MappedArgumentsObject*> argsobj(cx, &obj->as<MappedArgumentsObject>());
+
+    // Steps 2-3.
+    bool isMapped = false;
+    if (JSID_IS_INT(id)) {
+        unsigned arg = unsigned(JSID_TO_INT(id));
+        isMapped = arg < argsobj->initialLength() && !argsobj->isElementDeleted(arg);
+    }
+
+    // Step 4.
+    Rooted<PropertyDescriptor> newArgDesc(cx, desc);
+    if (!desc.isAccessorDescriptor() && isMapped) {
+        // In this case the live mapping is supposed to keep working,
+        // we have to pass along the Getter/Setter otherwise they are overwritten.
+        newArgDesc.setGetter(MappedArgGetter);
+        newArgDesc.setSetter(MappedArgSetter);
+    }
+
+    // Steps 5-6. NativeDefineProperty will lookup [[Value]] for us.
+    if (!NativeDefineProperty(cx, obj.as<NativeObject>(), id, newArgDesc, result))
+        return false;
+    // Step 7.
+    if (!result.ok())
+        return true;
+
+    // Step 8.
+    if (isMapped) {
+        unsigned arg = unsigned(JSID_TO_INT(id));
+        if (desc.isAccessorDescriptor()) {
+            if (!argsobj->markElementDeleted(cx, arg))
+                return false;
+        } else {
+            if (desc.hasValue()) {
+                RootedFunction callee(cx, &argsobj->callee());
+                RootedScript script(cx, JSFunction::getOrCreateScript(cx, callee));
+                if (!script)
+                    return false;
+                argsobj->setElement(cx, arg, desc.value());
+                if (arg < script->functionNonDelazifying()->nargs())
+                    TypeScript::SetArgument(cx, script, arg, desc.value());
+            }
+            if (desc.hasWritable() && !desc.writable()) {
+                if (!argsobj->markElementDeleted(cx, arg))
+                    return false;
+            }
+        }
+    }
+
+    // Step 9.
+    return result.succeed();
 }
 
 static bool
@@ -796,6 +864,11 @@ const ClassOps MappedArgumentsObject::classOps_ = {
     ArgumentsObject::trace
 };
 
+const ObjectOps MappedArgumentsObject::objectOps_ = {
+    nullptr,                 /* lookupProperty */
+    MappedArgumentsObject::obj_defineProperty
+};
+
 const Class MappedArgumentsObject::class_ = {
     "Arguments",
     JSCLASS_DELAY_METADATA_BUILDER |
@@ -803,7 +876,10 @@ const Class MappedArgumentsObject::class_ = {
     JSCLASS_HAS_CACHED_PROTO(JSProto_Object) |
     JSCLASS_SKIP_NURSERY_FINALIZE |
     JSCLASS_BACKGROUND_FINALIZE,
-    &MappedArgumentsObject::classOps_
+    &MappedArgumentsObject::classOps_,
+    nullptr,
+    nullptr,
+    &MappedArgumentsObject::objectOps_
 };
 
 /*

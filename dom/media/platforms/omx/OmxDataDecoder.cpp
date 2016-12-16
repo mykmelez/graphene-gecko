@@ -160,8 +160,8 @@ OmxDataDecoder::Init()
 
   // TODO: it needs to get permission from resource manager before allocating
   //       Omx component.
-  InvokeAsync(mOmxTaskQueue, mOmxLayer.get(), __func__, &OmxPromiseLayer::Init,
-              mTrackInfo.get())
+  InvokeAsync<const TrackInfo*>(mOmxTaskQueue, mOmxLayer.get(), __func__,
+                                &OmxPromiseLayer::Init, mTrackInfo.get())
     ->Then(mOmxTaskQueue, __func__,
       [self] () {
         // Omx state should be OMX_StateIdle.
@@ -169,13 +169,13 @@ OmxDataDecoder::Init()
         MOZ_ASSERT(self->mOmxState != OMX_StateIdle);
       },
       [self] () {
-        self->RejectInitPromise(DecoderFailureReason::INIT_ERROR, __func__);
+        self->RejectInitPromise(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
       });
 
   return p;
 }
 
-nsresult
+void
 OmxDataDecoder::Input(MediaRawData* aSample)
 {
   LOG("sample %p", aSample);
@@ -195,11 +195,9 @@ OmxDataDecoder::Input(MediaRawData* aSample)
       }
     });
   mOmxTaskQueue->Dispatch(r.forget());
-
-  return NS_OK;
 }
 
-nsresult
+void
 OmxDataDecoder::Flush()
 {
   LOG("");
@@ -215,21 +213,17 @@ OmxDataDecoder::Flush()
   while (mFlushing) {
     lock.Wait();
   }
-
-  return NS_OK;
 }
 
-nsresult
+void
 OmxDataDecoder::Drain()
 {
   LOG("");
 
   mOmxTaskQueue->Dispatch(NewRunnableMethod(this, &OmxDataDecoder::SendEosBuffer));
-
-  return NS_OK;
 }
 
-nsresult
+void
 OmxDataDecoder::Shutdown()
 {
   LOG("");
@@ -250,8 +244,6 @@ OmxDataDecoder::Shutdown()
 
   mOmxTaskQueue->BeginShutdown();
   mOmxTaskQueue->AwaitShutdownAndIdle();
-
-  return NS_OK;
 }
 
 void
@@ -275,7 +267,6 @@ OmxDataDecoder::DoAsyncShutdown()
            [self] () {
              self->mOmxLayer->Shutdown();
            })
-    ->CompletionPromise()
     ->Then(mOmxTaskQueue, __func__,
            [self] () -> RefPtr<OmxCommandPromise> {
              RefPtr<OmxCommandPromise> p =
@@ -298,7 +289,6 @@ OmxDataDecoder::DoAsyncShutdown()
            [self] () {
              self->mOmxLayer->Shutdown();
            })
-    ->CompletionPromise()
     ->Then(mOmxTaskQueue, __func__,
            [self] () {
              LOGL("DoAsyncShutdown: OMX_StateLoaded, it is safe to shutdown omx");
@@ -438,9 +428,9 @@ OmxDataDecoder::EmptyBufferFailure(OmxBufferFailureHolder aFailureHolder)
 }
 
 void
-OmxDataDecoder::NotifyError(OMX_ERRORTYPE aOmxError, const char* aLine, MediaDataDecoderError aError)
+OmxDataDecoder::NotifyError(OMX_ERRORTYPE aOmxError, const char* aLine, const MediaResult& aError)
 {
-  LOG("NotifyError %d (%d) at %s", aOmxError, aError, aLine);
+  LOG("NotifyError %d (%d) at %s", aOmxError, aError.Code(), aLine);
   mCallback->Error(aError);
 }
 
@@ -559,13 +549,13 @@ OmxDataDecoder::ResolveInitPromise(const char* aMethodName)
 }
 
 void
-OmxDataDecoder::RejectInitPromise(DecoderFailureReason aReason, const char* aMethodName)
+OmxDataDecoder::RejectInitPromise(MediaResult aError, const char* aMethodName)
 {
   RefPtr<OmxDataDecoder> self = this;
   nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableFunction([self, aReason, aMethodName] () {
+    NS_NewRunnableFunction([self, aError, aMethodName] () {
       MOZ_ASSERT(self->mReaderTaskQueue->IsCurrentThreadIn());
-      self->mInitPromise.RejectIfExists(aReason, aMethodName);
+      self->mInitPromise.RejectIfExists(aError, aMethodName);
     });
   mReaderTaskQueue->Dispatch(r.forget());
 }
@@ -591,7 +581,7 @@ OmxDataDecoder::OmxStateRunner()
                MOZ_ASSERT(self->mOmxState == OMX_StateIdle);
              },
              [self] () {
-               self->RejectInitPromise(DecoderFailureReason::INIT_ERROR, __func__);
+               self->RejectInitPromise(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
              });
 
     // Allocate input and output buffers.
@@ -599,7 +589,7 @@ OmxDataDecoder::OmxStateRunner()
     for(const auto id : types) {
       if (NS_FAILED(AllocateBuffers(id))) {
         LOG("Failed to allocate buffer on port %d", id);
-        RejectInitPromise(DecoderFailureReason::INIT_ERROR, __func__);
+        RejectInitPromise(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
         break;
       }
     }
@@ -614,7 +604,7 @@ OmxDataDecoder::OmxStateRunner()
                self->ResolveInitPromise(__func__);
              },
              [self] () {
-               self->RejectInitPromise(DecoderFailureReason::INIT_ERROR, __func__);
+               self->RejectInitPromise(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
              });
   } else if (mOmxState == OMX_StateExecuting) {
     // Configure codec once it gets OMX_StateExecuting state.
@@ -698,7 +688,8 @@ OmxDataDecoder::Event(OMX_EVENTTYPE aEvent, OMX_U32 aData1, OMX_U32 aData2)
     {
       // Got error during decoding, send msg to MFR skipping to next key frame.
       if (aEvent == OMX_EventError && mOmxState == OMX_StateExecuting) {
-        NotifyError((OMX_ERRORTYPE)aData1, __func__, MediaDataDecoderError::DECODE_ERROR);
+        NotifyError((OMX_ERRORTYPE)aData1, __func__,
+                    MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR, __func__));
         return true;
       }
       LOG("WARNING: got none handle event: %d, aData1: %d, aData2: %d",
@@ -826,7 +817,6 @@ OmxDataDecoder::PortSettingsChanged()
              [self] () {
                self->NotifyError(OMX_ErrorUndefined, __func__);
              })
-      ->CompletionPromise()
       ->Then(mOmxTaskQueue, __func__,
              [self] () {
                LOGL("PortSettingsChanged: port settings changed complete");
@@ -1024,15 +1014,16 @@ MediaDataHelper::CreateYUV420VideoData(BufferData* aBufferData)
   b.mPlanes[2].mSkip = 0;
 
   VideoInfo info(*mTrackInfo->GetAsVideoInfo());
-  RefPtr<VideoData> data = VideoData::Create(info,
-                                             mImageContainer,
-                                             0, // Filled later by caller.
-                                             0, // Filled later by caller.
-                                             1, // We don't know the duration.
-                                             b,
-                                             0, // Filled later by caller.
-                                             -1,
-                                             info.ImageRect());
+  RefPtr<VideoData> data =
+    VideoData::CreateAndCopyData(info,
+                                 mImageContainer,
+                                 0, // Filled later by caller.
+                                 0, // Filled later by caller.
+                                 1, // We don't know the duration.
+                                 b,
+                                 0, // Filled later by caller.
+                                 -1,
+                                 info.ImageRect());
 
   LOG("YUV420 VideoData: disp width %d, height %d, pic width %d, height %d, time %ld",
       info.mDisplay.width, info.mDisplay.height, info.mImage.width,

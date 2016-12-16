@@ -74,9 +74,6 @@ JS_ObjectCountDynamicSlots(JS::HandleObject obj);
 extern JS_FRIEND_API(size_t)
 JS_SetProtoCalled(JSContext* cx);
 
-extern JS_FRIEND_API(bool)
-JS_ImmutablePrototypesEnabled();
-
 extern JS_FRIEND_API(size_t)
 JS_GetCustomIteratorCount(JSContext* cx);
 
@@ -110,7 +107,7 @@ JS_TraceObjectGroupCycleCollectorChildren(JS::CallbackTracer* trc, JS::GCCellPtr
 
 enum {
     JS_TELEMETRY_GC_REASON,
-    JS_TELEMETRY_GC_IS_COMPARTMENTAL,
+    JS_TELEMETRY_GC_IS_ZONE_GC,
     JS_TELEMETRY_GC_MS,
     JS_TELEMETRY_GC_BUDGET_MS,
     JS_TELEMETRY_GC_ANIMATION_MS,
@@ -124,16 +121,21 @@ enum {
     JS_TELEMETRY_GC_SLOW_PHASE,
     JS_TELEMETRY_GC_MMU_50,
     JS_TELEMETRY_GC_RESET,
+    JS_TELEMETRY_GC_RESET_REASON,
     JS_TELEMETRY_GC_INCREMENTAL_DISABLED,
     JS_TELEMETRY_GC_NON_INCREMENTAL,
+    JS_TELEMETRY_GC_NON_INCREMENTAL_REASON,
     JS_TELEMETRY_GC_SCC_SWEEP_TOTAL_MS,
     JS_TELEMETRY_GC_SCC_SWEEP_MAX_PAUSE_MS,
     JS_TELEMETRY_GC_MINOR_REASON,
     JS_TELEMETRY_GC_MINOR_REASON_LONG,
     JS_TELEMETRY_GC_MINOR_US,
+    JS_TELEMETRY_GC_NURSERY_BYTES,
+    JS_TELEMETRY_GC_PRETENURE_COUNT,
     JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT,
     JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_ADDONS,
     JS_TELEMETRY_ADDON_EXCEPTIONS,
+    JS_TELEMETRY_AOT_USAGE,
     JS_TELEMETRY_END
 };
 
@@ -491,9 +493,9 @@ IsAtomsZone(JS::Zone* zone);
 
 struct WeakMapTracer
 {
-    JSRuntime* runtime;
+    JSContext* context;
 
-    explicit WeakMapTracer(JSRuntime* rt) : runtime(rt) {}
+    explicit WeakMapTracer(JSContext* cx) : context(cx) {}
 
     // Weak map tracer callback, called once for every binding of every
     // weak map that was live at the time of the last garbage collection.
@@ -523,10 +525,17 @@ extern JS_FRIEND_API(JSObject*)
 GetWeakmapKeyDelegate(JSObject* key);
 
 /**
- * Invoke cellCallback on every gray JS_OBJECT in the given zone.
+ * Invoke cellCallback on every gray JSObject in the given zone.
  */
 extern JS_FRIEND_API(void)
 IterateGrayObjects(JS::Zone* zone, GCThingCallback cellCallback, void* data);
+
+/**
+ * Invoke cellCallback on every gray JSObject in the given zone while cycle
+ * collection is in progress.
+ */
+extern JS_FRIEND_API(void)
+IterateGrayObjectsUnderCC(JS::Zone* zone, GCThingCallback cellCallback, void* data);
 
 #ifdef JS_HAS_CTYPES
 extern JS_FRIEND_API(size_t)
@@ -635,17 +644,6 @@ GetObjectJSClass(JSObject* obj)
 JS_FRIEND_API(const Class*)
 ProtoKeyToClass(JSProtoKey key);
 
-// Returns true if the standard class identified by |key| inherits from
-// another standard class (in addition to Object) along its proto chain.
-//
-// In practice, this only returns true for Error subtypes.
-inline bool
-StandardClassIsDependent(JSProtoKey key)
-{
-    const Class* clasp = ProtoKeyToClass(key);
-    return clasp && clasp->specDefined() && clasp->specDependent();
-}
-
 // Returns the key for the class inherited by a given standard class (that
 // is to say, the prototype of this standard class's prototype).
 //
@@ -654,15 +652,15 @@ StandardClassIsDependent(JSProtoKey key)
 // cached proto key, except in cases where multiple JSProtoKeys share a
 // JSClass.
 inline JSProtoKey
-ParentKeyForStandardClass(JSProtoKey key)
+InheritanceProtoKeyForStandardClass(JSProtoKey key)
 {
     // [Object] has nothing to inherit from.
     if (key == JSProto_Object)
         return JSProto_Null;
 
-    // If we're dependent, return the key of the class we depend on.
-    if (StandardClassIsDependent(key))
-        return ProtoKeyToClass(key)->specParentKey();
+    // If we're ClassSpec defined return the proto key from that
+    if (ProtoKeyToClass(key)->specDefined())
+        return ProtoKeyToClass(key)->specInheritanceProtoKey();
 
     // Otherwise, we inherit [Object].
     return JSProto_Object;
@@ -997,9 +995,7 @@ RunningWithTrustedPrincipals(JSContext* cx);
 inline uintptr_t
 GetNativeStackLimit(JSContext* cx, StackKind kind, int extraAllowance = 0)
 {
-    PerThreadDataFriendFields* mainThread =
-      PerThreadDataFriendFields::getMainThread(GetRuntime(cx));
-    uintptr_t limit = mainThread->nativeStackLimit[kind];
+    uintptr_t limit = ContextFriendFields::get(cx)->nativeStackLimit[kind];
 #if JS_STACK_GROWTH_DIRECTION > 0
     limit += extraAllowance;
 #else
@@ -1445,9 +1441,9 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
         return reportp;
     }
 
-    const char* message()
+    const JS::ConstUTF8CharsZ toStringResult()
     {
-        return message_;
+        return toStringResult_;
     }
 
   private:
@@ -1457,8 +1453,8 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     //
     // Returns false if we fail to actually populate the ErrorReport
     // for some reason (probably out of memory).
-    bool populateUncaughtExceptionReport(JSContext* cx, ...);
-    bool populateUncaughtExceptionReportVA(JSContext* cx, va_list ap);
+    bool populateUncaughtExceptionReportUTF8(JSContext* cx, ...);
+    bool populateUncaughtExceptionReportUTF8VA(JSContext* cx, va_list ap);
 
     // Reports exceptions from add-on scopes to telementry.
     void ReportAddonExceptionToTelementry(JSContext* cx);
@@ -1466,15 +1462,8 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     // We may have a provided JSErrorReport, so need a way to represent that.
     JSErrorReport* reportp;
 
-    // And we may have a message.
-    const char* message_;
-
     // Or we may need to synthesize a JSErrorReport one of our own.
     JSErrorReport ownedReport;
-
-    // Or a message of our own.  If this is non-null, we need to clean up both
-    // it and ownedReport.
-    char* ownedMessage;
 
     // And we have a string to maybe keep alive that has pointers into
     // it from ownedReport.
@@ -1486,14 +1475,14 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     // And we need to root our exception value.
     JS::RootedObject exnObject;
 
-    // And possibly some byte storage for our message_.
-    JSAutoByteString bytesStorage;
-
     // And for our filename.
     JSAutoByteString filename;
 
-    // True if we need to free message_ and the stuff in ownedReport
-    bool ownsMessageAndReport;
+    // We may have a result of error.toString().
+    // FIXME: We should not call error.toString(), since it could have side
+    //        effect (see bug 633623).
+    JS::ConstUTF8CharsZ toStringResult_;
+    JSAutoByteString toStringResultBytesStorage;
 };
 
 /* Implemented in vm/StructuredClone.cpp. */
@@ -1989,7 +1978,7 @@ JS_ArrayBufferHasData(JSObject* obj);
  * that it would pass such a test: it is an ArrayBuffer or a wrapper of an
  * ArrayBuffer, and the unwrapping will succeed.
  *
- * *isSharedMemory will be set to false, the argument is present to simplify
+ * |*isSharedMemory| will be set to false, the argument is present to simplify
  * its use from code that also interacts with SharedArrayBuffer.
  */
 extern JS_FRIEND_API(uint8_t*)
@@ -2059,7 +2048,7 @@ JS_GetArrayBufferViewByteLength(JSObject* obj);
  * pass such a test: it is a typed array or a wrapper of a typed array, and the
  * unwrapping will succeed.
  *
- * *isSharedMemory will be set to true if the typed array maps a
+ * |*isSharedMemory| will be set to true if the typed array maps a
  * SharedArrayBuffer, otherwise to false.
  */
 
@@ -2097,25 +2086,14 @@ JS_GetArrayBufferViewData(JSObject* obj, bool* isSharedMemory, const JS::AutoChe
 extern JS_FRIEND_API(JSObject*)
 JS_GetArrayBufferViewBuffer(JSContext* cx, JS::HandleObject obj, bool* isSharedMemory);
 
-enum DetachDataDisposition {
-    ChangeData,
-    KeepData
-};
-
 /**
  * Detach an ArrayBuffer, causing all associated views to no longer refer to
  * the ArrayBuffer's original attached memory.
  *
- * The |changeData| argument is a hint to inform internal behavior with respect
- * to the ArrayBuffer's internal pointer to associated data.  |ChangeData|
- * attempts to set the internal pointer to fresh memory of the same size as the
- * original memory; |KeepData| attempts to preserve the original pointer, even
- * while the ArrayBuffer appears observably detached.  There is no guarantee
- * this parameter is respected -- it's only a hint.
+ * The |changeData| argument is obsolete and ignored.
  */
 extern JS_FRIEND_API(bool)
-JS_DetachArrayBuffer(JSContext* cx, JS::HandleObject obj,
-                     DetachDataDisposition changeData);
+JS_DetachArrayBuffer(JSContext* cx, JS::HandleObject obj);
 
 /**
  * Check whether the obj is a detached ArrayBufferObject. Note that this may
@@ -2132,14 +2110,14 @@ JS_FRIEND_API(bool)
 JS_IsDataViewObject(JSObject* obj);
 
 /**
- * Create a new DataView using the given ArrayBuffer for storage. The given
- * buffer must be an ArrayBuffer (or a cross-compartment wrapper of an
- * ArrayBuffer), and the offset and length must fit within the bounds of the
- * arrayBuffer. Currently, nullptr will be returned and an exception will be
- * thrown if these conditions do not hold, but do not depend on that behavior.
+ * Create a new DataView using the given buffer for storage. The given buffer
+ * must be an ArrayBuffer or SharedArrayBuffer (or a cross-compartment wrapper
+ * of either type), and the offset and length must fit within the bounds of the
+ * buffer. Currently, nullptr will be returned and an exception will be thrown
+ * if these conditions do not hold, but do not depend on that behavior.
  */
 JS_FRIEND_API(JSObject*)
-JS_NewDataView(JSContext* cx, JS::HandleObject arrayBuffer, uint32_t byteOffset, int32_t byteLength);
+JS_NewDataView(JSContext* cx, JS::HandleObject buffer, uint32_t byteOffset, int32_t byteLength);
 
 /**
  * Return the byte offset of a data view into its array buffer. |obj| must be a
@@ -2170,9 +2148,12 @@ JS_GetDataViewByteLength(JSObject* obj);
  * it would pass such a test: it is a data view or a wrapper of a data view,
  * and the unwrapping will succeed. If cx is nullptr, then DEBUG builds may be
  * unable to assert when unwrapping should be disallowed.
+ *
+ * |*isSharedMemory| will be set to true if the DataView maps a SharedArrayBuffer,
+ * otherwise to false.
  */
 JS_FRIEND_API(void*)
-JS_GetDataViewData(JSObject* obj, const JS::AutoCheckCannotGC&);
+JS_GetDataViewData(JSObject* obj, bool* isSharedMemory, const JS::AutoCheckCannotGC&);
 
 namespace js {
 
@@ -2792,9 +2773,6 @@ SetPropertyIgnoringNamedGetter(JSContext* cx, JS::HandleObject obj, JS::HandleId
                                JS::Handle<JS::PropertyDescriptor> ownDesc,
                                JS::ObjectOpResult& result);
 
-JS_FRIEND_API(void)
-ReportErrorWithId(JSContext* cx, const char* msg, JS::HandleId id);
-
 // This function is for one specific use case, please don't use this for anything else!
 extern JS_FRIEND_API(bool)
 ExecuteInGlobalAndReturnScope(JSContext* cx, JS::HandleObject obj, JS::HandleScript script,
@@ -2831,12 +2809,12 @@ SetJitExceptionHandler(JitExceptionHandler handler);
 #endif
 
 /**
- * Get the nearest enclosing with scope object for a given function. If the
- * function is not scripted or is not enclosed by a with scope, returns the
- * global.
+ * Get the nearest enclosing with environment object for a given function. If
+ * the function is not scripted or is not enclosed by a with scope, returns
+ * the global.
  */
 extern JS_FRIEND_API(JSObject*)
-GetNearestEnclosingWithScopeObjectForFunction(JSFunction* fun);
+GetNearestEnclosingWithEnvironmentObjectForFunction(JSFunction* fun);
 
 /**
  * Get the first SavedFrame object in this SavedFrame stack whose principals are
@@ -2862,7 +2840,7 @@ ConvertArgsToArray(JSContext* cx, const JS::CallArgs& args);
  * invariant that actual Window objects (the global objects of web pages) are
  * never directly exposed to script. Instead we often substitute a WindowProxy.
  *
- * The scope chain, on the other hand, contains the Window and never its
+ * The environment chain, on the other hand, contains the Window and never its
  * WindowProxy.
  *
  * As a result, we have calls to these "substitute-this-object-for-that-object"
@@ -2980,7 +2958,7 @@ class MemProfiler
         return sActiveProfilerCount > 0;
     }
 
-    static MemProfiler* GetMemProfiler(JSRuntime* runtime);
+    static MemProfiler* GetMemProfiler(JSContext* context);
 
     static void SetNativeProfiler(NativeProfiler* aProfiler) {
         sNativeProfiler = aProfiler;

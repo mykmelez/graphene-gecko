@@ -47,20 +47,15 @@ public:
   virtual void RenderLayer() override
   {
     RenderMaskLayers(this);
-    
-    DefaultComputeSupportsComponentAlphaChildren();
 
-    AutoTArray<Layer*, 12> children;
-    SortChildrenBy3DZOrder(children);
+    DefaultComputeSupportsComponentAlphaChildren();
 
     ReadbackProcessor readback;
     readback.BuildUpdates(this);
 
+    nsTArray<Layer*> children = CollectChildren();
     for (uint32_t i = 0; i < children.Length(); i++) {
       Layer* child = children.ElementAt(i);
-      if (!child->IsVisible()) {
-        continue;
-      }
 
       ToClientLayer(child)->RenderLayerWithReadback(&readback);
 
@@ -135,6 +130,11 @@ public:
   void ForceIntermediateSurface() { mUseIntermediateSurface = true; }
 
   void SetSupportsComponentAlphaChildren(bool aSupports) { mSupportsComponentAlphaChildren = aSupports; }
+
+  virtual void Disconnect() override
+  {
+    ClientLayer::Disconnect();
+  }
 
 protected:
   ClientLayerManager* ClientManager()

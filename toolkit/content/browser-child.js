@@ -8,6 +8,7 @@ var Cu = Components.utils;
 var Cr = Components.results;
 
 Cu.import("resource://gre/modules/AppConstants.jsm");
+Cu.import("resource://gre/modules/BrowserUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import("resource://gre/modules/RemoteAddonsChild.jsm");
@@ -49,7 +50,7 @@ var WebProgressListener = {
     this._filter = null;
   },
 
-  _requestSpec: function (aRequest, aPropertyName) {
+  _requestSpec: function(aRequest, aPropertyName) {
     if (!aRequest || !(aRequest instanceof Ci.nsIChannel))
       return null;
     return aRequest.QueryInterface(Ci.nsIChannel)[aPropertyName].spec;
@@ -368,13 +369,13 @@ var SecurityUI = {
 };
 
 var ControllerCommands = {
-  init: function () {
+  init: function() {
     addMessageListener("ControllerCommands:Do", this);
     addMessageListener("ControllerCommands:DoWithParams", this);
   },
 
   receiveMessage: function(message) {
-    switch(message.name) {
+    switch (message.name) {
       case "ControllerCommands:Do":
         if (docShell.isCommandEnabled(message.data))
           docShell.doCommand(message.data);
@@ -402,7 +403,7 @@ var ControllerCommands = {
 
 ControllerCommands.init()
 
-addEventListener("DOMTitleChanged", function (aEvent) {
+addEventListener("DOMTitleChanged", function(aEvent) {
   let document = content.document;
   switch (aEvent.type) {
   case "DOMTitleChanged":
@@ -414,13 +415,13 @@ addEventListener("DOMTitleChanged", function (aEvent) {
   }
 }, false);
 
-addEventListener("DOMWindowClose", function (aEvent) {
+addEventListener("DOMWindowClose", function(aEvent) {
   if (!aEvent.isTrusted)
     return;
   sendAsyncMessage("DOMWindowClose");
 }, false);
 
-addEventListener("ImageContentLoaded", function (aEvent) {
+addEventListener("ImageContentLoaded", function(aEvent) {
   if (content.document instanceof Ci.nsIImageDocument) {
     let req = content.document.imageRequest;
     if (!req.image)
@@ -485,31 +486,31 @@ const ZoomManager = {
   }
 };
 
-addMessageListener("FullZoom", function (aMessage) {
+addMessageListener("FullZoom", function(aMessage) {
   ZoomManager.fullZoom = aMessage.data.value;
 });
 
-addMessageListener("TextZoom", function (aMessage) {
+addMessageListener("TextZoom", function(aMessage) {
   ZoomManager.textZoom = aMessage.data.value;
 });
 
-addEventListener("FullZoomChange", function () {
+addEventListener("FullZoomChange", function() {
   if (ZoomManager.refreshFullZoom()) {
     sendAsyncMessage("FullZoomChange", { value: ZoomManager.fullZoom });
   }
 }, false);
 
-addEventListener("TextZoomChange", function (aEvent) {
+addEventListener("TextZoomChange", function(aEvent) {
   if (ZoomManager.refreshTextZoom()) {
     sendAsyncMessage("TextZoomChange", { value: ZoomManager.textZoom });
   }
 }, false);
 
-addEventListener("ZoomChangeUsingMouseWheel", function () {
+addEventListener("ZoomChangeUsingMouseWheel", function() {
   sendAsyncMessage("ZoomChangeUsingMouseWheel", {});
 }, false);
 
-addMessageListener("UpdateCharacterSet", function (aMessage) {
+addMessageListener("UpdateCharacterSet", function(aMessage) {
   docShell.charset = aMessage.data.value;
   docShell.gatherCharsetMenuTelemetry();
 });
@@ -517,7 +518,7 @@ addMessageListener("UpdateCharacterSet", function (aMessage) {
 /**
  * Remote thumbnail request handler for PageThumbs thumbnails.
  */
-addMessageListener("Browser:Thumbnail:Request", function (aMessage) {
+addMessageListener("Browser:Thumbnail:Request", function(aMessage) {
   let snapshot;
   let args = aMessage.data.additionalArgs;
   let fullScale = args ? args.fullScale : false;
@@ -531,7 +532,7 @@ addMessageListener("Browser:Thumbnail:Request", function (aMessage) {
     PageThumbUtils.createSnapshotThumbnail(content, snapshot, args);
   }
 
-  snapshot.toBlob(function (aBlob) {
+  snapshot.toBlob(function(aBlob) {
     sendAsyncMessage("Browser:Thumbnail:Response", {
       thumbnail: aBlob,
       id: aMessage.data.id
@@ -542,11 +543,39 @@ addMessageListener("Browser:Thumbnail:Request", function (aMessage) {
 /**
  * Remote isSafeForCapture request handler for PageThumbs.
  */
-addMessageListener("Browser:Thumbnail:CheckState", function (aMessage) {
+addMessageListener("Browser:Thumbnail:CheckState", function(aMessage) {
   let result = PageThumbUtils.shouldStoreContentThumbnail(content, docShell);
   sendAsyncMessage("Browser:Thumbnail:CheckState:Response", {
     result: result
   });
+});
+
+/**
+ * Remote GetOriginalURL request handler for PageThumbs.
+ */
+addMessageListener("Browser:Thumbnail:GetOriginalURL", function(aMessage) {
+  let channel = docShell.currentDocumentChannel;
+  let channelError = PageThumbUtils.isChannelErrorResponse(channel);
+  let originalURL;
+  try {
+    originalURL = channel.originalURI.spec;
+  } catch (ex) {}
+  sendAsyncMessage("Browser:Thumbnail:GetOriginalURL:Response", {
+    channelError: channelError,
+    originalURL: originalURL,
+  });
+});
+
+/**
+ * Remote createAboutBlankContentViewer request handler.
+ */
+addMessageListener("Browser:CreateAboutBlank", function(aMessage) {
+  if (!content.document || content.document.documentURI != "about:blank") {
+    throw new Error("Can't create a content viewer unless on about:blank");
+  }
+  let principal = aMessage.data;
+  principal = BrowserUtils.principalWithMatchingOA(principal, content.document.nodePrincipal);
+  docShell.createAboutBlankContentViewer(principal);
 });
 
 // The AddonsChild needs to be rooted so that it stays alive as long as
@@ -572,82 +601,6 @@ addMessageListener("NetworkPrioritizer:SetPriority", (msg) => {
   loadGroup.priority = msg.data.priority;
 });
 
-var AutoCompletePopup = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup]),
-
-  init: function() {
-    // Hook up the form fill autocomplete controller.
-    let controller = Cc["@mozilla.org/satchel/form-fill-controller;1"]
-                       .getService(Ci.nsIFormFillController);
-
-    controller.attachToBrowser(docShell, this.QueryInterface(Ci.nsIAutoCompletePopup));
-
-    this._input = null;
-    this._popupOpen = false;
-
-    addMessageListener("FormAutoComplete:HandleEnter", message => {
-      this.selectedIndex = message.data.selectedIndex;
-
-      let controller = Components.classes["@mozilla.org/autocomplete/controller;1"].
-                  getService(Components.interfaces.nsIAutoCompleteController);
-      controller.handleEnter(message.data.isPopupSelection);
-    });
-
-    addEventListener("unload", function() {
-      AutoCompletePopup.destroy();
-    });
-  },
-
-  destroy: function() {
-    let controller = Cc["@mozilla.org/satchel/form-fill-controller;1"]
-                       .getService(Ci.nsIFormFillController);
-
-    controller.detachFromBrowser(docShell);
-  },
-
-  get input () { return this._input; },
-  get overrideValue () { return null; },
-  set selectedIndex (index) { },
-  get selectedIndex () {
-    // selectedIndex getter must be synchronous because we need the
-    // correct value when the controller is in controller::HandleEnter.
-    // We can't easily just let the parent inform us the new value every
-    // time it changes because not every action that can change the
-    // selectedIndex is trivial to catch (e.g. moving the mouse over the
-    // list).
-    return sendSyncMessage("FormAutoComplete:GetSelectedIndex", {});
-  },
-  get popupOpen () {
-    return this._popupOpen;
-  },
-
-  openAutocompletePopup: function (input, element) {
-    if (!this._popupOpen) {
-      // The search itself normally opens the popup itself, but in some cases,
-      // nsAutoCompleteController tries to use cached results so notify our
-      // popup to reuse the last results.
-      sendAsyncMessage("FormAutoComplete:MaybeOpenPopup", {});
-    }
-    this._input = input;
-    this._popupOpen = true;
-  },
-
-  closePopup: function () {
-    this._popupOpen = false;
-    sendAsyncMessage("FormAutoComplete:ClosePopup", {});
-  },
-
-  invalidate: function () {
-  },
-
-  selectBy: function(reverse, page) {
-    this._index = sendSyncMessage("FormAutoComplete:SelectBy", {
-      reverse: reverse,
-      page: page
-    });
-  }
-}
-
 addMessageListener("InPermitUnload", msg => {
   let inPermitUnload = docShell.contentViewer && docShell.contentViewer.inPermitUnload;
   sendAsyncMessage("InPermitUnload", {id: msg.data.id, inPermitUnload});
@@ -670,9 +623,3 @@ var outerWindowID = content.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindowUtils)
                            .outerWindowID;
 sendAsyncMessage("Browser:Init", {outerWindowID: outerWindowID});
-addMessageListener("Browser:InitReceived", function onInitReceived(msg) {
-  removeMessageListener("Browser:InitReceived", onInitReceived);
-  if (msg.data.initPopup) {
-    AutoCompletePopup.init();
-  }
-});

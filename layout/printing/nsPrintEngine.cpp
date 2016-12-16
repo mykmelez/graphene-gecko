@@ -26,7 +26,6 @@
 // Print Options
 #include "nsIPrintSettings.h"
 #include "nsIPrintSettingsService.h"
-#include "nsIPrintOptions.h"
 #include "nsIPrintSession.h"
 #include "nsGfxCIID.h"
 #include "nsIServiceManager.h"
@@ -1072,8 +1071,11 @@ nsPrintEngine::ShowPrintProgress(bool aIsForPrinting, bool& aDoNotify)
                                                      getter_AddRefs(mPrt->mPrintProgressParams), 
                                                      &aDoNotify);
       if (NS_SUCCEEDED(rv)) {
-        if (printProgressListener && mPrt->mPrintProgressParams) {
+        if (printProgressListener) {
           mPrt->mPrintProgressListeners.AppendObject(printProgressListener);
+        }
+
+        if (mPrt->mPrintProgressParams) {
           SetDocAndURLIntoProgress(mPrt->mPrintObject, mPrt->mPrintProgressParams);
         }
       }
@@ -1215,10 +1217,10 @@ nsPrintEngine::GetDocumentTitleAndURL(nsIDocument* aDoc,
   if (!exposableURI) return;
 
   nsAutoCString urlCStr;
-  exposableURI->GetSpec(urlCStr);
+  nsresult rv = exposableURI->GetSpec(urlCStr);
+  if (NS_FAILED(rv)) return;
 
-  nsresult rv;
-  nsCOMPtr<nsITextToSubURI> textToSubURI = 
+  nsCOMPtr<nsITextToSubURI> textToSubURI =
     do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
   if (NS_FAILED(rv)) return;
 
@@ -1869,8 +1871,6 @@ nsPrintEngine::OnStateChange(nsIWebProgress* aWebProgress,
     return NS_OK;
   }
   if (aStateFlags & STATE_START) {
-    nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
-
     ++mLoadCounter;
   } else if (aStateFlags & STATE_STOP) {
     mDidLoadDataForPrinting = true;
@@ -2614,6 +2614,7 @@ DocHasPrintCallbackCanvas(nsIDocument* aDoc)
 /**
  * Checks to see if the document this print engine is associated with has any
  * canvases that have a mozPrintCallback.
+ * https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement#Properties
  */
 bool
 nsPrintEngine::HasPrintCallbackCanvas()
@@ -3382,7 +3383,7 @@ nsPrintEngine::TurnScriptingOn(bool aDoTurnOn)
 
     if (nsCOMPtr<nsPIDOMWindowInner> window = doc->GetInnerWindow()) {
       nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(window);
-      NS_WARN_IF_FALSE(go && go->GetGlobalJSObject(), "Can't get global");
+      NS_WARNING_ASSERTION(go && go->GetGlobalJSObject(), "Can't get global");
       nsresult propThere = NS_PROPTABLE_PROP_NOT_THERE;
       doc->GetProperty(nsGkAtoms::scriptEnabledBeforePrintOrPreview,
                        &propThere);
@@ -3392,7 +3393,7 @@ nsPrintEngine::TurnScriptingOn(bool aDoTurnOn)
           if (go && go->GetGlobalJSObject()) {
             xpc::Scriptability::Get(go->GetGlobalJSObject()).Unblock();
           }
-          window->ResumeTimeouts(false);
+          window->Resume();
         }
       } else {
         // Have to be careful, because people call us over and over again with
@@ -3406,7 +3407,7 @@ nsPrintEngine::TurnScriptingOn(bool aDoTurnOn)
           if (go && go->GetGlobalJSObject()) {
             xpc::Scriptability::Get(go->GetGlobalJSObject()).Block();
           }
-          window->SuspendTimeouts(1, false);
+          window->Suspend();
         }
       }
     }

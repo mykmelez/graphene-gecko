@@ -30,6 +30,7 @@
 #include "mozilla/EnumeratedArrayCycleCollection.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProcessPriorityManager.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
@@ -47,6 +48,8 @@
 #include "nsSVGEffects.h"
 #include "prenv.h"
 #include "ScopedGLHelpers.h"
+#include "VRManagerChild.h"
+#include "mozilla/layers/TextureClientSharedSurface.h"
 
 #ifdef MOZ_WIDGET_GONK
 #include "mozilla/layers/ShadowLayers.h"
@@ -68,7 +71,6 @@
 #include "WebGLSampler.h"
 #include "WebGLShader.h"
 #include "WebGLSync.h"
-#include "WebGLTimerQuery.h"
 #include "WebGLTransformFeedback.h"
 #include "WebGLVertexArray.h"
 #include "WebGLVertexAttribData.h"
@@ -116,12 +118,15 @@ WebGLContext::WebGLContext()
     , mBufferFetchingHasPerVertex(false)
     , mMaxFetchedVertices(0)
     , mMaxFetchedInstances(0)
+    , mLayerIsMirror(false)
     , mBypassShaderValidation(false)
+    , mBuffersForUB_Dirty(true)
     , mContextLossHandler(this)
     , mNeedsFakeNoAlpha(false)
     , mNeedsFakeNoDepth(false)
     , mNeedsFakeNoStencil(false)
     , mNeedsEmulatedLoneDepthStencil(false)
+    , mAllowFBInvalidation(gfxPrefs::WebGLFBInvalidation())
 {
     mGeneration = 0;
     mInvalidated = false;
@@ -217,7 +222,7 @@ WebGLContext::~WebGLContext()
 }
 
 template<typename T>
-static void
+void
 ClearLinkedList(LinkedList<T>& list)
 {
     while (!list.isEmpty()) {
@@ -243,21 +248,23 @@ WebGLContext::DestroyResourcesAndContext()
     mBoundCopyWriteBuffer = nullptr;
     mBoundPixelPackBuffer = nullptr;
     mBoundPixelUnpackBuffer = nullptr;
-    mBoundTransformFeedbackBuffer = nullptr;
     mBoundUniformBuffer = nullptr;
     mCurrentProgram = nullptr;
     mActiveProgramLinkInfo = nullptr;
     mBoundDrawFramebuffer = nullptr;
     mBoundReadFramebuffer = nullptr;
-    mActiveOcclusionQuery = nullptr;
     mBoundRenderbuffer = nullptr;
     mBoundVertexArray = nullptr;
     mDefaultVertexArray = nullptr;
     mBoundTransformFeedback = nullptr;
     mDefaultTransformFeedback = nullptr;
 
-    mBoundTransformFeedbackBuffers.Clear();
-    mBoundUniformBuffers.Clear();
+    mQuerySlot_SamplesPassed = nullptr;
+    mQuerySlot_TFPrimsWritten = nullptr;
+    mQuerySlot_TimeElapsed = nullptr;
+
+    mIndexedUniformBufferBindings.clear();
+    OnUBIndexedBindingsChanged();
 
     //////
 
@@ -270,7 +277,6 @@ WebGLContext::DestroyResourcesAndContext()
     ClearLinkedList(mShaders);
     ClearLinkedList(mSyncs);
     ClearLinkedList(mTextures);
-    ClearLinkedList(mTimerQueries);
     ClearLinkedList(mTransformFeedbacks);
     ClearLinkedList(mVertexArrays);
 
@@ -285,8 +291,10 @@ WebGLContext::DestroyResourcesAndContext()
     mFakeBlack_2D_Array_0000 = nullptr;
     mFakeBlack_2D_Array_0001 = nullptr;
 
-    if (mFakeVertexAttrib0BufferObject)
+    if (mFakeVertexAttrib0BufferObject) {
         gl->fDeleteBuffers(1, &mFakeVertexAttrib0BufferObject);
+        mFakeVertexAttrib0BufferObject = 0;
+    }
 
     // disable all extensions except "WEBGL_lose_context". see bug #927969
     // spec: http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
@@ -306,7 +314,9 @@ WebGLContext::DestroyResourcesAndContext()
         printf_stderr("--- WebGL context destroyed: %p\n", gl.get());
     }
 
-    gl = nullptr;
+    MOZ_ASSERT(gl);
+    mGL_OnlyClearInDestroyResourcesAndContext = nullptr;
+    MOZ_ASSERT(!gl);
 }
 
 void
@@ -563,7 +573,7 @@ BaseCaps(const WebGLContextOptions& options, WebGLContext* webgl)
         if (!forwarder)
             break;
 
-        baseCaps.surfaceAllocator = static_cast<layers::ISurfaceAllocator*>(forwarder);
+        baseCaps.surfaceAllocator = forwarder->GetTextureForwarder();
     } while (false);
 #endif
 
@@ -669,22 +679,30 @@ WebGLContext::CreateAndInitGLWith(FnCreateGL_T fnCreateGL,
     PopulateCapFallbackQueue(baseCaps, &fallbackCaps);
 
     MOZ_RELEASE_ASSERT(!gl, "GFX: Already have a context.");
-    gl = nullptr;
+    RefPtr<gl::GLContext> potentialGL;
     while (!fallbackCaps.empty()) {
         const gl::SurfaceCaps& caps = fallbackCaps.front();
-        gl = fnCreateGL(caps, flags, this, out_failReasons);
-        if (gl)
+        potentialGL = fnCreateGL(caps, flags, this, out_failReasons);
+        if (potentialGL)
             break;
 
         fallbackCaps.pop();
     }
-    if (!gl)
+    if (!potentialGL) {
+        out_failReasons->push_back(FailureReason("FEATURE_FAILURE_WEBGL_EXHAUSTED_CAPS",
+                                                 "Exhausted GL driver caps."));
         return false;
+    }
 
     FailureReason reason;
+
+    mGL_OnlyClearInDestroyResourcesAndContext = potentialGL;
+    MOZ_RELEASE_ASSERT(gl);
     if (!InitAndValidateGL(&reason)) {
+        DestroyResourcesAndContext();
+        MOZ_RELEASE_ASSERT(!gl);
+
         // The fail reason here should be specific enough for now.
-        gl = nullptr;
         out_failReasons->push_back(reason);
         return false;
     }
@@ -716,11 +734,8 @@ WebGLContext::CreateAndInitGL(bool forceEnabled,
     const bool useEGL = PR_GetEnv("MOZ_WEBGL_FORCE_EGL");
 
 #ifdef XP_WIN
-    if (!IsWebGL2()) {
-        // Use only ANGLE on Windows for WebGL 1.
-        tryNativeGL = false;
-        tryANGLE = true;
-    }
+    tryNativeGL = false;
+    tryANGLE = true;
 
     if (gfxPrefs::WebGLDisableWGL()) {
         tryNativeGL = false;
@@ -817,8 +832,11 @@ void
 WebGLContext::ThrowEvent_WebGLContextCreationError(const nsACString& text)
 {
     RefPtr<EventTarget> target = mCanvasElement;
-    if (!target) {
+    if (!target && mOffscreenCanvas) {
         target = mOffscreenCanvas;
+    } else if (!target) {
+        GenerateWarning("Failed to create WebGL context: %s", text.BeginReading());
+        return;
     }
 
     const auto kEventName = NS_LITERAL_STRING("webglcontextcreationerror");
@@ -844,6 +862,10 @@ NS_IMETHODIMP
 WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
 {
     if (signedWidth < 0 || signedHeight < 0) {
+        if (!gl) {
+            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
+                                  NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_SIZE"));
+        }
         GenerateWarning("Canvas size is too large (seems like a negative value wrapped)");
         return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -899,6 +921,12 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
         return NS_OK;
     }
 
+    nsCString failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_UNKOWN");
+    auto autoTelemetry = mozilla::MakeScopeExit([&] {
+        Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
+                              failureId);
+    });
+
     // End of early return cases.
     // At this point we know that we're not just resizing an existing context,
     // we are initializing a new context.
@@ -920,8 +948,7 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
     // resource handles created from older context generations.
     if (!(mGeneration + 1).isValid()) {
         // exit without changing the value of mGeneration
-        Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                              NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_TOO_MANY"));
+        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_TOO_MANY");
         const nsLiteralCString text("Too many WebGL contexts created this run.");
         ThrowEvent_WebGLContextCreationError(text);
         return NS_ERROR_FAILURE;
@@ -938,8 +965,11 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
     disabled |= gfxPlatform::InSafeMode();
 
     if (disabled) {
-        Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                              NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_DISABLED"));
+        if (gfxPlatform::InSafeMode()) {
+            failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_SAFEMODE");
+        } else {
+            failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_DISABLED");
+        }
         const nsLiteralCString text("WebGL is currently disabled.");
         ThrowEvent_WebGLContextCreationError(text);
         return NS_ERROR_FAILURE;
@@ -952,8 +982,7 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
     if (mOptions.failIfMajorPerformanceCaveat) {
         nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
         if (!HasAcceleratedLayers(gfxInfo)) {
-            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                                  NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_PERF_CAVEAT"));
+            failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_PERF_CAVEAT");
             const nsLiteralCString text("failIfMajorPerformanceCaveat: Compositor is not"
                                         " hardware-accelerated.");
             ThrowEvent_WebGLContextCreationError(text);
@@ -975,6 +1004,7 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
             text.AppendASCII("\n* ");
             text.Append(cur.info);
         }
+        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_REASON");
         ThrowEvent_WebGLContextCreationError(text);
         return NS_ERROR_FAILURE;
     }
@@ -983,10 +1013,10 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
 
     if (mOptions.failIfMajorPerformanceCaveat) {
         if (gl->IsWARP()) {
-            gl = nullptr;
+            DestroyResourcesAndContext();
+            MOZ_ASSERT(!gl);
 
-            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                                  NS_LITERAL_CSTRING("FEATURE_FAILURE_PERF_WARP"));
+            failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_PERF_WARP");
             const nsLiteralCString text("failIfMajorPerformanceCaveat: Driver is not"
                                         " hardware-accelerated.");
             ThrowEvent_WebGLContextCreationError(text);
@@ -997,8 +1027,10 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
         if (gl->GetContextType() == gl::GLContextType::WGL &&
             !gl::sWGLLib.HasDXInterop2())
         {
-            gl = nullptr;
+            DestroyResourcesAndContext();
+            MOZ_ASSERT(!gl);
 
+            failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_DXGL_INTEROP2");
             const nsLiteralCString text("Caveat: WGL without DXGLInterop2.");
             ThrowEvent_WebGLContextCreationError(text);
             return NS_ERROR_FAILURE;
@@ -1007,8 +1039,7 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
     }
 
     if (!ResizeBackbuffer(width, height)) {
-        Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                              NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_RESIZE"));
+        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WEBGL_BACKBUFFER");
         const nsLiteralCString text("Initializing WebGL backbuffer failed.");
         ThrowEvent_WebGLContextCreationError(text);
         return NS_ERROR_FAILURE;
@@ -1093,8 +1124,7 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
 
     reporter.SetSuccessful();
 
-    Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_FAILURE_ID,
-                          NS_LITERAL_CSTRING("SUCCESS"));
+    failureId = NS_LITERAL_CSTRING("SUCCESS");
     return NS_OK;
 }
 
@@ -1259,8 +1289,7 @@ WebGLContext::UpdateLastUseIndex()
     // should never happen with 64-bit; trying to handle this would be riskier than
     // not handling it as the handler code would never get exercised.
     if (!sIndex.isValid())
-        NS_RUNTIMEABORT("Can't believe it's been 2^64 transactions already!");
-
+        MOZ_CRASH("Can't believe it's been 2^64 transactions already!");
     mLastUseIndex = sIndex.value();
 }
 
@@ -1282,9 +1311,8 @@ public:
         HTMLCanvasElement* canvas = userdata->mCanvas;
         WebGLContext* webgl = static_cast<WebGLContext*>(canvas->GetContextAtIndex(0));
 
-        // Present our screenbuffer, if needed.
-        webgl->PresentScreenBuffer();
-        webgl->mDrawCallsSinceLastFlush = 0;
+        // Prepare the context for composition
+        webgl->BeginComposition();
     }
 
     /** DidTransactionCallback gets called by the Layers code everytime the WebGL canvas gets composite,
@@ -1295,10 +1323,8 @@ public:
         HTMLCanvasElement* canvas = userdata->mCanvas;
         WebGLContext* webgl = static_cast<WebGLContext*>(canvas->GetContextAtIndex(0));
 
-        // Mark ourselves as no longer invalidated.
-        webgl->MarkContextClean();
-
-        webgl->UpdateLastUseIndex();
+        // Clean up the context after composition
+        webgl->EndComposition();
     }
 
 private:
@@ -1362,6 +1388,10 @@ WebGLContext::GetCanvasLayer(nsDisplayListBuilder* builder,
     canvasLayer->Updated();
 
     mResetLayer = false;
+    // We only wish to update mLayerIsMirror when a new layer is returned.
+    // If a cached layer is returned above, aMirror is not changing since
+    // the last cached layer was created and mLayerIsMirror is still valid.
+    mLayerIsMirror = aMirror;
 
     return canvasLayer.forget();
 }
@@ -1587,25 +1617,43 @@ WebGLContext::PresentScreenBuffer()
     return true;
 }
 
+// Prepare the context for capture before compositing
+void
+WebGLContext::BeginComposition()
+{
+    // Present our screenbuffer, if needed.
+    PresentScreenBuffer();
+    mDrawCallsSinceLastFlush = 0;
+}
+
+// Clean up the context after captured for compositing
+void
+WebGLContext::EndComposition()
+{
+    // Mark ourselves as no longer invalidated.
+    MarkContextClean();
+    UpdateLastUseIndex();
+}
+
 void
 WebGLContext::DummyReadFramebufferOperation(const char* funcName)
 {
     if (!mBoundReadFramebuffer)
         return; // Infallible.
 
-    nsCString fbStatusInfo;
-    const auto status = mBoundReadFramebuffer->CheckFramebufferStatus(&fbStatusInfo);
+    const auto status = mBoundReadFramebuffer->CheckFramebufferStatus(funcName);
 
     if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
-        nsCString errorText("Incomplete framebuffer");
-
-        if (fbStatusInfo.Length()) {
-            errorText += ": ";
-            errorText += fbStatusInfo;
-        }
-
-        ErrorInvalidFramebufferOperation("%s: %s.", funcName, errorText.BeginReading());
+        ErrorInvalidFramebufferOperation("%s: Framebuffer must be complete.",
+                                         funcName);
     }
+}
+
+bool
+WebGLContext::Has64BitTimestamps() const
+{
+    // 'sync' provides glGetInteger64v either by supporting ARB_sync, GL3+, or GLES3+.
+    return gl->IsSupported(GLFeature::sync);
 }
 
 static bool
@@ -1900,8 +1948,18 @@ WebGLContext::GetSurfaceSnapshot(bool* out_premultAlpha)
     {
         ScopedBindFramebuffer autoFB(gl, 0);
         ClearBackbufferIfNeeded();
-        // TODO: Save, override, then restore glReadBuffer if present.
+
+        // Save, override, then restore glReadBuffer.
+        const GLenum readBufferMode = gl->Screen()->GetReadBufferMode();
+
+        if (readBufferMode != LOCAL_GL_BACK) {
+            gl->fReadBuffer(LOCAL_GL_BACK);
+        }
         ReadPixelsIntoDataSurface(gl, surf);
+
+        if (readBufferMode != LOCAL_GL_BACK) {
+            gl->fReadBuffer(readBufferMode);
+        }
     }
 
     if (out_premultAlpha) {
@@ -2027,6 +2085,30 @@ WebGLContext::ScopedMaskWorkaround::HasDepthButNoStencil(const WebGLFramebuffer*
 
 ////////////////////////////////////////
 
+IndexedBufferBinding::IndexedBufferBinding()
+    : mRangeStart(0)
+    , mRangeSize(0)
+{ }
+
+uint64_t
+IndexedBufferBinding::ByteCount() const
+{
+    if (!mBufferBinding)
+        return 0;
+
+    uint64_t bufferSize = mBufferBinding->ByteLength();
+    if (!mRangeSize) // BindBufferBase
+        return bufferSize;
+
+    if (mRangeStart >= bufferSize)
+        return 0;
+    bufferSize -= mRangeStart;
+
+    return std::min(bufferSize, mRangeSize);
+}
+
+////////////////////////////////////////
+
 ScopedUnpackReset::ScopedUnpackReset(WebGLContext* webgl)
     : ScopedGLWrapper<ScopedUnpackReset>(webgl->gl)
     , mWebGL(webgl)
@@ -2065,6 +2147,57 @@ ScopedUnpackReset::UnwrapImpl()
     }
 }
 
+////////////////////
+
+void
+ScopedFBRebinder::UnwrapImpl()
+{
+    const auto fnName = [&](WebGLFramebuffer* fb) {
+        return fb ? fb->mGLName : 0;
+    };
+
+    if (mWebGL->IsWebGL2()) {
+        mGL->fBindFramebuffer(LOCAL_GL_DRAW_FRAMEBUFFER, fnName(mWebGL->mBoundDrawFramebuffer));
+        mGL->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, fnName(mWebGL->mBoundReadFramebuffer));
+    } else {
+        MOZ_ASSERT(mWebGL->mBoundDrawFramebuffer == mWebGL->mBoundReadFramebuffer);
+        mGL->fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, fnName(mWebGL->mBoundDrawFramebuffer));
+    }
+}
+
+////////////////////
+
+static GLenum
+TargetIfLazy(GLenum target)
+{
+    switch (target) {
+    case LOCAL_GL_PIXEL_PACK_BUFFER:
+    case LOCAL_GL_PIXEL_UNPACK_BUFFER:
+        return target;
+
+    default:
+        return 0;
+    }
+}
+
+ScopedLazyBind::ScopedLazyBind(gl::GLContext* gl, GLenum target, const WebGLBuffer* buf)
+    : ScopedGLWrapper<ScopedLazyBind>(gl)
+    , mTarget(buf ? TargetIfLazy(target) : 0)
+    , mBuf(buf)
+{
+    if (mTarget) {
+        mGL->fBindBuffer(mTarget, mBuf->mGLName);
+    }
+}
+
+void
+ScopedLazyBind::UnwrapImpl()
+{
+    if (mTarget) {
+        mGL->fBindBuffer(mTarget, 0);
+    }
+}
+
 ////////////////////////////////////////
 
 void
@@ -2086,191 +2219,6 @@ Intersect(uint32_t srcSize, int32_t dstStartInSrc, uint32_t dstSize,
 
     int32_t intEndInSrc = std::min<int32_t>(srcSize, dstStartInSrc + dstSize);
     *out_intSize = std::max<int32_t>(0, intEndInSrc - *out_intStartInSrc);
-}
-
-static bool
-ZeroTexImageWithClear(WebGLContext* webgl, GLContext* gl, TexImageTarget target,
-                      GLuint tex, uint32_t level, const webgl::FormatUsageInfo* usage,
-                      uint32_t width, uint32_t height)
-{
-    MOZ_ASSERT(gl->IsCurrent());
-
-    ScopedFramebuffer scopedFB(gl);
-    ScopedBindFramebuffer scopedBindFB(gl, scopedFB.FB());
-
-    const auto format = usage->format;
-
-    GLenum attachPoint = 0;
-    GLbitfield clearBits = 0;
-
-    if (format->IsColorFormat()) {
-        attachPoint = LOCAL_GL_COLOR_ATTACHMENT0;
-        clearBits = LOCAL_GL_COLOR_BUFFER_BIT;
-    }
-
-    if (format->d) {
-        attachPoint = LOCAL_GL_DEPTH_ATTACHMENT;
-        clearBits |= LOCAL_GL_DEPTH_BUFFER_BIT;
-    }
-
-    if (format->s) {
-        attachPoint = (format->d ? LOCAL_GL_DEPTH_STENCIL_ATTACHMENT
-                                 : LOCAL_GL_STENCIL_ATTACHMENT);
-        clearBits |= LOCAL_GL_STENCIL_BUFFER_BIT;
-    }
-
-    MOZ_RELEASE_ASSERT(attachPoint && clearBits, "GFX: No bits cleared.");
-
-    {
-        gl::GLContext::LocalErrorScope errorScope(*gl);
-        gl->fFramebufferTexture2D(LOCAL_GL_FRAMEBUFFER, attachPoint, target.get(), tex,
-                                  level);
-        if (errorScope.GetError()) {
-            MOZ_ASSERT(false);
-            return false;
-        }
-    }
-
-    auto status = gl->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
-    if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE)
-        return false;
-
-    {
-        gl::GLContext::LocalErrorScope errorScope(*gl);
-
-        const bool fakeNoAlpha = false;
-        webgl->ForceClearFramebufferWithDefaultValues(clearBits, fakeNoAlpha);
-        if (errorScope.GetError()) {
-            MOZ_ASSERT(false);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool
-ZeroTextureData(WebGLContext* webgl, const char* funcName, bool respecifyTexture,
-                GLuint tex, TexImageTarget target, uint32_t level,
-                const webgl::FormatUsageInfo* usage, uint32_t xOffset, uint32_t yOffset,
-                uint32_t zOffset, uint32_t width, uint32_t height, uint32_t depth)
-{
-    // This has two usecases:
-    // 1. Lazy zeroing of uninitialized textures:
-    //    a. Before draw, when FakeBlack isn't viable. (TexStorage + Draw*)
-    //    b. Before partial upload. (TexStorage + TexSubImage)
-    // 2. Zero subrects from out-of-bounds blits. (CopyTex(Sub)Image)
-
-    // We have no sympathy for any of these cases.
-
-    // "Doctor, it hurts when I do this!" "Well don't do that!"
-    webgl->GenerateWarning("%s: This operation requires zeroing texture data. This is"
-                           " slow.",
-                           funcName);
-
-    gl::GLContext* gl = webgl->GL();
-    gl->MakeCurrent();
-
-    auto compression = usage->format->compression;
-    if (compression) {
-        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset, "GFX: Can't zero compressed texture with offsets.");
-        MOZ_RELEASE_ASSERT(!respecifyTexture, "GFX: respecifyTexture is set to true.");
-
-        auto sizedFormat = usage->format->sizedFormat;
-        MOZ_RELEASE_ASSERT(sizedFormat, "GFX: texture sized format not set");
-
-        const auto fnSizeInBlocks = [](CheckedUint32 pixels, uint8_t pixelsPerBlock) {
-            return RoundUpToMultipleOf(pixels, pixelsPerBlock) / pixelsPerBlock;
-        };
-
-        const auto widthBlocks = fnSizeInBlocks(width, compression->blockWidth);
-        const auto heightBlocks = fnSizeInBlocks(height, compression->blockHeight);
-
-        CheckedUint32 checkedByteCount = compression->bytesPerBlock;
-        checkedByteCount *= widthBlocks;
-        checkedByteCount *= heightBlocks;
-        checkedByteCount *= depth;
-
-        if (!checkedByteCount.isValid())
-            return false;
-
-        const size_t byteCount = checkedByteCount.value();
-
-        UniqueBuffer zeros = calloc(1, byteCount);
-        if (!zeros)
-            return false;
-
-        ScopedUnpackReset scopedReset(webgl);
-        gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1); // Don't bother with striding it
-                                                        // well.
-
-        GLenum error = DoCompressedTexSubImage(gl, target.get(), level, xOffset, yOffset,
-                                               zOffset, width, height, depth, sizedFormat,
-                                               byteCount, zeros.get());
-        if (error)
-            return false;
-
-        return true;
-    }
-
-    const auto driverUnpackInfo = usage->idealUnpack;
-    MOZ_RELEASE_ASSERT(driverUnpackInfo, "GFX: ideal unpack info not set.");
-
-    if (usage->IsRenderable() && depth == 1 &&
-        !xOffset && !yOffset && !zOffset)
-    {
-        // While we would like to skip the extra complexity of trying to zero with an FB
-        // clear, ANGLE_depth_texture requires this.
-        do {
-            if (respecifyTexture) {
-                const auto error = DoTexImage(gl, target, level, driverUnpackInfo, width,
-                                              height, depth, nullptr);
-                if (error)
-                    break;
-            }
-
-            if (ZeroTexImageWithClear(webgl, gl, target, tex, level, usage, width,
-                                      height))
-            {
-                return true;
-            }
-        } while (false);
-    }
-
-    const webgl::PackingInfo packing = driverUnpackInfo->ToPacking();
-
-    const auto bytesPerPixel = webgl::BytesPerPixel(packing);
-
-    CheckedUint32 checkedByteCount = bytesPerPixel;
-    checkedByteCount *= width;
-    checkedByteCount *= height;
-    checkedByteCount *= depth;
-
-    if (!checkedByteCount.isValid())
-        return false;
-
-    const size_t byteCount = checkedByteCount.value();
-
-    UniqueBuffer zeros = calloc(1, byteCount);
-    if (!zeros)
-        return false;
-
-    ScopedUnpackReset scopedReset(webgl);
-    gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1); // Don't bother with striding it well.
-
-    GLenum error;
-    if (respecifyTexture) {
-        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset, "GFX: texture data, offsets, not zeroed.");
-        error = DoTexImage(gl, target, level, driverUnpackInfo, width, height, depth,
-                           zeros.get());
-    } else {
-        error = DoTexSubImage(gl, target, level, xOffset, yOffset, zOffset, width, height,
-                              depth, packing, zeros.get());
-    }
-    if (error)
-        return false;
-
-    return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2320,8 +2268,182 @@ WebGLContext::GetUnpackSize(bool isFunc3D, uint32_t width, uint32_t height,
     return totalBytes;
 }
 
+already_AddRefed<layers::SharedSurfaceTextureClient>
+WebGLContext::GetVRFrame()
+{
+    if (!mLayerIsMirror) {
+        /**
+         * Do not allow VR frame submission until a mirroring canvas layer has
+         * been returned by GetCanvasLayer
+         */
+        return nullptr;
+    }
+
+    VRManagerChild* vrmc = VRManagerChild::Get();
+    if (!vrmc) {
+        return nullptr;
+    }
+
+    /**
+     * Swap buffers as though composition has occurred.
+     * We will then share the resulting front buffer to be submitted to the VR
+     * compositor.
+     */
+    BeginComposition();
+    EndComposition();
+
+    gl::GLScreenBuffer* screen = gl->Screen();
+    if (!screen) {
+        return nullptr;
+    }
+
+    RefPtr<SharedSurfaceTextureClient> sharedSurface = screen->Front();
+    if (!sharedSurface) {
+        return nullptr;
+    }
+
+    if (sharedSurface && sharedSurface->GetAllocator() != vrmc) {
+        RefPtr<SharedSurfaceTextureClient> dest =
+        screen->Factory()->NewTexClient(sharedSurface->GetSize());
+        if (!dest) {
+            return nullptr;
+        }
+        gl::SharedSurface* destSurf = dest->Surf();
+        destSurf->ProducerAcquire();
+        SharedSurface::ProdCopy(sharedSurface->Surf(), dest->Surf(),
+                                screen->Factory());
+        destSurf->ProducerRelease();
+
+        return dest.forget();
+    }
+
+  return sharedSurface.forget();
+}
+
+bool
+WebGLContext::StartVRPresentation()
+{
+    VRManagerChild* vrmc = VRManagerChild::Get();
+    if (!vrmc) {
+        return false;
+    }
+    gl::GLScreenBuffer* screen = gl->Screen();
+    if (!screen) {
+        return false;
+    }
+    gl::SurfaceCaps caps = screen->mCaps;
+
+    UniquePtr<gl::SurfaceFactory> factory =
+        gl::GLScreenBuffer::CreateFactory(gl,
+            caps,
+            vrmc,
+            vrmc->GetBackendType(),
+            TextureFlags::ORIGIN_BOTTOM_LEFT);
+
+    screen->Morph(Move(factory));
+    return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static inline size_t
+SizeOfViewElem(const dom::ArrayBufferView& view)
+{
+    const auto& elemType = view.Type();
+    if (elemType == js::Scalar::MaxTypedArrayViewType) // DataViews.
+        return 1;
+
+    return js::Scalar::byteSize(elemType);
+}
+
+bool
+WebGLContext::ValidateArrayBufferView(const char* funcName,
+                                      const dom::ArrayBufferView& view, GLuint elemOffset,
+                                      GLuint elemCountOverride, uint8_t** const out_bytes,
+                                      size_t* const out_byteLen)
+{
+    view.ComputeLengthAndData();
+    uint8_t* const bytes = view.DataAllowShared();
+    const size_t byteLen = view.LengthAllowShared();
+
+    const auto& elemSize = SizeOfViewElem(view);
+
+    size_t elemCount = byteLen / elemSize;
+    if (elemOffset > elemCount) {
+        ErrorInvalidValue("%s: Invalid offset into ArrayBufferView.", funcName);
+        return false;
+    }
+    elemCount -= elemOffset;
+
+    if (elemCountOverride) {
+        if (elemCountOverride > elemCount) {
+            ErrorInvalidValue("%s: Invalid sub-length for ArrayBufferView.", funcName);
+            return false;
+        }
+        elemCount = elemCountOverride;
+    }
+
+    *out_bytes = bytes + (elemOffset * elemSize);
+    *out_byteLen = elemCount * elemSize;
+    return true;
+}
+
+////
+
+const decltype(WebGLContext::mBuffersForUB)&
+WebGLContext::BuffersForUB() const
+{
+    if (mBuffersForUB_Dirty) {
+        mBuffersForUB.clear();
+        for (const auto& cur : mIndexedUniformBufferBindings) {
+            if (cur.mBufferBinding) {
+                mBuffersForUB.insert(cur.mBufferBinding.get());
+            }
+        }
+        mBuffersForUB_Dirty = false;
+    }
+    return mBuffersForUB;
+}
+
+////
+
+bool
+WebGLContext::ValidateForNonTransformFeedback(const char* funcName, WebGLBuffer* buffer)
+{
+    if (!mBoundTransformFeedback)
+        return true;
+
+    const auto& buffersForTF = mBoundTransformFeedback->BuffersForTF();
+    if (buffersForTF.count(buffer)) {
+        ErrorInvalidOperation("%s: Specified WebGLBuffer is currently bound for transform"
+                              " feedback.",
+                              funcName);
+        return false;
+    }
+
+    return true;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // XPCOM goop
+
+void
+ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& callback,
+                            const std::vector<IndexedBufferBinding>& field,
+                            const char* name, uint32_t flags)
+{
+    for (const auto& cur : field) {
+        ImplCycleCollectionTraverse(callback, cur.mBufferBinding, name, flags);
+    }
+}
+
+void
+ImplCycleCollectionUnlink(std::vector<IndexedBufferBinding>& field)
+{
+    field.clear();
+}
+
+////
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(WebGLContext)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(WebGLContext)
@@ -2340,7 +2462,7 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(WebGLContext,
   mBoundCopyWriteBuffer,
   mBoundPixelPackBuffer,
   mBoundPixelUnpackBuffer,
-  mBoundTransformFeedbackBuffer,
+  mBoundTransformFeedback,
   mBoundUniformBuffer,
   mCurrentProgram,
   mBoundDrawFramebuffer,
@@ -2348,8 +2470,9 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(WebGLContext,
   mBoundRenderbuffer,
   mBoundVertexArray,
   mDefaultVertexArray,
-  mActiveOcclusionQuery,
-  mActiveTransformFeedbackQuery)
+  mQuerySlot_SamplesPassed,
+  mQuerySlot_TFPrimsWritten,
+  mQuerySlot_TimeElapsed)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WebGLContext)
     NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY

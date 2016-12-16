@@ -139,17 +139,19 @@ SapiCallback::OnSpeechEvent(const SPEVENT& speechEvent)
   case SPEI_TTS_BOOKMARK:
     mCurrentIndex = static_cast<ULONG>(speechEvent.lParam) - mTextOffset;
     mTask->DispatchBoundary(NS_LITERAL_STRING("mark"),
-                            GetTickCount() - mStartingTime, mCurrentIndex);
+                            GetTickCount() - mStartingTime, mCurrentIndex, 0, 0);
     break;
   case SPEI_WORD_BOUNDARY:
     mCurrentIndex = static_cast<ULONG>(speechEvent.lParam) - mTextOffset;
     mTask->DispatchBoundary(NS_LITERAL_STRING("word"),
-                            GetTickCount() - mStartingTime, mCurrentIndex);
+                            GetTickCount() - mStartingTime, mCurrentIndex,
+                            static_cast<ULONG>(speechEvent.wParam), 1);
     break;
   case SPEI_SENTENCE_BOUNDARY:
     mCurrentIndex = static_cast<ULONG>(speechEvent.lParam) - mTextOffset;
     mTask->DispatchBoundary(NS_LITERAL_STRING("sentence"),
-                            GetTickCount() - mStartingTime, mCurrentIndex);
+                            GetTickCount() - mStartingTime, mCurrentIndex,
+                            static_cast<ULONG>(speechEvent.wParam), 1);
     break;
   default:
     break;
@@ -374,13 +376,22 @@ SapiService::Speak(const nsAString& aText, const nsAString& aUri,
   xml.AppendLiteral("\">");
   uint32_t textOffset = xml.Length();
 
-  const char16_t* escapedText =
-    nsEscapeHTML2(aText.BeginReading(), aText.Length());
-  if (!escapedText) {
-    return NS_ERROR_OUT_OF_MEMORY;
+  for (size_t i = 0; i < aText.Length(); i++) {
+    switch (aText[i]) {
+      case '&':
+        xml.AppendLiteral("&amp;");
+        break;
+      case '<':
+        xml.AppendLiteral("&lt;");
+        break;
+      case '>':
+        xml.AppendLiteral("&gt;");
+        break;
+      default:
+        xml.Append(aText[i]);
+        break;
+    }
   }
-  xml.Append(escapedText);
-  free((void*)escapedText);
 
   xml.AppendLiteral("</pitch>");
 

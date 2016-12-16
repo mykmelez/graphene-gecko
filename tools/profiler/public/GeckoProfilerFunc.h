@@ -71,6 +71,9 @@ mozilla::UniquePtr<char[]> mozilla_sampler_get_profile(double aSinceTime);
 JSObject *mozilla_sampler_get_profile_data(JSContext* aCx, double aSinceTime);
 void mozilla_sampler_get_profile_data_async(double aSinceTime,
                                             mozilla::dom::Promise* aPromise);
+MOZ_EXPORT
+void mozilla_sampler_save_profile_to_file_async(double aSinceTime,
+                                                const char* aFileName);
 void mozilla_sampler_get_profiler_start_params(int* aEntrySize,
                                                double* aInterval,
                                                mozilla::Vector<const char*>* aFilters,
@@ -107,6 +110,7 @@ void mozilla_sampler_unregister_thread();
 
 void mozilla_sampler_sleep_start();
 void mozilla_sampler_sleep_end();
+bool mozilla_sampler_is_sleeping();
 
 double mozilla_sampler_time();
 double mozilla_sampler_time(const mozilla::TimeStamp& aTime);

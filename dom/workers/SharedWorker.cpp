@@ -12,6 +12,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/SharedWorkerBinding.h"
+#include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
 #include "nsIClassInfoImpl.h"
 #include "nsIDOMEvent.h"
@@ -71,6 +72,8 @@ SharedWorker::Constructor(const GlobalObject& aGlobal, JSContext* aCx,
     aRv = rv;
     return nullptr;
   }
+
+  Telemetry::Accumulate(Telemetry::SHARED_WORKER_COUNT, 1);
 
   return sharedWorker.forget();
 }
@@ -181,13 +184,18 @@ SharedWorker::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 }
 
 nsresult
-SharedWorker::PreHandleEvent(EventChainPreVisitor& aVisitor)
+SharedWorker::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   AssertIsOnMainThread();
 
-  nsIDOMEvent*& event = aVisitor.mDOMEvent;
+  if (IsFrozen()) {
+    nsCOMPtr<nsIDOMEvent> event = aVisitor.mDOMEvent;
+    if (!event) {
+      event = EventDispatcher::CreateEvent(aVisitor.mEvent->mOriginalTarget,
+                                           aVisitor.mPresContext,
+                                           aVisitor.mEvent, EmptyString());
+    }
 
-  if (IsFrozen() && event) {
     QueueEvent(event);
 
     aVisitor.mCanHandle = false;
@@ -195,5 +203,5 @@ SharedWorker::PreHandleEvent(EventChainPreVisitor& aVisitor)
     return NS_OK;
   }
 
-  return DOMEventTargetHelper::PreHandleEvent(aVisitor);
+  return DOMEventTargetHelper::GetEventTargetParent(aVisitor);
 }

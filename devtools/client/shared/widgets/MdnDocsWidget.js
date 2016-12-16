@@ -26,8 +26,12 @@
 
 const Services = require("Services");
 const defer = require("devtools/shared/defer");
-const {getCSSLexer} = require("devtools/shared/css-lexer");
+const {getCSSLexer} = require("devtools/shared/css/lexer");
+const EventEmitter = require("devtools/shared/event-emitter");
 const {gDevTools} = require("devtools/client/framework/devtools");
+
+const {LocalizationHelper} = require("devtools/shared/l10n");
+const L10N = new LocalizationHelper("devtools/client/locales/inspector.properties");
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -55,7 +59,7 @@ const COMMENT_COLOR = "theme-comment";
  * highlighting.
  *
  * It uses the CSS tokenizer to generate a stream of CSS tokens.
- * https://mxr.mozilla.org/mozilla-central/source/dom/webidl/CSSLexer.webidl
+ * https://dxr.mozilla.org/mozilla-central/source/dom/webidl/CSSLexer.webidl
  * lists all the token types.
  *
  * - "whitespace", "comment", and "symbol" tokens are appended as TEXT nodes,
@@ -238,6 +242,8 @@ exports.getCssDocs = getCssDocs;
  * A DOM element where the MdnDocs widget markup should be created.
  */
 function MdnDocsWidget(tooltipContainer) {
+  EventEmitter.decorate(this);
+
   tooltipContainer.innerHTML =
     `<header>
        <h1 class="mdn-property-name theme-fg-color5"></h1>
@@ -260,15 +266,15 @@ function MdnDocsWidget(tooltipContainer) {
   };
 
   // get the localized string for the link text
-  this.elements.linkToMdn.textContent =
-    l10n.strings.GetStringFromName("docsTooltip.visitMDN");
+  this.elements.linkToMdn.textContent = L10N.getStr("docsTooltip.visitMDN");
 
   // listen for clicks and open in the browser window instead
   let mainWindow = Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
-  this.elements.linkToMdn.addEventListener("click", function (e) {
+  this.elements.linkToMdn.addEventListener("click", (e) => {
     e.stopPropagation();
     e.preventDefault();
-    mainWindow.openUILinkIn(e.target.href, "tab", { inBackground: true });
+    mainWindow.openUILinkIn(e.target.href, "tab");
+    this.emit("visitlink");
   });
 }
 
@@ -344,8 +350,7 @@ MdnDocsWidget.prototype = {
      */
     function gotError(error) {
       // show error message
-      elements.summary.textContent =
-        l10n.strings.GetStringFromName("docsTooltip.loadDocsError");
+      elements.summary.textContent = L10N.getStr("docsTooltip.loadDocsError");
 
       // hide the throbber
       elements.info.classList.remove("devtools-throbber");
@@ -368,19 +373,6 @@ MdnDocsWidget.prototype = {
     this.elements = null;
   }
 };
-
-/**
- * L10N utility class
- */
-function L10N() {}
-L10N.prototype = {};
-
-var l10n = new L10N();
-
-loader.lazyGetter(L10N.prototype, "strings", () => {
-  return Services.strings.createBundle(
-    "chrome://devtools/locale/inspector.properties");
-});
 
 /**
  * Test whether a node is all whitespace.

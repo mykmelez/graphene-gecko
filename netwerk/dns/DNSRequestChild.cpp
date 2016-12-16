@@ -7,7 +7,7 @@
 #include "mozilla/net/ChildDNSService.h"
 #include "mozilla/net/DNSRequestChild.h"
 #include "mozilla/net/NeckoChild.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsIDNSRecord.h"
 #include "nsHostResolver.h"
 #include "nsTArray.h"
@@ -167,7 +167,7 @@ public:
     , mReasonForCancel(aReason)
   {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     if (mDnsRequest->mIPCOpen) {
       // Send request to Parent process.
@@ -227,7 +227,7 @@ DNSRequestChild::CallOnLookupComplete()
   mListener->OnLookupComplete(this, mResultRecord, mResultStatus);
 }
 
-bool
+mozilla::ipc::IPCResult
 DNSRequestChild::RecvLookupCompleted(const DNSRequestResponse& reply)
 {
   mIPCOpen = false;
@@ -244,7 +244,7 @@ DNSRequestChild::RecvLookupCompleted(const DNSRequestResponse& reply)
   }
   default:
     NS_NOTREACHED("unknown type");
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   MOZ_ASSERT(NS_IsMainThread());
@@ -266,7 +266,7 @@ DNSRequestChild::RecvLookupCompleted(const DNSRequestResponse& reply)
 
   Unused << Send__delete__(this);
 
-  return true;
+  return IPC_OK();
 }
 
 void

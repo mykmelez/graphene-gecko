@@ -199,7 +199,7 @@ test_nss()
 	print_log "$ cd ${HGDIR}/nss/tests"
 	cd ${HGDIR}/nss/tests
 	print_log "$ ./all.sh"
-	./all.sh 2>&1 | tee ${LOG_TMP} | grep ${GREP_BUFFER} ": #"
+	./all.sh 2>&1 | tee ${LOG_TMP} | egrep ${GREP_BUFFER} ": #|^\[.{10}\] "
 	OUTPUTFILE=${LOG_TMP}
     fi
 
@@ -208,7 +208,7 @@ test_nss()
     RET=$?
 
     print_log "######## details of detected failures (if any) ########"
-    grep -B50 FAIL ${OUTPUTFILE}
+    grep -B50 FAILED ${OUTPUTFILE}
     [ $? -eq 1 ] || RET=1
 
     print_result "NSS - tests - ${BITS} bits - ${OPT}" ${RET} 0
@@ -243,6 +243,39 @@ test_jss()
     return ${RET}
 }
 
+create_objdir_dist_link()
+{
+    # compute relevant 'dist' OBJDIR_NAME subdirectory names for JSS and NSS
+    OS_TARGET=`uname -s`
+    OS_RELEASE=`uname -r | sed 's/-.*//' | sed 's/-.*//' | cut -d . -f1,2`
+    CPU_TAG=_`uname -m`
+    # OBJDIR_NAME_COMPILER appears to be defined for NSS but not JSS
+    OBJDIR_NAME_COMPILER=_cc
+    LIBC_TAG=_glibc
+    IMPL_STRATEGY=_PTH
+    if [ "${RUN_BITS}" = "64" ]; then
+        OBJDIR_TAG=_${RUN_BITS}_${RUN_OPT}.OBJ
+    else
+        OBJDIR_TAG=_${RUN_OPT}.OBJ
+    fi
+
+    # define NSS_OBJDIR_NAME
+    NSS_OBJDIR_NAME=${OS_TARGET}${OS_RELEASE}${CPU_TAG}${OBJDIR_NAME_COMPILER}
+    NSS_OBJDIR_NAME=${NSS_OBJDIR_NAME}${LIBC_TAG}${IMPL_STRATEGY}${OBJDIR_TAG}
+    print_log "create_objdir_dist_link(): NSS_OBJDIR_NAME='${NSS_OBJDIR_NAME}'"
+
+    # define JSS_OBJDIR_NAME
+    JSS_OBJDIR_NAME=${OS_TARGET}${OS_RELEASE}${CPU_TAG}
+    JSS_OBJDIR_NAME=${JSS_OBJDIR_NAME}${LIBC_TAG}${IMPL_STRATEGY}${OBJDIR_TAG}
+    print_log "create_objdir_dist_link(): JSS_OBJDIR_NAME='${JSS_OBJDIR_NAME}'"
+
+    if [ -e "${HGDIR}/dist/${NSS_OBJDIR_NAME}" ]; then
+        SOURCE=${HGDIR}/dist/${NSS_OBJDIR_NAME}
+        TARGET=${HGDIR}/dist/${JSS_OBJDIR_NAME}
+        ln -s ${SOURCE} ${TARGET} >/dev/null 2>&1
+    fi
+}
+
 build_and_test()
 {
     if [ -n "${BUILD_NSS}" ]; then
@@ -256,6 +289,7 @@ build_and_test()
     fi
 
     if [ -n "${BUILD_JSS}" ]; then
+        create_objdir_dist_link
         build_jss
         [ $? -eq 0 ] || return 1
     fi
@@ -293,13 +327,6 @@ prepare()
     rm -rf ${HGDIR}/tests_results/
 
     cd ${HGDIR}/nss
-
-    if [ -z "${NSS_DISABLE_ECC}" -a -n "${NSS_ECC_MORE_THAN_SUITE_B}" ]; then
-        ECF="lib/freebl/ecl/ecl-curve.h"
-	print_log "hg revert -r NSS_3_11_1_RTM ${ECF}"
-        hg revert -r NSS_3_11_1_RTM security/nss/${ECF}
-        cp -f security/nss/${ECF} ${ECF}
-    fi
 
     if [ -n "${FEWER_STRESS_ITERATIONS}" ]; then
         sed -i 's/-c_1000_/-c_500_/g' tests/ssl/sslstress.txt

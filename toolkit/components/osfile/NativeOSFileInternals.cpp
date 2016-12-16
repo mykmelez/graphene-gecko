@@ -421,7 +421,7 @@ public:
       MOZ_ASSERT(!NS_IsMainThread());
     }
 
-  NS_METHOD Run() {
+  NS_IMETHOD Run() override {
     MOZ_ASSERT(NS_IsMainThread());
     (void)mOnError->Complete(mOperation, mOSError);
 
@@ -471,7 +471,7 @@ public:
       MOZ_ASSERT(!NS_IsMainThread());
     }
 
-  NS_METHOD Run() {
+  NS_IMETHOD Run() override {
     MOZ_ASSERT(NS_IsMainThread());
     (void)mOnSuccess->Complete(mResult);
 
@@ -594,7 +594,7 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
   }
 
-  NS_METHOD Run() override {
+  NS_IMETHOD Run() override {
     MOZ_ASSERT(!NS_IsMainThread());
     TimeStamp dispatchDate = TimeStamp::Now();
 
@@ -741,7 +741,7 @@ public:
     , mResult(new TypedArrayResult(TimeStamp::Now()))
   { }
 
-  ~DoReadToTypedArrayEvent() {
+  ~DoReadToTypedArrayEvent() override {
     // If AbstractReadEvent::Run() has bailed out, we may need to cleanup
     // mResult, which is main-thread only data
     if (!mResult) {
@@ -778,7 +778,7 @@ public:
     , mResult(new StringResult(TimeStamp::Now()))
   { }
 
-  ~DoReadToStringEvent() {
+  ~DoReadToStringEvent() override {
     // If AbstraactReadEvent::Run() has bailed out, we may need to cleanup
     // mResult, which is main-thread only data
     if (!mResult) {

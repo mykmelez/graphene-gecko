@@ -47,7 +47,7 @@ Symbol::new_(ExclusiveContext* cx, JS::SymbolCode code, JSString* description)
     // Lock to allocate. If symbol allocation becomes a bottleneck, this can
     // probably be replaced with an assertion that we're on the main thread.
     AutoLockForExclusiveAccess lock(cx);
-    AutoCompartment ac(cx, cx->atomsCompartment(lock));
+    AutoCompartment ac(cx, cx->atomsCompartment(lock), &lock);
     return newInternal(cx, code, atom, lock);
 }
 
@@ -65,7 +65,7 @@ Symbol::for_(js::ExclusiveContext* cx, HandleString description)
     if (p)
         return *p;
 
-    AutoCompartment ac(cx, cx->atomsCompartment(lock));
+    AutoCompartment ac(cx, cx->atomsCompartment(lock), &lock);
     Symbol* sym = newInternal(cx, SymbolCode::InSymbolRegistry, atom, lock);
     if (!sym)
         return nullptr;
@@ -129,13 +129,13 @@ js::SymbolDescriptiveString(JSContext* cx, Symbol* sym, MutableHandleValue resul
 }
 
 bool
-js::IsSymbolOrSymbolWrapper(Value v)
+js::IsSymbolOrSymbolWrapper(const Value& v)
 {
     return v.isSymbol() || (v.isObject() && v.toObject().is<SymbolObject>());
 }
 
 JS::Symbol*
-js::ToSymbolPrimitive(Value v)
+js::ToSymbolPrimitive(const Value& v)
 {
     MOZ_ASSERT(IsSymbolOrSymbolWrapper(v));
     return v.isSymbol() ? v.toSymbol() : v.toObject().as<SymbolObject>().unbox();

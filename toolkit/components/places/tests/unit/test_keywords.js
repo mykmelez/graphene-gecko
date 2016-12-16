@@ -63,7 +63,7 @@ function expectBookmarkNotifications() {
             if (arg && arg instanceof Ci.nsIURI)
               return new URL(arg.spec);
             if (arg && typeof(arg) == "number" && arg >= Date.now() * 1000)
-              return new Date(parseInt(arg/1000));
+              return new Date(parseInt(arg / 1000));
             return arg;
           });
           notifications.push({ name: name, arguments: args });
@@ -183,9 +183,10 @@ add_task(function* test_addBookmarkAndKeyword() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark.guid)),
                                  "keyword", false, "keyword",
-                                 bookmark.lastModified, bookmark.type,
+                                 bookmark.lastModified * 1000, bookmark.type,
                                  (yield PlacesUtils.promiseItemId(bookmark.parentGuid)),
-                                 bookmark.guid, bookmark.parentGuid, "" ] } ]);
+                                 bookmark.guid, bookmark.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   yield check_keyword(true, "http://example.com/", "keyword");
   Assert.equal((yield foreign_count("http://example.com/")), fc + 2); // +1 bookmark +1 keyword
@@ -197,9 +198,10 @@ add_task(function* test_addBookmarkAndKeyword() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark.guid)),
                                  "keyword", false, "",
-                                 bookmark.lastModified, bookmark.type,
+                                 bookmark.lastModified * 1000, bookmark.type,
                                  (yield PlacesUtils.promiseItemId(bookmark.parentGuid)),
-                                 bookmark.guid, bookmark.parentGuid, "" ] } ]);
+                                 bookmark.guid, bookmark.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   yield check_keyword(false, "http://example.com/", "keyword");
   Assert.equal((yield foreign_count("http://example.com/")), fc + 1); // -1 keyword
@@ -310,15 +312,17 @@ add_task(function* test_sameKeywordDifferentURL() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark1.guid)),
                                  "keyword", false, "",
-                                 bookmark1.lastModified, bookmark1.type,
+                                 bookmark1.lastModified * 1000, bookmark1.type,
                                  (yield PlacesUtils.promiseItemId(bookmark1.parentGuid)),
-                                 bookmark1.guid, bookmark1.parentGuid, "" ] },
+                                 bookmark1.guid, bookmark1.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] },
                   { name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark2.guid)),
                                  "keyword", false, "keyword",
-                                 bookmark2.lastModified, bookmark2.type,
+                                 bookmark2.lastModified * 1000, bookmark2.type,
                                  (yield PlacesUtils.promiseItemId(bookmark2.parentGuid)),
-                                 bookmark2.guid, bookmark2.parentGuid, "" ] } ]);
+                                 bookmark2.guid, bookmark2.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   yield check_keyword(false, "http://example1.com/", "keyword");
   Assert.equal((yield foreign_count("http://example1.com/")), fc1 + 1); // -1 keyword
@@ -331,9 +335,10 @@ add_task(function* test_sameKeywordDifferentURL() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark2.guid)),
                                  "keyword", false, "",
-                                 bookmark2.lastModified, bookmark2.type,
+                                 bookmark2.lastModified * 1000, bookmark2.type,
                                  (yield PlacesUtils.promiseItemId(bookmark2.parentGuid)),
-                                 bookmark2.guid, bookmark2.parentGuid, "" ] } ]);
+                                 bookmark2.guid, bookmark2.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   yield check_keyword(false, "http://example1.com/", "keyword");
   yield check_keyword(false, "http://example2.com/", "keyword");
@@ -363,9 +368,10 @@ add_task(function* test_sameURIDifferentKeyword() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark.guid)),
                                  "keyword", false, "keyword",
-                                 bookmark.lastModified, bookmark.type,
+                                 bookmark.lastModified * 1000, bookmark.type,
                                  (yield PlacesUtils.promiseItemId(bookmark.parentGuid)),
-                                 bookmark.guid, bookmark.parentGuid, "" ] } ]);
+                                 bookmark.guid, bookmark.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   observer = expectBookmarkNotifications();
   yield PlacesUtils.keywords.insert({ keyword: "keyword2", url: "http://example.com/" });
@@ -375,9 +381,10 @@ add_task(function* test_sameURIDifferentKeyword() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark.guid)),
                                  "keyword", false, "keyword2",
-                                 bookmark.lastModified, bookmark.type,
+                                 bookmark.lastModified * 1000, bookmark.type,
                                  (yield PlacesUtils.promiseItemId(bookmark.parentGuid)),
-                                 bookmark.guid, bookmark.parentGuid, "" ] } ]);
+                                 bookmark.guid, bookmark.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   // Add a third keyword.
   yield PlacesUtils.keywords.insert({ keyword: "keyword3", url: "http://example.com/" });
@@ -395,9 +402,10 @@ add_task(function* test_sameURIDifferentKeyword() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark.guid)),
                                  "keyword", false, "",
-                                 bookmark.lastModified, bookmark.type,
+                                 bookmark.lastModified * 1000, bookmark.type,
                                  (yield PlacesUtils.promiseItemId(bookmark.parentGuid)),
-                                 bookmark.guid, bookmark.parentGuid, "" ] } ]);
+                                 bookmark.guid, bookmark.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
   Assert.equal((yield foreign_count("http://example.com/")), fc + 3); // -1 keyword
 
   // Now remove the bookmark.
@@ -427,15 +435,17 @@ add_task(function* test_deleteKeywordMultipleBookmarks() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark2.guid)),
                                  "keyword", false, "keyword",
-                                 bookmark2.lastModified, bookmark2.type,
+                                 bookmark2.lastModified * 1000, bookmark2.type,
                                  (yield PlacesUtils.promiseItemId(bookmark2.parentGuid)),
-                                 bookmark2.guid, bookmark2.parentGuid, "" ] },
+                                 bookmark2.guid, bookmark2.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] },
                   { name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark1.guid)),
                                  "keyword", false, "keyword",
-                                 bookmark1.lastModified, bookmark1.type,
+                                 bookmark1.lastModified * 1000, bookmark1.type,
                                  (yield PlacesUtils.promiseItemId(bookmark1.parentGuid)),
-                                 bookmark1.guid, bookmark1.parentGuid, "" ] } ]);
+                                 bookmark1.guid, bookmark1.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   observer = expectBookmarkNotifications();
   yield PlacesUtils.keywords.remove("keyword");
@@ -444,15 +454,17 @@ add_task(function* test_deleteKeywordMultipleBookmarks() {
   observer.check([{ name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark2.guid)),
                                  "keyword", false, "",
-                                 bookmark2.lastModified, bookmark2.type,
+                                 bookmark2.lastModified * 1000, bookmark2.type,
                                  (yield PlacesUtils.promiseItemId(bookmark2.parentGuid)),
-                                 bookmark2.guid, bookmark2.parentGuid, "" ] },
+                                 bookmark2.guid, bookmark2.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] },
                   { name: "onItemChanged",
                     arguments: [ (yield PlacesUtils.promiseItemId(bookmark1.guid)),
                                  "keyword", false, "",
-                                 bookmark1.lastModified, bookmark1.type,
+                                 bookmark1.lastModified * 1000, bookmark1.type,
                                  (yield PlacesUtils.promiseItemId(bookmark1.parentGuid)),
-                                 bookmark1.guid, bookmark1.parentGuid, "" ] } ]);
+                                 bookmark1.guid, bookmark1.parentGuid, "",
+                                 Ci.nsINavBookmarksService.SOURCE_DEFAULT ] } ]);
 
   // Now remove the bookmarks.
   yield PlacesUtils.bookmarks.remove(bookmark1);
@@ -513,6 +525,24 @@ add_task(function* test_oldKeywordsAPI() {
   check_no_orphans();
 });
 
-function run_test() {
-  run_next_test();
-}
+add_task(function* test_bookmarkURLChange() {
+  let fc1 = yield foreign_count("http://example1.com/");
+  let fc2 = yield foreign_count("http://example2.com/");
+  let bookmark = yield PlacesUtils.bookmarks.insert({ url: "http://example1.com/",
+                                                      type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
+  yield PlacesUtils.keywords.insert({ keyword: "keyword",
+                                      url: "http://example1.com/" });
+
+  yield check_keyword(true, "http://example1.com/", "keyword");
+  Assert.equal((yield foreign_count("http://example1.com/")), fc1 + 2); // +1 bookmark +1 keyword
+
+  yield PlacesUtils.bookmarks.update({ guid: bookmark.guid,
+                                       url: "http://example2.com/"});
+  yield promiseKeyword("keyword", "http://example2.com/");
+
+  yield check_keyword(false, "http://example1.com/", "keyword");
+  yield check_keyword(true, "http://example2.com/", "keyword");
+  Assert.equal((yield foreign_count("http://example1.com/")), fc1); // -1 bookmark -1 keyword
+  Assert.equal((yield foreign_count("http://example2.com/")), fc2 + 2); // +1 bookmark +1 keyword
+});

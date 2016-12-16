@@ -10,6 +10,7 @@ MOCHITEST_MANIFESTS += ['tests/mochitest/mochitest.ini']
 MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
 
 TESTING_JS_MODULES += [
+    'tests/MockDocument.jsm',
     'tests/PromiseTestUtils.jsm',
     'tests/xpcshell/TestIntegration.jsm',
 ]
@@ -24,6 +25,7 @@ EXTRA_JS_MODULES += [
     'addons/WebRequest.jsm',
     'addons/WebRequestCommon.jsm',
     'addons/WebRequestContent.js',
+    'addons/WebRequestUpload.jsm',
     'AsyncPrefs.jsm',
     'Battery.jsm',
     'BinarySearch.jsm',
@@ -34,12 +36,15 @@ EXTRA_JS_MODULES += [
     'ClientID.jsm',
     'Color.jsm',
     'Console.jsm',
+    'DateTimePickerHelper.jsm',
     'debug.js',
     'DeferredTask.jsm',
     'Deprecated.jsm',
     'FileUtils.jsm',
     'Finder.jsm',
     'FinderHighlighter.jsm',
+    'FinderIterator.jsm',
+    'FormLikeFactory.jsm',
     'Geometry.jsm',
     'GMPInstallManager.jsm',
     'GMPUtils.jsm',
@@ -47,10 +52,13 @@ EXTRA_JS_MODULES += [
     'InlineSpellChecker.jsm',
     'InlineSpellCheckerContent.jsm',
     'Integration.jsm',
+    'JSONFile.jsm',
     'LoadContextInfo.jsm',
     'Locale.jsm',
     'Log.jsm',
+    'Memory.jsm',
     'NewTabUtils.jsm',
+    'NLP.jsm',
     'ObjectUtils.jsm',
     'PageMenu.jsm',
     'PageMetadata.jsm',
@@ -70,7 +78,6 @@ EXTRA_JS_MODULES += [
     'RemoteSecurityUI.jsm',
     'RemoteWebProgress.jsm',
     'ResetProfile.jsm',
-    'secondscreen/PresentationApp.jsm',
     'secondscreen/RokuApp.jsm',
     'secondscreen/SimpleServiceDiscovery.jsm',
     'SelectContentHelper.jsm',
@@ -93,12 +100,16 @@ EXTRA_JS_MODULES += [
     'ZipUtils.jsm',
 ]
 EXTRA_JS_MODULES.third_party.jsesc += ['third_party/jsesc/jsesc.js']
+EXTRA_JS_MODULES.sessionstore += ['sessionstore/Utils.jsm']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'cocoa'):
     DEFINES['CAN_DRAW_IN_TITLEBAR'] = 1
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk2', 'gtk3'):
     DEFINES['MENUBAR_CAN_AUTOHIDE'] = 1
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('windows', 'gtk2', 'gtk3', 'cocoa'):
+    DEFINES['HAVE_SHELL_SERVICE'] = 1
 
 EXTRA_PP_JS_MODULES += [
     'AppConstants.jsm',

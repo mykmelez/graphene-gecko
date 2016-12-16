@@ -8,6 +8,9 @@
 #define SEEK_TASK_H
 
 #include "mozilla/MozPromise.h"
+#include "MediaData.h"          // For MediaData::Type.
+#include "MediaDecoderReader.h" // For WaitForDataRejectValue.
+#include "MediaResult.h"
 #include "SeekTarget.h"
 
 namespace mozilla {
@@ -30,8 +33,15 @@ struct SeekTaskResolveValue
 
 struct SeekTaskRejectValue
 {
+  SeekTaskRejectValue()
+    : mIsAudioQueueFinished(false)
+    , mIsVideoQueueFinished(false)
+    , mError(NS_ERROR_DOM_MEDIA_FATAL_ERR)
+  {
+  }
   bool mIsAudioQueueFinished;
   bool mIsVideoQueueFinished;
+  MediaResult mError;
 };
 
 class SeekTask {
@@ -48,9 +58,19 @@ public:
 
   virtual RefPtr<SeekTaskPromise> Seek(const media::TimeUnit& aDuration) = 0;
 
-  virtual bool NeedToResetMDSM() const = 0;
+  virtual int64_t CalculateNewCurrentTime() const = 0;
 
-  const SeekTarget& GetSeekTarget();
+  virtual void HandleAudioDecoded(MediaData* aAudio) = 0;
+
+  virtual void HandleVideoDecoded(MediaData* aVideo, TimeStamp aDecodeStart) = 0;
+
+  virtual void HandleNotDecoded(MediaData::Type aType, const MediaResult& aError) = 0;
+
+  virtual void HandleAudioWaited(MediaData::Type aType) = 0;
+
+  virtual void HandleVideoWaited(MediaData::Type aType) = 0;
+
+  virtual void HandleNotWaited(const WaitForDataRejectValue& aRejection) = 0;
 
 protected:
   SeekTask(const void* aDecoderID,
@@ -60,9 +80,10 @@ protected:
 
   virtual ~SeekTask();
 
+public:
   void Resolve(const char* aCallSite);
 
-  void RejectIfExist(const char* aCallSite);
+  void RejectIfExist(const MediaResult& aError, const char* aCallSite);
 
   void AssertOwnerThread() const;
 

@@ -16,6 +16,7 @@
 #include "gfxFT2FontBase.h"
 #include "gfxFT2Utils.h"
 #include "harfbuzz/hb.h"
+#include "harfbuzz/hb-glib.h"
 #include "harfbuzz/hb-ot.h"
 #include "nsUnicodeProperties.h"
 #include "nsUnicodeScriptCodes.h"
@@ -652,7 +653,7 @@ gfxDownloadedFcFontEntry::GetFontTable(uint32_t aTableTag)
     // so we can just return a blob that "wraps" the appropriate chunk of it.
     // The blob should not attempt to free its data, as the entire sfnt data
     // will be freed when the font entry is deleted.
-    return GetTableFromFontData(mFontData, aTableTag);
+    return gfxFontUtils::GetTableFromFontData(mFontData, aTableTag);
 }
 
 /*
@@ -1470,10 +1471,8 @@ gfxPangoFontGroup::UpdateUserFonts()
 
     mFonts[0] = FamilyFace();
     mFontSets.Clear();
-    mCachedEllipsisTextRun = nullptr;
-    mUnderlineOffset = UNDERLINE_OFFSET_NOT_SET;
+    ClearCachedData();
     mCurrGeneration = newGeneration;
-    mSkipDrawing = false;
 }
 
 already_AddRefed<gfxFcFontSet>
@@ -1625,7 +1624,7 @@ gfxPangoFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
     // https://developer.gnome.org/pango/stable/pango-Scripts-and-Languages.html#PangoScript
     const hb_tag_t scriptTag = GetScriptTagForCode(aRunScript);
     const PangoScript script =
-      (const PangoScript)g_unicode_script_from_iso15924(scriptTag);
+      (const PangoScript)hb_glib_script_from_script(hb_script_from_iso15924_tag(scriptTag));
 
     // Might be nice to call pango_language_includes_script only once for the
     // run rather than for each character.
@@ -1688,7 +1687,8 @@ already_AddRefed<gfxFont>
 gfxFcFont::MakeScaledFont(gfxFontStyle *aFontStyle, gfxFloat aScaleFactor)
 {
     gfxFcFontEntry* fe = static_cast<gfxFcFontEntry*>(GetFontEntry());
-    RefPtr<gfxFont> font = gfxFontCache::GetCache()->Lookup(fe, aFontStyle);
+    RefPtr<gfxFont> font =
+        gfxFontCache::GetCache()->Lookup(fe, aFontStyle, nullptr);
     if (font) {
         return font.forget();
     }
@@ -1948,7 +1948,8 @@ gfxFcFont::GetOrMakeFont(FcPattern *aRequestedPattern, FcPattern *aFontPattern,
     style.style = gfxFontconfigUtils::GetThebesStyle(renderPattern);
     style.weight = gfxFontconfigUtils::GetThebesWeight(renderPattern);
 
-    RefPtr<gfxFont> font = gfxFontCache::GetCache()->Lookup(fe, &style);
+    RefPtr<gfxFont> font =
+        gfxFontCache::GetCache()->Lookup(fe, &style, nullptr);
     if (!font) {
         // Note that a file/index pair (or FT_Face) and the gfxFontStyle are
         // not necessarily enough to provide a key that will describe a unique

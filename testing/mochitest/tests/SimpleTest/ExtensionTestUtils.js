@@ -1,6 +1,6 @@
 var ExtensionTestUtils = {};
 
-ExtensionTestUtils.loadExtension = function(ext, id = null)
+ExtensionTestUtils.loadExtension = function(ext)
 {
   // Cleanup functions need to be registered differently depending on
   // whether we're in browser chrome or plain mochitests.
@@ -53,19 +53,19 @@ ExtensionTestUtils.loadExtension = function(ext, id = null)
 
   function testHandler(kind, pass, msg, ...args) {
     if (kind == "test-eq") {
-      var [expected, actual] = args;
-      SimpleTest.ok(pass, `${msg} - Expected: ${expected}, Actual: ${actual}`);
+      let [expected, actual, stack] = args;
+      SimpleTest.ok(pass, `${msg} - Expected: ${expected}, Actual: ${actual}`, undefined, stack);
     } else if (kind == "test-log") {
       SimpleTest.info(msg);
     } else if (kind == "test-result") {
-      SimpleTest.ok(pass, msg);
+      SimpleTest.ok(pass, msg, undefined, args[0]);
     }
   }
 
   var handler = {
     testResult(kind, pass, msg, ...args) {
       if (kind == "test-done") {
-        SimpleTest.ok(pass, msg);
+        SimpleTest.ok(pass, msg, undefined, args[0]);
         return testResolve(msg);
       }
       testHandler(kind, pass, msg, ...args);
@@ -83,7 +83,24 @@ ExtensionTestUtils.loadExtension = function(ext, id = null)
     },
   };
 
-  var extension = SpecialPowers.loadExtension(id, ext, handler);
+  // Mimic serialization of functions as done in `Extension.generateXPI` and
+  // `Extension.generateZipFile` because functions are dropped when `ext` object
+  // is sent to the main process via the message manager.
+  ext = Object.assign({}, ext);
+  if (ext.files) {
+    ext.files = Object.assign({}, ext.files);
+    for (let filename of Object.keys(ext.files)) {
+      let file = ext.files[filename];
+      if (typeof file == "function") {
+        ext.files[filename] = `(${file})();`
+      }
+    }
+  }
+  if (typeof ext.background == "function") {
+    ext.background = `(${ext.background})();`
+  }
+
+  var extension = SpecialPowers.loadExtension(ext, handler);
 
   registerCleanup(() => {
     if (extension.state == "pending" || extension.state == "running") {

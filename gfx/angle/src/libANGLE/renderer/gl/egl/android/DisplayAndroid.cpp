@@ -183,7 +183,8 @@ SurfaceImpl *DisplayAndroid::createPbufferSurface(const egl::SurfaceState &state
 
 SurfaceImpl *DisplayAndroid::createPbufferFromClientBuffer(const egl::SurfaceState &state,
                                                            const egl::Config *configuration,
-                                                           EGLClientBuffer shareHandle,
+                                                           EGLenum buftype,
+                                                           EGLClientBuffer clientBuffer,
                                                            const egl::AttributeMap &attribs)
 {
     UNIMPLEMENTED();
@@ -212,7 +213,6 @@ void DisplayAndroid::getConfigAttrib(EGLConfig config, EGLint attribute, T *valu
 {
     EGLint tmp;
     EGLBoolean success = mEGL->getConfigAttrib(config, attribute, &tmp);
-    UNUSED_ASSERTION_VARIABLE(success);
     ASSERT(success == EGL_TRUE);
     *value = tmp;
 }
@@ -329,11 +329,6 @@ egl::ConfigSet DisplayAndroid::generateConfigs()
     }
 
     return configSet;
-}
-
-bool DisplayAndroid::isDeviceLost() const
-{
-    return false;
 }
 
 bool DisplayAndroid::testDeviceLost()

@@ -94,7 +94,9 @@ public:
         return;
 
       // Create the log file and its parent directory (in case it doesn't exist)
-      logFile->Create(nsIFile::NORMAL_FILE_TYPE, 0644);
+      rv = logFile->Create(nsIFile::NORMAL_FILE_TYPE, 0644);
+      if (NS_FAILED(rv))
+        return;
 
       PRFileDesc* file;
 #ifdef XP_WIN
@@ -168,7 +170,6 @@ nsZipHandle::nsZipHandle()
   , mFileStart(nullptr)
   , mTotalLen(0)
 {
-  MOZ_COUNT_CTOR(nsZipHandle);
 }
 
 NS_IMPL_ADDREF(nsZipHandle)
@@ -342,7 +343,6 @@ nsZipHandle::~nsZipHandle()
   mFileData = nullptr;
   mMap = nullptr;
   mBuf = nullptr;
-  MOZ_COUNT_DTOR(nsZipHandle);
 }
 
 //***********************************************************
@@ -954,8 +954,6 @@ nsZipArchive::nsZipArchive()
 {
   zipLog.AddRef();
 
-  MOZ_COUNT_CTOR(nsZipArchive);
-
   // initialize the table to nullptr
   memset(mFiles, 0, sizeof(mFiles));
 }
@@ -966,8 +964,6 @@ NS_IMPL_RELEASE(nsZipArchive)
 nsZipArchive::~nsZipArchive()
 {
   CloseArchive();
-
-  MOZ_COUNT_DTOR(nsZipArchive);
 
   zipLog.Release();
 }

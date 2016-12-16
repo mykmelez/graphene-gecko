@@ -11,7 +11,7 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Hal.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/BackgroundUtils.h"
@@ -441,7 +441,11 @@ QuotaManagerService::PerformIdleMaintenance()
   if (!QuotaManager::kRunningXPCShellTests)
 #endif
   {
+    // In order to give the correct battery level, hal must have registered
+    // battery observers.
+    RegisterBatteryObserver(this);
     GetCurrentBatteryInformation(&batteryInfo);
+    UnregisterBatteryObserver(this);
   }
 
   // If we're running XPCShell because we always want to be able to test this
@@ -503,7 +507,6 @@ QuotaManagerService::GetUsageForPrincipal(nsIPrincipal* aPrincipal,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aPrincipal);
   MOZ_ASSERT(aCallback);
-  MOZ_ASSERT(nsContentUtils::IsCallerChrome());
 
   RefPtr<UsageRequest> request = new UsageRequest(aPrincipal, aCallback);
 
@@ -561,11 +564,21 @@ QuotaManagerService::Clear(nsIQuotaRequest** _retval)
 NS_IMETHODIMP
 QuotaManagerService::ClearStoragesForPrincipal(nsIPrincipal* aPrincipal,
                                                const nsACString& aPersistenceType,
+                                               bool aClearAll,
                                                nsIQuotaRequest** _retval)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aPrincipal);
   MOZ_ASSERT(nsContentUtils::IsCallerChrome());
+
+  nsCString suffix;
+  BasePrincipal::Cast(aPrincipal)->OriginAttributesRef().CreateSuffix(suffix);
+
+  if (NS_WARN_IF(aClearAll && !suffix.IsEmpty())) {
+    // The originAttributes should be default originAttributes when the
+    // aClearAll flag is set.
+    return NS_ERROR_INVALID_ARG;
+  }
 
   RefPtr<Request> request = new Request(aPrincipal);
 
@@ -595,6 +608,8 @@ QuotaManagerService::ClearStoragesForPrincipal(nsIPrincipal* aPrincipal,
     params.persistenceType() = persistenceType.Value();
     params.persistenceTypeIsExplicit() = true;
   }
+
+  params.clearAll() = aClearAll;
 
   nsAutoPtr<PendingRequestInfo> info(new RequestInfo(request, params));
 
@@ -645,7 +660,7 @@ QuotaManagerService::Observe(nsISupports* aSubject,
     return NS_OK;
   }
 
-  if (!strcmp(aTopic, "clear-origin-data")) {
+  if (!strcmp(aTopic, "clear-origin-attributes-data")) {
     RefPtr<Request> request = new Request();
 
     ClearOriginsParams requestParams;
@@ -694,6 +709,13 @@ QuotaManagerService::Observe(nsISupports* aSubject,
 
   MOZ_ASSERT_UNREACHABLE("Should never get here!");
   return NS_OK;
+}
+
+void
+QuotaManagerService::Notify(const hal::BatteryInformation& aBatteryInfo)
+{
+  // This notification is received when battery data changes. We don't need to
+  // deal with this notification.
 }
 
 NS_IMETHODIMP

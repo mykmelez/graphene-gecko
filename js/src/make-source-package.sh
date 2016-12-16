@@ -72,6 +72,7 @@ case $cmd in
        ${tgtpath}
 
     cp -pPR ${TOPSRCDIR}/js/moz.configure ${tgtpath}/js
+    cp -pPR ${TOPSRCDIR}/js/ffi.configure ${tgtpath}/js
 
     mkdir -p ${tgtpath}/taskcluster
     cp -pPR ${TOPSRCDIR}/taskcluster/moz.build ${tgtpath}/taskcluster/
@@ -91,6 +92,10 @@ case $cmd in
 
     # copy build and config directory.
     cp -pPR ${TOPSRCDIR}/build ${TOPSRCDIR}/config ${tgtpath}
+
+    # copy cargo config
+    ${MKDIR} -p ${tgtpath}/.cargo
+    cp -pPR ${TOPSRCDIR}/.cargo/config.in ${tgtpath}/.cargo
 
     # put in js itself
     cp -pPR ${TOPSRCDIR}/mfbt ${tgtpath}

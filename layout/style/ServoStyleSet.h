@@ -9,10 +9,9 @@
 
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/EventStates.h"
-#include "mozilla/RefPtr.h"
-#include "mozilla/ServoBindingHelpers.h"
+#include "mozilla/ServoBindingTypes.h"
 #include "mozilla/ServoElementSnapshot.h"
-#include "mozilla/ServoStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/SheetType.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCSSPseudoElements.h"
@@ -57,11 +56,15 @@ public:
 
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
-                  nsStyleContext* aParentContext);
+                  nsStyleContext* aParentContext,
+                  ConsumeStyleBehavior aConsume,
+                  LazyComputeBehavior aMayCompute);
 
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
                   nsStyleContext* aParentContext,
+                  ConsumeStyleBehavior aConsume,
+                  LazyComputeBehavior aMayCompute,
                   TreeMatchContext& aTreeMatchContext);
 
   already_AddRefed<nsStyleContext>
@@ -119,18 +122,31 @@ public:
     dom::Element* aPseudoElement, EventStates aStateMask);
 
   /**
-   * Computes a restyle hint given a element and a previous element snapshot.
+   * Performs a Servo traversal to compute style for all dirty nodes in the
+   * document. The root element must be non-null.
    */
-  nsRestyleHint ComputeRestyleHint(dom::Element* aElement,
-                                   ServoElementSnapshot* aSnapshot);
+  void StyleDocument();
 
   /**
-   * Restyles a whole subtree of nodes.
-   *
-   * The aForce parameter propagates the dirty bits down the subtree, and when
-   * used aNode needs to be nsIContent.
+   * Eagerly styles a subtree of unstyled nodes that was just appended to the
+   * tree. This is used in situations where we need the style immediately and
+   * cannot wait for a future batch restyle.
    */
-  void RestyleSubtree(nsINode* aNode, bool aForce);
+  void StyleNewSubtree(Element* aRoot);
+
+  /**
+   * Like the above, but skips the root node, and only styles unstyled children.
+   * When potentially appending multiple children, it's preferable to call
+   * StyleNewChildren on the node rather than making multiple calls to
+   * StyleNewSubtree on each child, since it allows for more parallelism.
+   */
+  void StyleNewChildren(Element* aParent);
+
+#ifdef DEBUG
+  void AssertTreeIsClean();
+#else
+  void AssertTreeIsClean() {}
+#endif
 
 private:
   already_AddRefed<nsStyleContext> GetContext(already_AddRefed<ServoComputedValues>,
@@ -141,7 +157,9 @@ private:
   already_AddRefed<nsStyleContext> GetContext(nsIContent* aContent,
                                               nsStyleContext* aParentContext,
                                               nsIAtom* aPseudoTag,
-                                              CSSPseudoElementType aPseudoType);
+                                              CSSPseudoElementType aPseudoType,
+                                              ConsumeStyleBehavior aConsume,
+                                              LazyComputeBehavior aMayCompute);
 
   nsPresContext* mPresContext;
   UniquePtr<RawServoStyleSet> mRawSet;

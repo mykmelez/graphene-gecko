@@ -29,6 +29,8 @@ class SourceSurface;
 namespace widget {
 
 class WinCompositorWidget;
+class X11CompositorWidget;
+class AndroidCompositorWidget;
 class CompositorWidgetInitData;
 
 // Gecko widgets usually need to communicate with the CompositorWidget with
@@ -39,7 +41,7 @@ class CompositorWidgetInitData;
 class CompositorWidgetDelegate;
 
 // Platforms that support out-of-process widgets.
-#if defined(XP_WIN)
+#if defined(XP_WIN) || defined(MOZ_X11)
 // CompositorWidgetParent should implement CompositorWidget and
 // PCompositorWidgetParent.
 class CompositorWidgetParent;
@@ -50,6 +52,18 @@ class CompositorWidgetChild;
 
 # define MOZ_WIDGET_SUPPORTS_OOP_COMPOSITING
 #endif
+
+class WidgetRenderingContext
+{
+public:
+#if defined(XP_MACOSX)
+  WidgetRenderingContext() : mLayerManager(nullptr) {}
+  layers::LayerManagerComposite* mLayerManager;
+#elif defined(MOZ_WIDGET_ANDROID)
+  WidgetRenderingContext() : mCompositor(nullptr) {}
+  layers::Compositor* mCompositor;
+#endif
+};
 
 /**
  * Access to a widget from the compositor is restricted to these methods.
@@ -72,7 +86,7 @@ public:
    * Always called from the compositing thread, which may be the main-thread if
    * OMTC is not enabled.
    */
-  virtual bool PreRender(layers::LayerManagerComposite* aManager) {
+  virtual bool PreRender(WidgetRenderingContext* aContext) {
     return true;
   }
 
@@ -83,7 +97,7 @@ public:
    * Always called from the compositing thread, which may be the main-thread if
    * OMTC is not enabled.
    */
-  virtual void PostRender(layers::LayerManagerComposite* aManager)
+  virtual void PostRender(WidgetRenderingContext* aContext)
   {}
 
   /**
@@ -91,7 +105,7 @@ public:
    *
    * Always called from the compositing thread.
    */
-  virtual void DrawWindowUnderlay(layers::LayerManagerComposite* aManager,
+  virtual void DrawWindowUnderlay(WidgetRenderingContext* aContext,
                                   LayoutDeviceIntRect aRect)
   {}
 
@@ -100,7 +114,7 @@ public:
    *
    * Always called from the compositing thread.
    */
-  virtual void DrawWindowOverlay(layers::LayerManagerComposite* aManager,
+  virtual void DrawWindowOverlay(WidgetRenderingContext* aContext,
                                  LayoutDeviceIntRect aRect)
   {}
 
@@ -134,6 +148,16 @@ public:
                                         LayoutDeviceIntRegion& aInvalidRegion)
   {
     EndRemoteDrawing();
+  }
+
+  /**
+   * Return true when it is better to defer EndRemoteDrawing().
+   *
+   * Called by BasicCompositor on the compositor thread for OMTC drawing
+   * after each composition.
+   */
+  virtual bool NeedsToDeferEndRemoteDrawing() {
+    return false;
   }
 
   /**
@@ -233,6 +257,12 @@ public:
   virtual RefPtr<VsyncObserver> GetVsyncObserver() const;
 
   virtual WinCompositorWidget* AsWindows() {
+    return nullptr;
+  }
+  virtual X11CompositorWidget* AsX11() {
+    return nullptr;
+  }
+  virtual AndroidCompositorWidget* AsAndroid() {
     return nullptr;
   }
 

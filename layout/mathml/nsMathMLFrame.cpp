@@ -12,6 +12,7 @@
 #include "nsMathMLChar.h"
 #include "nsCSSPseudoElements.h"
 #include "nsMathMLElement.h"
+#include "gfxMathTable.h"
 
 // used to map attributes into CSS rules
 #include "mozilla/StyleSetHandle.h"
@@ -163,8 +164,9 @@ nsMathMLFrame::GetPresentationDataFrom(nsIFrame*           aFrame,
     }
     frame = frame->GetParent();
   }
-  NS_WARN_IF_FALSE(frame && frame->GetContent(),
-                   "bad MathML markup - could not find the top <math> element");
+  NS_WARNING_ASSERTION(
+    frame && frame->GetContent(),
+    "bad MathML markup - could not find the top <math> element");
 }
 
 /* static */ void
@@ -192,8 +194,8 @@ nsMathMLFrame::GetAxisHeight(DrawTarget*    aDrawTarget,
   gfxFont* mathFont = aFontMetrics->GetThebesFontGroup()->GetFirstMathFont();
   if (mathFont) {
     aAxisHeight =
-      mathFont->GetMathConstant(gfxFontEntry::AxisHeight,
-                                aFontMetrics->AppUnitsPerDevPixel());
+      mathFont->MathTable()->Constant(gfxMathTable::AxisHeight,
+                                      aFontMetrics->AppUnitsPerDevPixel());
     return;
   }
 
@@ -364,9 +366,8 @@ void nsDisplayMathMLBar::Paint(nsDisplayListBuilder* aBuilder,
     NSRectToNonEmptySnappedRect(mRect + ToReferenceFrame(),
                                 mFrame->PresContext()->AppUnitsPerDevPixel(),
                                 *drawTarget);
-  nsCSSProperty colorProp = mFrame->StyleContext()->GetTextFillColorProp();
   ColorPattern color(ToDeviceColor(
-                                 mFrame->GetVisitedDependentColor(colorProp)));
+    mFrame->GetVisitedDependentColor(eCSSProperty__webkit_text_fill_color)));
   drawTarget->FillRect(rect, color);
 }
 
@@ -393,18 +394,16 @@ nsMathMLFrame::GetRadicalParameters(nsFontMetrics* aFontMetrics,
 
   // get the radical rulethickness
   if (mathFont) {
-    aRadicalRuleThickness =
-      mathFont->GetMathConstant(gfxFontEntry::RadicalRuleThickness,
-                                oneDevPixel);
+    aRadicalRuleThickness = mathFont->MathTable()->
+      Constant(gfxMathTable::RadicalRuleThickness, oneDevPixel);
   } else {
     GetRuleThickness(aFontMetrics, aRadicalRuleThickness);
   }
 
   // get the leading to be left at the top of the resulting frame
   if (mathFont) {
-    aRadicalExtraAscender =
-      mathFont->GetMathConstant(gfxFontEntry::RadicalExtraAscender,
-                                oneDevPixel);
+    aRadicalExtraAscender = mathFont->MathTable()->
+      Constant(gfxMathTable::RadicalExtraAscender, oneDevPixel);
   } else {
     // This seems more reliable than using aFontMetrics->GetLeading() on
     // suspicious fonts.
@@ -415,11 +414,11 @@ nsMathMLFrame::GetRadicalParameters(nsFontMetrics* aFontMetrics,
 
   // get the clearance between rule and content
   if (mathFont) {
-    aRadicalVerticalGap =
-      mathFont->GetMathConstant(aDisplayStyle ?
-                                gfxFontEntry::RadicalDisplayStyleVerticalGap :
-                                gfxFontEntry::RadicalVerticalGap,
-                                oneDevPixel);
+    aRadicalVerticalGap = mathFont->MathTable()->
+      Constant(aDisplayStyle ?
+               gfxMathTable::RadicalDisplayStyleVerticalGap :
+               gfxMathTable::RadicalVerticalGap,
+               oneDevPixel);
   } else {
     // Rule 11, App. G, TeXbook
     aRadicalVerticalGap = aRadicalRuleThickness +

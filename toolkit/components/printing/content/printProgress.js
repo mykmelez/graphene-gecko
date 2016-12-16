@@ -20,19 +20,18 @@ var switchUI = true;
 
 function ellipseString(aStr, doFront)
 {
-  if (aStr.length > 3 && (aStr.substr(0, 3) == "..." || aStr.substr(aStr.length-4, 3) == "...")) {
+  if (aStr.length > 3 && (aStr.substr(0, 3) == "..." || aStr.substr(aStr.length - 4, 3) == "...")) {
     return aStr;
   }
 
   var fixedLen = 64;
   if (aStr.length > fixedLen) {
     if (doFront) {
-      var endStr = aStr.substr(aStr.length-fixedLen, fixedLen);
+      var endStr = aStr.substr(aStr.length - fixedLen, fixedLen);
       return "..." + endStr;
-    } else {
-      var frontStr = aStr.substr(0, fixedLen);
-      return frontStr + "...";
     }
+    var frontStr = aStr.substr(0, fixedLen);
+    return frontStr + "...";
   }
   return aStr;
 }
@@ -91,7 +90,6 @@ var progressListener = {
       {
         dialog.tempLabel.setAttribute("hidden", "true");
         dialog.progress.setAttribute("hidden", "false");
-        dialog.cancel.setAttribute("disabled", "false");
 
         var progressLabel = getString("progress");
         if (progressLabel == "") {
@@ -120,7 +118,7 @@ var progressListener = {
       var percent;
       if ( aMaxTotalProgress > 0 )
       {
-        percent = Math.round( (aCurTotalProgress*100)/aMaxTotalProgress );
+        percent = Math.round( (aCurTotalProgress * 100) / aMaxTotalProgress );
         if ( percent > 100 )
           percent = 100;
 
@@ -172,7 +170,7 @@ function getString( stringId ) {
    // Check if we've fetched this string already.
    if (!(stringId in dialog.strings)) {
       // Try to get it.
-      var elem = document.getElementById( "dialog.strings."+stringId );
+      var elem = document.getElementById( "dialog.strings." + stringId );
       try {
         if ( elem
            &&
@@ -181,14 +179,14 @@ function getString( stringId ) {
            elem.childNodes[0]
            &&
            elem.childNodes[0].nodeValue ) {
-         dialog.strings[ stringId ] = elem.childNodes[0].nodeValue;
+         dialog.strings[stringId] = elem.childNodes[0].nodeValue;
         } else {
           // If unable to fetch string, use an empty string.
-          dialog.strings[ stringId ] = "";
+          dialog.strings[stringId] = "";
         }
-      } catch (e) { dialog.strings[ stringId ] = ""; }
+      } catch (e) { dialog.strings[stringId] = ""; }
    }
-   return dialog.strings[ stringId ];
+   return dialog.strings[stringId];
 }
 
 function loadDialog()
@@ -197,7 +195,7 @@ function loadDialog()
 
 function replaceInsert( text, index, value ) {
    var result = text;
-   var regExp = new RegExp( "#"+index );
+   var regExp = new RegExp( "#" + index );
    result = result.replace( regExp, value );
    return result;
 }
@@ -222,7 +220,7 @@ function onLoad() {
         return;
     }
 
-    dialog = new Object;
+    dialog = {};
     dialog.strings = new Array;
     dialog.title        = document.getElementById("dialog.title");
     dialog.titleLabel   = document.getElementById("dialog.titleLabel");
@@ -230,10 +228,8 @@ function onLoad() {
     dialog.progressText = document.getElementById("dialog.progressText");
     dialog.progressLabel = document.getElementById("dialog.progressLabel");
     dialog.tempLabel    = document.getElementById("dialog.tempLabel");
-    dialog.cancel       = document.getElementById("cancel");
 
     dialog.progress.setAttribute("hidden", "true");
-    dialog.cancel.setAttribute("disabled", "true");
 
     var progressLabel = getString("preparing");
     if (progressLabel == "") {
@@ -243,17 +239,12 @@ function onLoad() {
 
     dialog.title.value = docTitle;
 
-    // Set up dialog button callbacks.
-    var object = this;
-    doSetOKCancel("", function () { return object.onCancel();});
-
     // Fill dialog.
     loadDialog();
 
     // set our web progress listener on the helper app launcher
     printProgress.registerListener(progressListener);
-    moveToAlertPosition();
-    //We need to delay the set title else dom will overwrite it
+    // We need to delay the set title else dom will overwrite it
     window.setTimeout(doneIniting, 500);
 }
 
@@ -267,19 +258,19 @@ function onUnload()
      printProgress = null;
    }
 
-   catch( exception ) {}
+   catch ( exception ) {}
   }
 }
 
 // If the user presses cancel, tell the app launcher and close the dialog...
-function onCancel ()
+function onCancel()
 {
   // Cancel app launcher.
    try
    {
      printProgress.processCanceledByUser = true;
    }
-   catch( exception ) {return true;}
+   catch ( exception ) { return true; }
 
   // don't Close up dialog by returning false, the backend will close the dialog when everything will be aborted.
   return false;

@@ -19,11 +19,12 @@
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/TextureClient.h"
+#include "mozilla/layers/GPUVideoTextureHost.h"
 #include "nsAString.h"
 #include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsPrintfCString.h"            // for nsPrintfCString
 #include "mozilla/layers/PTextureParent.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include <limits>
 #include "../opengl/CompositorOGL.h"
 #include "gfxPrefs.h"
@@ -32,11 +33,6 @@
 
 #ifdef MOZ_ENABLE_D3D10_LAYER
 #include "../d3d11/CompositorD3D11.h"
-#endif
-
-#ifdef MOZ_WIDGET_GONK
-#include "../opengl/GrallocTextureClient.h"
-#include "../opengl/GrallocTextureHost.h"
 #endif
 
 #ifdef MOZ_X11
@@ -77,13 +73,18 @@ public:
 
   void NotifyNotUsed(uint64_t aTransactionId);
 
-  virtual bool RecvRecycleTexture(const TextureFlags& aTextureFlags) override;
+  virtual mozilla::ipc::IPCResult RecvRecycleTexture(const TextureFlags& aTextureFlags) override;
 
   TextureHost* GetTextureHost() { return mTextureHost; }
 
   virtual void Destroy() override;
 
   uint64_t GetSerial() const { return mSerial; }
+
+  virtual mozilla::ipc::IPCResult RecvDestroySync() override {
+    DestroyIfNeeded();
+    return IPC_OK();
+  }
 
   HostIPCAllocator* mSurfaceAllocator;
   RefPtr<TextureHost> mTextureHost;
@@ -155,41 +156,6 @@ TextureHost::GetIPDLActor()
   return mActor;
 }
 
-bool
-TextureHost::SetReleaseFenceHandle(const FenceHandle& aReleaseFenceHandle)
-{
-  if (!aReleaseFenceHandle.IsValid()) {
-    // HWC might not provide Fence.
-    // In this case, HWC implicitly handles buffer's fence.
-    return false;
-  }
-
-  mReleaseFenceHandle.Merge(aReleaseFenceHandle);
-
-  return true;
-}
-
-FenceHandle
-TextureHost::GetAndResetReleaseFenceHandle()
-{
-  FenceHandle fence;
-  mReleaseFenceHandle.TransferToAnotherFenceHandle(fence);
-  return fence;
-}
-
-void
-TextureHost::SetAcquireFenceHandle(const FenceHandle& aAcquireFenceHandle)
-{
-  mAcquireFenceHandle = aAcquireFenceHandle;
-}
-
-FenceHandle
-TextureHost::GetAndResetAcquireFenceHandle()
-{
-  RefPtr<FenceHandle::FdObj> fdObj = mAcquireFenceHandle.GetAndResetFdObj();
-  return FenceHandle(fdObj);
-}
-
 void
 TextureHost::SetLastFwdTransactionId(uint64_t aTransactionId)
 {
@@ -227,6 +193,7 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
     case SurfaceDescriptor::TSurfaceDescriptorBuffer:
     case SurfaceDescriptor::TSurfaceDescriptorDIB:
     case SurfaceDescriptor::TSurfaceDescriptorFileMapping:
+    case SurfaceDescriptor::TSurfaceDescriptorGPUVideo:
       return CreateBackendIndependentTextureHost(aDesc, aDeallocator, aFlags);
 
     case SurfaceDescriptor::TEGLImageDescriptor:
@@ -234,7 +201,6 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
     case SurfaceDescriptor::TSurfaceDescriptorSharedGLTexture:
       return CreateTextureHostOGL(aDesc, aDeallocator, aFlags);
 
-    case SurfaceDescriptor::TSurfaceDescriptorGralloc:
     case SurfaceDescriptor::TSurfaceDescriptorMacIOSurface:
       if (aBackend == LayersBackend::LAYERS_OPENGL) {
         return CreateTextureHostOGL(aDesc, aDeallocator, aFlags);
@@ -294,6 +260,10 @@ CreateBackendIndependentTextureHost(const SurfaceDescriptor& aDesc,
           gfxCriticalError() << "Failed texture host for backend " << (int)data.type();
           MOZ_CRASH("GFX: No texture host for backend");
       }
+      break;
+    }
+    case SurfaceDescriptor::TSurfaceDescriptorGPUVideo: {
+      result = new GPUVideoTextureHost(aFlags, aDesc.get_SurfaceDescriptorGPUVideo());
       break;
     }
 #ifdef XP_WIN
@@ -375,9 +345,8 @@ TextureHost::NotifyNotUsed()
   }
 
   // Do not need to call NotifyNotUsed() if TextureHost does not have
-  // TextureFlags::RECYCLE flag and TextureHost is not GrallocTextureHostOGL.
-  if (!(GetFlags() & TextureFlags::RECYCLE) &&
-      !AsGrallocTextureHostOGL()) {
+  // TextureFlags::RECYCLE flag.
+  if (!(GetFlags() & TextureFlags::RECYCLE)) {
     return;
   }
 
@@ -386,13 +355,11 @@ TextureHost::NotifyNotUsed()
   // - TextureHost does not have Compositor.
   // - Compositor is BasicCompositor.
   // - TextureHost has intermediate buffer.
-  // - TextureHost is GrallocTextureHostOGL. Fence object is used to detect
   //   end of buffer usage.
   if (!compositor ||
       compositor->IsDestroyed() ||
       compositor->AsBasicCompositor() ||
-      HasIntermediateBuffer() ||
-      AsGrallocTextureHostOGL()) {
+      HasIntermediateBuffer()) {
     static_cast<TextureParent*>(mActor)->NotifyNotUsed(mFwdTransactionId);
     return;
   }
@@ -513,7 +480,7 @@ BufferTextureHost::UpdatedInternal(const nsIntRegion* aRegion)
   }
   if (GetFlags() & TextureFlags::IMMEDIATE_UPLOAD) {
     DebugOnly<bool> result = MaybeUpload(!mNeedsFullUpdate ? &mMaybeUpdatedRegion : nullptr);
-    NS_WARN_IF_FALSE(result, "Failed to upload a texture");
+    NS_WARNING_ASSERTION(result, "Failed to upload a texture");
   }
 }
 
@@ -535,7 +502,10 @@ BufferTextureHost::SetCompositor(Compositor* aCompositor)
   if (mFirstSource && mFirstSource->IsOwnedBy(this)) {
     mFirstSource->SetOwner(nullptr);
   }
-  mFirstSource = nullptr;
+  if (mFirstSource) {
+    mFirstSource = nullptr;
+    mNeedsFullUpdate = true;
+  }
   mCompositor = aCompositor;
 }
 
@@ -706,6 +676,7 @@ BufferTextureHost::PrepareTextureSource(CompositableTextureSourceRef& aTexture)
     aTexture->AsSourceBasic()->SetBufferTextureHost(this);
     aTexture->AsDataTextureSource()->SetOwner(this);
     mFirstSource = aTexture->AsDataTextureSource();
+    mNeedsFullUpdate = true;
   }
 
   if (!mHasIntermediateBuffer) {
@@ -720,7 +691,10 @@ BufferTextureHost::PrepareTextureSource(CompositableTextureSourceRef& aTexture)
   }
 
   // We don't own it, apparently.
-  mFirstSource = nullptr;
+  if (mFirstSource) {
+    mNeedsFullUpdate = true;
+    mFirstSource = nullptr;
+  }
 
   DataTextureSource* texture = aTexture.get() ? aTexture->AsDataTextureSource() : nullptr;
 
@@ -787,6 +761,16 @@ BufferTextureHost::GetFormat() const
     return gfx::SurfaceFormat::R8G8B8X8;
   }
   return mFormat;
+}
+
+YUVColorSpace
+BufferTextureHost::GetYUVColorSpace() const
+{
+  if (mFormat == gfx::SurfaceFormat::YUV) {
+    const YCbCrDescriptor& desc = mDescriptor.get_YCbCrDescriptor();
+    return desc.yUVColorSpace();
+  }
+  return YUVColorSpace::UNKNOWN;
 }
 
 bool
@@ -1137,14 +1121,14 @@ TextureHost::ReceivedDestroy(PTextureParent* aActor)
   static_cast<TextureParent*>(aActor)->RecvDestroy();
 }
 
-bool
+mozilla::ipc::IPCResult
 TextureParent::RecvRecycleTexture(const TextureFlags& aTextureFlags)
 {
   if (!mTextureHost) {
-    return true;
+    return IPC_OK();
   }
   mTextureHost->RecycleTexture(aTextureFlags);
-  return true;
+  return IPC_OK();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

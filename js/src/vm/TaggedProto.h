@@ -20,6 +20,7 @@ class TaggedProto
     static JSObject * const LazyProto;
 
     TaggedProto() : proto(nullptr) {}
+    TaggedProto(const TaggedProto& other) : proto(other.proto) {}
     explicit TaggedProto(JSObject* proto) : proto(proto) {}
 
     uintptr_t toWord() const { return uintptr_t(proto); }
@@ -45,6 +46,9 @@ class TaggedProto
     bool operator !=(const TaggedProto& other) const { return proto != other.proto; }
 
     HashNumber hashCode() const;
+
+    bool hasUniqueId() const;
+    bool ensureUniqueId() const;
     uint64_t uniqueId() const;
 
     void trace(JSTracer* trc) {
@@ -65,11 +69,11 @@ struct InternalBarrierMethods<TaggedProto>
 
     static void readBarrier(const TaggedProto& proto);
 
-    static bool isMarkableTaggedPointer(TaggedProto proto) {
+    static bool isMarkableTaggedPointer(const TaggedProto& proto) {
         return proto.isObject();
     }
 
-    static bool isMarkable(TaggedProto proto) {
+    static bool isMarkable(const TaggedProto& proto) {
         return proto.isObject();
     }
 };
@@ -108,7 +112,7 @@ class BarrieredBaseMixins<TaggedProto> : public TaggedProtoOperations<GCPtr<Tagg
 // with the pointer. If the TaggedProto is lazy, calls F::defaultValue.
 template <typename F, typename... Args>
 auto
-DispatchTyped(F f, TaggedProto& proto, Args&&... args)
+DispatchTyped(F f, const TaggedProto& proto, Args&&... args)
   -> decltype(f(static_cast<JSObject*>(nullptr), mozilla::Forward<Args>(args)...))
 {
     if (proto.isObject())

@@ -9,9 +9,12 @@
 
 #include "nsTArrayForwardDeclare.h" // For nsTArray
 #include "js/RootingAPI.h" // For JS::Handle
+#include "mozilla/KeyframeEffectParams.h" // SpacingMode
 
 struct JSContext;
 class JSObject;
+class nsIDocument;
+class nsStyleContext;
 
 namespace mozilla {
 struct AnimationProperty;
@@ -95,11 +98,14 @@ public:
    *   GetComputedKeyframeValues. Only used when |aSpacingMode| is
    *   SpacingMode::paced. In all other cases this parameter is unused and may
    *   be any value including an empty array.
+   * @param aStyleContext The style context used for calculating paced spacing
+   *                      on transform.
    */
   static void ApplySpacing(nsTArray<Keyframe>& aKeyframes,
                            SpacingMode aSpacingMode,
-                           nsCSSProperty aProperty,
-                           nsTArray<ComputedKeyframeValues>& aComputedValues);
+                           nsCSSPropertyID aProperty,
+                           nsTArray<ComputedKeyframeValues>& aComputedValues,
+                           nsStyleContext* aStyleContext);
 
   /**
    * Wrapper for ApplySpacing to simplify using distribute spacing.
@@ -121,6 +127,9 @@ public:
    *   calculated from |aKeyframes|, passing them in as a separate parameter
    *   allows the result of GetComputedKeyframeValues to be re-used both
    *   here and in ApplySpacing.
+   * @param aEffectComposite The composite operation specified on the effect.
+   *   For any keyframes in |aKeyframes| that do not specify a composite
+   *   operation, this value will be used.
    * @param aStyleContext The style context to calculate the style difference.
    * @return The set of animation properties. If an error occurs, the returned
    *   array will be empty.
@@ -128,6 +137,7 @@ public:
   static nsTArray<AnimationProperty> GetAnimationPropertiesFromKeyframes(
     const nsTArray<Keyframe>& aKeyframes,
     const nsTArray<ComputedKeyframeValues>& aComputedValues,
+    dom::CompositeOperation aEffectComposite,
     nsStyleContext* aStyleContext);
 
   /**
@@ -137,7 +147,7 @@ public:
    * @param aProperty The property to check.
    * @return true if |aProperty| is animatable.
    */
-  static bool IsAnimatableProperty(nsCSSProperty aProperty);
+  static bool IsAnimatableProperty(nsCSSPropertyID aProperty);
 };
 
 } // namespace mozilla

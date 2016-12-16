@@ -78,6 +78,10 @@ var createCorruptDB = Task.async(function* () {
 function rebuildSmartBookmarks() {
   let consoleListener = {
     observe(aMsg) {
+      if (aMsg.message.startsWith("[JavaScript Warning:")) {
+        // TODO (Bug 1300416): Ignore spurious strict warnings.
+        return;
+      }
       do_throw("Got console message: " + aMsg.message);
     },
     QueryInterface: XPCOMUtils.generateQI([ Ci.nsIConsoleListener ]),
@@ -116,7 +120,7 @@ const NUMBER_OF_TRIES = 30;
  * @resolves to the asynchronous value being polled.
  * @rejects if the asynchronous value is not available after tryCount attempts.
  */
-var waitForResolvedPromise = Task.async(function* (promiseFn, timeoutMsg, tryCount=NUMBER_OF_TRIES) {
+var waitForResolvedPromise = Task.async(function* (promiseFn, timeoutMsg, tryCount = NUMBER_OF_TRIES) {
   let tries = 0;
   do {
     try {
@@ -125,5 +129,5 @@ var waitForResolvedPromise = Task.async(function* (promiseFn, timeoutMsg, tryCou
     } catch (ex) {}
     yield new Promise(resolve => do_timeout(SINGLE_TRY_TIMEOUT, resolve));
   } while (++tries <= tryCount);
-  throw(timeoutMsg);
+  throw new Error(timeoutMsg);
 });

@@ -3,16 +3,20 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
+/* globals window, document, PerformanceView, ToolbarView, RecordingsView, DetailsView */
+
+/* exported Cc, Ci, Cu, Cr, loader */
 var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 var BrowserLoaderModule = {};
 Cu.import("resource://devtools/client/shared/browser-loader.js", BrowserLoaderModule);
 var { loader, require } = BrowserLoaderModule.BrowserLoader({
   baseURI: "resource://devtools/client/performance/",
-  window: this
+  window
 });
 var { Task } = require("devtools/shared/task");
+/* exported Heritage, ViewHelpers, WidgetMethods, setNamedTimeout, clearNamedTimeout */
 var { Heritage, ViewHelpers, WidgetMethods, setNamedTimeout, clearNamedTimeout } = require("devtools/client/shared/widgets/view-helpers");
-var { gDevTools } = require("devtools/client/framework/devtools");
+var { PrefObserver } = require("devtools/client/shared/prefs");
 
 // Events emitted by various objects in the panel.
 var EVENTS = require("devtools/client/performance/events");
@@ -22,24 +26,36 @@ Object.defineProperty(this, "EVENTS", {
   writable: false
 });
 
+/* exported React, ReactDOM, JITOptimizationsView, RecordingControls, RecordingButton,
+   RecordingList, RecordingListItem, Services, Waterfall, promise, EventEmitter,
+   DevToolsUtils, system */
 var React = require("devtools/client/shared/vendor/react");
 var ReactDOM = require("devtools/client/shared/vendor/react-dom");
+var Waterfall = React.createFactory(require("devtools/client/performance/components/waterfall"));
 var JITOptimizationsView = React.createFactory(require("devtools/client/performance/components/jit-optimizations"));
+var RecordingControls = React.createFactory(require("devtools/client/performance/components/recording-controls"));
+var RecordingButton = React.createFactory(require("devtools/client/performance/components/recording-button"));
+var RecordingList = React.createFactory(require("devtools/client/performance/components/recording-list"));
+var RecordingListItem = React.createFactory(require("devtools/client/performance/components/recording-list-item"));
+
 var Services = require("Services");
 var promise = require("promise");
 var EventEmitter = require("devtools/shared/event-emitter");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+var flags = require("devtools/shared/flags");
 var system = require("devtools/shared/system");
 
 // Logic modules
-
+/* exported L10N, PerformanceTelemetry, TIMELINE_BLUEPRINT, RecordingUtils,
+   PerformanceUtils, OptimizationsGraph, GraphsController,
+   MarkerDetails, MarkerBlueprintUtils, WaterfallUtils, FrameUtils, CallView, ThreadNode,
+   FrameNode */
 var { L10N } = require("devtools/client/performance/modules/global");
 var { PerformanceTelemetry } = require("devtools/client/performance/modules/logic/telemetry");
 var { TIMELINE_BLUEPRINT } = require("devtools/client/performance/modules/markers");
 var RecordingUtils = require("devtools/shared/performance/recording-utils");
+var PerformanceUtils = require("devtools/client/performance/modules/utils");
 var { OptimizationsGraph, GraphsController } = require("devtools/client/performance/modules/widgets/graphs");
-var { WaterfallHeader } = require("devtools/client/performance/modules/widgets/waterfall-ticks");
-var { MarkerView } = require("devtools/client/performance/modules/widgets/marker-view");
 var { MarkerDetails } = require("devtools/client/performance/modules/widgets/marker-details");
 var { MarkerBlueprintUtils } = require("devtools/client/performance/modules/marker-blueprint-utils");
 var WaterfallUtils = require("devtools/client/performance/modules/logic/waterfall-utils");
@@ -50,18 +66,22 @@ var { FrameNode } = require("devtools/client/performance/modules/logic/tree-mode
 
 // Widgets modules
 
+/* exported OptionsView, FlameGraph, FlameGraphUtils, TreeWidget, SideMenuWidget */
 var { OptionsView } = require("devtools/client/shared/options-view");
 var { FlameGraph, FlameGraphUtils } = require("devtools/client/shared/widgets/FlameGraph");
 var { TreeWidget } = require("devtools/client/shared/widgets/TreeWidget");
-
 var { SideMenuWidget } = require("resource://devtools/client/shared/widgets/SideMenuWidget.jsm");
 
+/* exported BRANCH_NAME */
 var BRANCH_NAME = "devtools.performance.ui.";
 
 /**
  * The current target, toolbox and PerformanceFront, set by this tool's host.
  */
+/* exported gToolbox, gTarget, gFront */
 var gToolbox, gTarget, gFront;
+
+/* exported startupPerformance, shutdownPerformance, PerformanceController */
 
 /**
  * Initializes the profiler controller and views.
@@ -123,7 +143,8 @@ var PerformanceController = {
     RecordingsView.on(EVENTS.UI_RECORDING_SELECTED, this._onRecordingSelectFromView);
     DetailsView.on(EVENTS.UI_DETAILS_VIEW_SELECTED, this._pipe);
 
-    gDevTools.on("pref-changed", this._onThemeChanged);
+    this._prefObserver = new PrefObserver("devtools.");
+    this._prefObserver.on("devtools.theme", this._onThemeChanged);
   }),
 
   /**
@@ -143,7 +164,8 @@ var PerformanceController = {
     RecordingsView.off(EVENTS.UI_RECORDING_SELECTED, this._onRecordingSelectFromView);
     DetailsView.off(EVENTS.UI_DETAILS_VIEW_SELECTED, this._pipe);
 
-    gDevTools.off("pref-changed", this._onThemeChanged);
+    this._prefObserver.off("devtools.theme", this._onThemeChanged);
+    this._prefObserver.destroy();
   },
 
   /**
@@ -283,8 +305,9 @@ var PerformanceController = {
   }),
 
    /**
-   * Clears all completed recordings from the list as well as the current non-console recording.
-   * Emits `EVENTS.RECORDING_DELETED` when complete so other components can clean up.
+   * Clears all completed recordings from the list as well as the current non-console
+   * recording. Emits `EVENTS.RECORDING_DELETED` when complete so other components can
+   * clean up.
    */
   clearRecordings: Task.async(function* () {
     for (let i = this._recordings.length - 1; i >= 0; i--) {
@@ -308,8 +331,7 @@ var PerformanceController = {
       if (!this._recordings.includes(this.getCurrentRecording())) {
         this.setCurrentRecording(this._recordings[0]);
       }
-    }
-    else {
+    } else {
       this.setCurrentRecording(null);
     }
   }),
@@ -382,14 +404,9 @@ var PerformanceController = {
   /*
    * Called when the developer tools theme changes.
    */
-  _onThemeChanged: function (_, data) {
-    // Right now, gDevTools only emits `pref-changed` for the theme,
-    // but this could change in the future.
-    if (data.pref !== "devtools.theme") {
-      return;
-    }
-
-    this.emit(EVENTS.THEME_CHANGED, data.newValue);
+  _onThemeChanged: function () {
+    let newValue = Services.prefs.getCharPref("devtools.theme");
+    this.emit(EVENTS.THEME_CHANGED, newValue);
   },
 
   /**
@@ -458,8 +475,8 @@ var PerformanceController = {
    * recording supports that feature, based off of UI preferences and server support.
    *
    * @option {Array<string>|string} features
-   *         A string or array of strings indicating what configuration is needed on the recording
-   *         model, like `withTicks`, or `withMemory`.
+   *         A string or array of strings indicating what configuration is needed on the
+   *         recording model, like `withTicks`, or `withMemory`.
    *
    * @return boolean
    */
@@ -504,7 +521,7 @@ var PerformanceController = {
     // have realtime rendering tests in non-e10s. This function is
     // overridden wholesale in tests when we want to test multiprocess support
     // specifically.
-    if (DevToolsUtils.testing) {
+    if (flags.testing) {
       return { supported: true, enabled: true };
     }
     let supported = system.constants.E10S_TESTING_ONLY;
@@ -542,9 +559,8 @@ var PerformanceController = {
     let { enabled, supported } = this.getMultiprocessStatus();
     if (!enabled && supported) {
       $("#performance-view").setAttribute("e10s", "disabled");
-    }
-    // Could be a chance where the directive goes away yet e10s is still on
-    else if (!enabled && !supported) {
+    } else if (!enabled && !supported) {
+      // Could be a chance where the directive goes away yet e10s is still on
       $("#performance-view").setAttribute("e10s", "unsupported");
     }
   },
@@ -567,6 +583,7 @@ EventEmitter.decorate(PerformanceController);
 /**
  * DOM query helpers.
  */
+/* exported $, $$ */
 function $(selector, target = document) {
   return target.querySelector(selector);
 }

@@ -2,15 +2,29 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 /* eslint key-spacing: 0 */
+/* import-globals-from ../../commandline/test/helpers.js */
+
 "use strict";
+
+// Import the GCLI test helper
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/commandline/test/helpers.js",
+  this);
 
 // Testing that the gcli 'inspect' command works as it should.
 
 const TEST_URI = URL_ROOT + "doc_inspector_gcli-inspect-command.html";
 
 add_task(function* () {
-  return helpers.addTabWithToolbar(TEST_URI, function (options) {
-    return helpers.audit(options, [
+  return helpers.addTabWithToolbar(TEST_URI, Task.async(function* (options) {
+    let {inspector} = yield openInspector();
+
+    let checkSelection = Task.async(function* (selector) {
+      let node = yield getNodeFront(selector, inspector);
+      is(inspector.selection.nodeFront, node, "the current selection is correct");
+    });
+
+    yield helpers.audit(options, [
       {
         setup: "inspect",
         check: {
@@ -26,30 +40,6 @@ add_task(function* () {
         },
       },
       {
-        setup: "inspect h1",
-        check: {
-          input:  "inspect h1",
-          hints:            "",
-          markup: "VVVVVVVVII",
-          status: "ERROR",
-          args: {
-            selector: { message: "No matches" },
-          }
-        },
-      },
-      {
-        setup: "inspect span",
-        check: {
-          input:  "inspect span",
-          hints:              "",
-          markup: "VVVVVVVVEEEE",
-          status: "ERROR",
-          args: {
-            selector: { message: "Too many matches (2)" },
-          }
-        },
-      },
-      {
         setup: "inspect div",
         check: {
           input:  "inspect div",
@@ -60,18 +50,8 @@ add_task(function* () {
             selector: { message: "" },
           }
         },
-      },
-      {
-        setup: "inspect .someclas",
-        check: {
-          input:  "inspect .someclas",
-          hints:                   "",
-          markup: "VVVVVVVVIIIIIIIII",
-          status: "ERROR",
-          args: {
-            selector: { message: "No matches" },
-          }
-        },
+        exec: {},
+        post: () => checkSelection("div"),
       },
       {
         setup: "inspect .someclass",
@@ -84,6 +64,8 @@ add_task(function* () {
             selector: { message: "" },
           }
         },
+        exec: {},
+        post: () => checkSelection(".someclass"),
       },
       {
         setup: "inspect #someid",
@@ -96,6 +78,8 @@ add_task(function* () {
             selector: { message: "" },
           }
         },
+        exec: {},
+        post: () => checkSelection("#someid"),
       },
       {
         setup: "inspect button[disabled]",
@@ -108,6 +92,8 @@ add_task(function* () {
             selector: { message: "" },
           }
         },
+        exec: {},
+        post: () => checkSelection("button[disabled]"),
       },
       {
         setup: "inspect p>strong",
@@ -120,6 +106,8 @@ add_task(function* () {
             selector: { message: "" },
           }
         },
+        exec: {},
+        post: () => checkSelection("p>strong"),
       },
       {
         setup: "inspect :root",
@@ -129,7 +117,9 @@ add_task(function* () {
           markup: "VVVVVVVVVVVVV",
           status: "VALID"
         },
+        exec: {},
+        post: () => checkSelection(":root"),
       },
     ]);
-  });
+  }));
 });

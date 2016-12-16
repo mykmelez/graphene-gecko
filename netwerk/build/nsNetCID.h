@@ -113,6 +113,18 @@
     {0x93, 0x99, 0x00, 0x10, 0x4b, 0xa0, 0xfd, 0x40} \
 }
 
+// compoenent implementing nsIStandardURL, nsIURI, nsIURL
+// future replacement for nsStandardURL
+#define NS_RUSTURL_CONTRACTID \
+    "@mozilla.org/network/rust-url;1"
+#define NS_RUSTURL_CID                               \
+{ /* fd2d9f76-b34a-459e-b80e-447b03a1283a */         \
+    0xfd2d9f76,                                      \
+    0xb34a,                                          \
+    0x459e,                                          \
+    {0xb8, 0x0e, 0x44, 0x7b, 0x03, 0xa1, 0x28, 0x3a} \
+}
+
 // service implementing nsIURLParser that assumes the URL will NOT contain an
 // authority section.
 #define NS_NOAUTHURLPARSER_CONTRACTID \
@@ -625,6 +637,16 @@
     {0x96, 0x1f, 0x65, 0x53, 0xcd, 0x60, 0xb1, 0xa2} \
 }
 
+#define NS_THROTTLEQUEUE_CONTRACTID \
+    "@mozilla.org/network/throttlequeue;1"
+#define NS_THROTTLEQUEUE_CID                            \
+{ /* 4c39159c-cd90-4dd3-97a7-06af5e6d84c4 */            \
+    0x4c39159c,                                         \
+    0xcd90,                                             \
+    0x4dd3,                                             \
+    {0x97, 0xa7, 0x06, 0xaf, 0x5e, 0x6d, 0x84, 0xc4}    \
+}
+
 /******************************************************************************
  * netwerk/protocol/ftp/ classes
  */
@@ -885,25 +907,17 @@
     { 0x85, 0x44, 0x5a, 0x8d, 0x1a, 0xb7, 0x95, 0x37 } \
 }
 
-#define NS_PACKAGEDAPPSERVICE_CONTRACTID \
-    "@mozilla.org/network/packaged-app-service;1"
-#define NS_PACKAGEDAPPSERVICE_CID                      \
-{   /* adef6762-41b9-4470-a06a-dc29cf8de381 */         \
-    0xadef6762,                                        \
-    0x41b9,                                            \
-    0x4470,                                            \
-  { 0xa0, 0x6a, 0xdc, 0x29, 0xcf, 0x8d, 0xe3, 0x81 }   \
+#ifdef XP_WIN
+#define NS_NAMEDPIPESERVICE_CONTRACTID \
+    "@mozilla.org/network/named-pipe-service;1"
+#define NS_NAMEDPIPESERVICE_CID                        \
+{                                                      \
+    0xae298cf9,                                        \
+    0x91f4,                                            \
+    0x4337,                                            \
+  { 0x95, 0x69, 0x61, 0x88, 0xb9, 0xd0, 0x21, 0x6e }   \
 }
-
-#define NS_PACKAGEDAPPVERIFIER_CONTRACTID \
-    "@mozilla.org/network/packaged-app-verifier;1"
-#define NS_PACKAGEDAPPVERIFIER_CID                      \
-{   /* 07242d20-4cae-11e5-b970-0800200c9a66 */         \
-    0x07242d20,                                        \
-    0x4cae,                                            \
-    0x11e5,                                            \
-  { 0xb9, 0x70, 0x08, 0x00, 0x20, 0x0c, 0x96, 0x66 }   \
-}
+#endif
 
 /******************************************************************************
  * netwerk/cookie classes

@@ -13,9 +13,7 @@
 #include "js/CallNonGenericMethod.h"
 
 namespace JS {
-template <typename T>
-class AutoVectorRooter;
-typedef AutoVectorRooter<jsid> AutoIdVector;
+class AutoIdVector;
 } // namespace JS
 
 namespace xpc {
@@ -83,6 +81,10 @@ class CrossOriginXrayWrapper : public SecurityXrayDOM {
                                        JS::Handle<jsid> id,
                                        JS::MutableHandle<JS::PropertyDescriptor> desc) const override;
 };
+
+// Check whether the given jsid is a symbol whose value can be gotten
+// cross-origin.  Cross-origin gets always return undefined as the value.
+bool IsCrossOriginWhitelistedSymbol(JSContext* cx, JS::HandleId id);
 
 } // namespace xpc
 

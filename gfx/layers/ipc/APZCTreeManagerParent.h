@@ -19,10 +19,18 @@ class APZCTreeManagerParent
 {
 public:
 
-  explicit APZCTreeManagerParent(RefPtr<APZCTreeManager> aAPZCTreeManager);
-  virtual ~APZCTreeManagerParent() { }
+  explicit APZCTreeManagerParent(uint64_t aLayersId, RefPtr<APZCTreeManager> aAPZCTreeManager);
+  virtual ~APZCTreeManagerParent();
 
-  bool
+  uint64_t LayersId() const { return mLayersId; }
+
+  /**
+   * Called when the layer tree that this protocol is connected to
+   * is adopted by another compositor, and we need to switch APZCTreeManagers.
+   */
+  void ChildAdopted(RefPtr<APZCTreeManager> aAPZCTreeManager);
+
+  mozilla::ipc::IPCResult
   RecvReceiveMultiTouchInputEvent(
           const MultiTouchInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -30,7 +38,7 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvReceiveMouseInputEvent(
           const MouseInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -38,7 +46,7 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvReceivePanGestureInputEvent(
           const PanGestureInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -46,7 +54,7 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvReceivePinchGestureInputEvent(
           const PinchGestureInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -54,7 +62,7 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvReceiveTapGestureInputEvent(
           const TapGestureInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -62,7 +70,7 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvReceiveScrollWheelInputEvent(
           const ScrollWheelInput& aEvent,
           nsEventStatus* aOutStatus,
@@ -70,60 +78,60 @@ public:
           ScrollableLayerGuid* aOutTargetGuid,
           uint64_t* aOutInputBlockId) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvZoomToRect(
           const ScrollableLayerGuid& aGuid,
           const CSSRect& aRect,
           const uint32_t& aFlags) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvContentReceivedInputBlock(
           const uint64_t& aInputBlockId,
           const bool& aPreventDefault) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvSetTargetAPZC(
           const uint64_t& aInputBlockId,
           nsTArray<ScrollableLayerGuid>&& aTargets) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvUpdateZoomConstraints(
           const ScrollableLayerGuid& aGuid,
           const MaybeZoomConstraints& aConstraints) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvCancelAnimation(const ScrollableLayerGuid& aGuid) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvAdjustScrollForSurfaceShift(const ScreenPoint& aShift) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvSetDPI(const float& aDpiValue) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvSetAllowedTouchBehavior(
           const uint64_t& aInputBlockId,
           nsTArray<TouchBehaviorFlags>&& aValues) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvStartScrollbarDrag(
           const ScrollableLayerGuid& aGuid,
           const AsyncDragMetrics& aDragMetrics) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvSetLongTapEnabled(const bool& aTapGestureEnabled) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvProcessTouchVelocity(
           const uint32_t& aTimestampMs,
           const float& aSpeedY) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvUpdateWheelTransaction(
           const LayoutDeviceIntPoint& aRefPoint,
           const EventMessage& aEventMessage) override;
 
-  bool
+  mozilla::ipc::IPCResult
   RecvTransformEventRefPoint(
           const LayoutDeviceIntPoint& aRefPoint,
           LayoutDeviceIntPoint* aOutRefPoint,
@@ -133,6 +141,7 @@ public:
   ActorDestroy(ActorDestroyReason aWhy) override { }
 
 private:
+  uint64_t mLayersId;
   RefPtr<APZCTreeManager> mTreeManager;
 };
 

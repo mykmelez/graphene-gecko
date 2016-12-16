@@ -289,6 +289,7 @@ DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
   , mFlags(aFlags)
   , mIsTiled(false)
   , mIterating(false)
+  , mAllowTextureUploads(true)
 {
   mStereoMode = aStereoMode;
   MOZ_COUNT_CTOR(DataTextureSourceD3D9);
@@ -305,6 +306,7 @@ DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
   , mFlags(aFlags)
   , mIsTiled(false)
   , mIterating(false)
+  , mAllowTextureUploads(false)
 {
   mSize = aSize;
   mTexture = aTexture;
@@ -335,13 +337,18 @@ DataTextureSourceD3D9::Update(gfx::DataSourceSurface* aSurface,
   // on Mac so it is not clear that we ever will need to support it for D3D.
   MOZ_ASSERT(!aSrcOffset);
 
+  MOZ_ASSERT(mAllowTextureUploads);
+  if (!mAllowTextureUploads) {
+    return false;
+  }
+
   if (!mCompositor || !mCompositor->device()) {
     NS_WARNING("No D3D device to update the texture.");
     return false;
   }
 
   uint32_t bpp = BytesPerPixel(aSurface->GetFormat());
-  RefPtr<DeviceManagerD3D9> deviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  RefPtr<DeviceManagerD3D9> deviceManager = DeviceManagerD3D9::Get();
 
   mSize = aSurface->GetSize();
   mFormat = aSurface->GetFormat();
@@ -575,7 +582,7 @@ D3D9TextureData::Create(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
                         TextureAllocationFlags aAllocFlags)
 {
   _D3DFORMAT format = SurfaceFormatToD3D9Format(aFormat);
-  RefPtr<DeviceManagerD3D9> deviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  RefPtr<DeviceManagerD3D9> deviceManager = DeviceManagerD3D9::Get();
   RefPtr<IDirect3DTexture9> d3d9Texture = deviceManager ? deviceManager->CreateTexture(aSize, format,
                                                                                        D3DPOOL_SYSTEMMEM,
                                                                                        nullptr)
@@ -593,7 +600,7 @@ D3D9TextureData::Create(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
 }
 
 TextureData*
-D3D9TextureData::CreateSimilar(ClientIPCAllocator*, TextureFlags aFlags, TextureAllocationFlags aAllocFlags) const
+D3D9TextureData::CreateSimilar(LayersIPCChannel*, LayersBackend, TextureFlags aFlags, TextureAllocationFlags aAllocFlags) const
 {
   return D3D9TextureData::Create(mSize, mFormat, aAllocFlags);
 }
@@ -610,9 +617,9 @@ D3D9TextureData::FillInfo(TextureData::Info& aInfo) const
 }
 
 bool
-D3D9TextureData::Lock(OpenMode aMode, FenceHandle*)
+D3D9TextureData::Lock(OpenMode aMode)
 {
-  if (!gfxWindowsPlatform::GetPlatform()->GetD3D9Device()) {
+  if (!DeviceManagerD3D9::GetDevice()) {
     // If the device has failed then we should not lock the surface,
     // even if we could.
     mD3D9Surface = nullptr;
@@ -675,7 +682,7 @@ D3D9TextureData::BorrowDrawTarget()
       gfxCriticalError() << "Failed to lock rect borrowing the target in D3D9 (BDT) " << hexa(hr);
       return nullptr;
     }
-    dt = gfxPlatform::GetPlatform()->CreateDrawTargetForData((uint8_t*)rect.pBits, mSize,
+    dt = gfxPlatform::CreateDrawTargetForData((uint8_t*)rect.pBits, mSize,
                                                              rect.Pitch, mFormat);
     if (!dt) {
       return nullptr;
@@ -740,10 +747,10 @@ D3D9TextureData::UpdateFromSurface(gfx::SourceSurface* aSurface)
 DXGID3D9TextureData::DXGID3D9TextureData(gfx::SurfaceFormat aFormat,
                                          IDirect3DTexture9* aTexture, HANDLE aHandle,
                                          IDirect3DDevice9* aDevice)
-: mFormat(aFormat)
+: mDevice(aDevice)
 , mTexture(aTexture)
+, mFormat(aFormat)
 , mHandle(aHandle)
-, mDevice(aDevice)
 {
   MOZ_COUNT_CTOR(DXGID3D9TextureData);
 }
@@ -859,7 +866,7 @@ DataTextureSourceD3D9::UpdateFromTexture(IDirect3DTexture9* aTexture,
     mSize = IntSize(desc.Width, desc.Height);
   }
 
-  RefPtr<DeviceManagerD3D9> dm = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  RefPtr<DeviceManagerD3D9> dm = DeviceManagerD3D9::Get();
   if (!dm || !dm->device()) {
     return false;
   }

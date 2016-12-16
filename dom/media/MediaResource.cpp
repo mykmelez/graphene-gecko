@@ -8,7 +8,6 @@
 
 #include "MediaResource.h"
 #include "MediaResourceCallback.h"
-#include "RtspMediaResource.h"
 
 #include "mozilla/Mutex.h"
 #include "nsDebug.h"
@@ -223,7 +222,9 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
 
     int64_t contentLength = -1;
     hc->GetContentLength(&contentLength);
-    if (contentLength >= 0 && responseStatus == HTTP_OK_CODE) {
+    if (contentLength >= 0 &&
+        (responseStatus == HTTP_OK_CODE ||
+         responseStatus == HTTP_PARTIAL_RESPONSE_CODE)) {
       // "OK" status means Content-Length is for the whole resource.
       // Since that's bounded, we know we have a finite-length resource.
       dataIsBounded = true;
@@ -255,8 +256,9 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
         }
         // Give some warnings if the ranges are unexpected.
         // XXX These could be error conditions.
-        NS_WARN_IF_FALSE(mOffset == rangeStart,
-                         "response range start does not match current offset");
+        NS_WARNING_ASSERTION(
+          mOffset == rangeStart,
+          "response range start does not match current offset");
         mOffset = rangeStart;
         mCacheStream.NotifyDataStarted(rangeStart);
       }
@@ -425,7 +427,7 @@ struct CopySegmentClosure {
   ChannelMediaResource*  mResource;
 };
 
-NS_METHOD
+nsresult
 ChannelMediaResource::CopySegmentToCache(nsIInputStream *aInStream,
                                          void *aClosure,
                                          const char *aFromSegment,
@@ -705,8 +707,6 @@ ChannelMediaResource::MediaReadAt(int64_t aOffset, uint32_t aCount)
 
 int64_t ChannelMediaResource::Tell()
 {
-  NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
-
   return mCacheStream.Tell();
 }
 
@@ -1474,8 +1474,6 @@ nsresult FileMediaResource::UnsafeSeek(int32_t aWhence, int64_t aOffset)
 
 int64_t FileMediaResource::Tell()
 {
-  NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
-
   MutexAutoLock lock(mLock);
   EnsureSizeInitialized();
 
@@ -1506,8 +1504,6 @@ MediaResource::Create(MediaResourceCallback* aCallback, nsIChannel* aChannel)
   RefPtr<MediaResource> resource;
   if (fc || IsBlobURI(uri)) {
     resource = new FileMediaResource(aCallback, aChannel, uri, contentType);
-  } else if (IsRtspURI(uri)) {
-    resource = new RtspMediaResource(aCallback, aChannel, uri, contentType);
   } else {
     resource = new ChannelMediaResource(aCallback, aChannel, uri, contentType);
   }

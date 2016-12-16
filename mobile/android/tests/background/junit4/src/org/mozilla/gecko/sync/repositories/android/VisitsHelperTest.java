@@ -13,6 +13,7 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mozilla.gecko.background.db.DelegatingTestContentProvider;
 import org.mozilla.gecko.background.testhelpers.TestRunner;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserProvider;
@@ -58,7 +59,7 @@ public class VisitsHelperTest {
         BrowserProvider provider = new BrowserProvider();
         try {
             provider.onCreate();
-            ShadowContentResolver.registerProvider(BrowserContract.AUTHORITY_URI.toString(), provider);
+            ShadowContentResolver.registerProvider(BrowserContract.AUTHORITY, new DelegatingTestContentProvider(provider));
 
             final ShadowContentResolver cr = new ShadowContentResolver();
             ContentProviderClient historyClient = cr.acquireContentProviderClient(BrowserContractHelpers.HISTORY_CONTENT_URI);
@@ -85,9 +86,9 @@ public class VisitsHelperTest {
             for (int i = 0; i < recentVisits.size(); i++) {
                 JSONObject v = (JSONObject) recentVisits.get(i);
                 Long date = (Long) v.get("date");
-                Integer type = (Integer) v.get("type");
+                Long type = (Long) v.get("type");
                 Assert.assertEquals(Long.valueOf(baseDate - i * 100), date);
-                Assert.assertEquals(Integer.valueOf(1), type);
+                Assert.assertEquals(Long.valueOf(1), type);
             }
         } finally {
             provider.shutdown();

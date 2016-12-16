@@ -47,7 +47,6 @@
 #include "libANGLE/renderer/d3d/ShaderD3D.h"
 #include "libANGLE/renderer/d3d/SurfaceD3D.h"
 #include "libANGLE/renderer/d3d/TextureD3D.h"
-#include "libANGLE/renderer/d3d/TransformFeedbackD3D.h"
 #include "libANGLE/State.h"
 #include "libANGLE/Surface.h"
 #include "libANGLE/Texture.h"
@@ -526,6 +525,7 @@ void Renderer9::generateDisplayExtensions(egl::DisplayExtensions *outExtensions)
         outExtensions->d3dShareHandleClientBuffer     = true;
         outExtensions->surfaceD3DTexture2DShareHandle = true;
     }
+    outExtensions->d3dTextureClientBuffer = true;
 
     outExtensions->querySurfacePointer = true;
     outExtensions->windowFixedSize     = true;
@@ -673,12 +673,111 @@ NativeWindowD3D *Renderer9::createNativeWindow(EGLNativeWindowType window,
 
 SwapChainD3D *Renderer9::createSwapChain(NativeWindowD3D *nativeWindow,
                                          HANDLE shareHandle,
+                                         IUnknown *d3dTexture,
                                          GLenum backBufferFormat,
                                          GLenum depthBufferFormat,
                                          EGLint orientation)
 {
-    return new SwapChain9(this, GetAs<NativeWindow9>(nativeWindow), shareHandle, backBufferFormat,
-                          depthBufferFormat, orientation);
+    return new SwapChain9(this, GetAs<NativeWindow9>(nativeWindow), shareHandle, d3dTexture,
+                          backBufferFormat, depthBufferFormat, orientation);
+}
+
+egl::Error Renderer9::getD3DTextureInfo(IUnknown *d3dTexture,
+                                        EGLint *width,
+                                        EGLint *height,
+                                        GLenum *fboFormat) const
+{
+    IDirect3DTexture9 *texture = nullptr;
+    if (FAILED(d3dTexture->QueryInterface(&texture)))
+    {
+        return egl::Error(EGL_BAD_PARAMETER, "client buffer is not a IDirect3DTexture9");
+    }
+
+    IDirect3DDevice9 *textureDevice = nullptr;
+    texture->GetDevice(&textureDevice);
+    if (textureDevice != mDevice)
+    {
+        SafeRelease(texture);
+        return egl::Error(EGL_BAD_PARAMETER, "Texture's device does not match.");
+    }
+    SafeRelease(textureDevice);
+
+    D3DSURFACE_DESC desc;
+    texture->GetLevelDesc(0, &desc);
+    SafeRelease(texture);
+
+    if (width)
+    {
+        *width = static_cast<EGLint>(desc.Width);
+    }
+    if (height)
+    {
+        *height = static_cast<EGLint>(desc.Height);
+    }
+
+    // From table egl.restrictions in EGL_ANGLE_d3d_texture_client_buffer.
+    switch (desc.Format)
+    {
+        case D3DFMT_R8G8B8:
+        case D3DFMT_A8R8G8B8:
+        case D3DFMT_A16B16G16R16F:
+        case D3DFMT_A32B32G32R32F:
+            break;
+
+        default:
+            return egl::Error(EGL_BAD_PARAMETER, "Unknown client buffer texture format: %u.",
+                              desc.Format);
+    }
+
+    if (fboFormat)
+    {
+        const auto &d3dFormatInfo = d3d9::GetD3DFormatInfo(desc.Format);
+        ASSERT(d3dFormatInfo.info().id != angle::Format::ID::NONE);
+        *fboFormat = d3dFormatInfo.info().fboImplementationInternalFormat;
+    }
+
+    return egl::Error(EGL_SUCCESS);
+}
+
+egl::Error Renderer9::validateShareHandle(const egl::Config *config,
+                                          HANDLE shareHandle,
+                                          const egl::AttributeMap &attribs) const
+{
+    if (shareHandle == nullptr)
+    {
+        return egl::Error(EGL_BAD_PARAMETER, "NULL share handle.");
+    }
+
+    EGLint width  = attribs.getAsInt(EGL_WIDTH, 0);
+    EGLint height = attribs.getAsInt(EGL_HEIGHT, 0);
+    ASSERT(width != 0 && height != 0);
+
+    const d3d9::TextureFormat &backBufferd3dFormatInfo =
+        d3d9::GetTextureFormatInfo(config->renderTargetFormat);
+
+    IDirect3DTexture9 *texture = nullptr;
+    HRESULT result             = mDevice->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET,
+                                            backBufferd3dFormatInfo.texFormat, D3DPOOL_DEFAULT,
+                                            &texture, &shareHandle);
+    if (FAILED(result))
+    {
+        return egl::Error(EGL_BAD_PARAMETER, "Failed to open share handle, result: 0x%X.", result);
+    }
+
+    DWORD levelCount = texture->GetLevelCount();
+
+    D3DSURFACE_DESC desc;
+    texture->GetLevelDesc(0, &desc);
+    SafeRelease(texture);
+
+    if (levelCount != 1 || desc.Width != static_cast<UINT>(width) ||
+        desc.Height != static_cast<UINT>(height) ||
+        desc.Format != backBufferd3dFormatInfo.texFormat)
+    {
+        return egl::Error(EGL_BAD_PARAMETER, "Invalid texture parameters in share handle texture.");
+    }
+
+    return egl::Error(EGL_SUCCESS);
 }
 
 ContextImpl *Renderer9::createContext(const gl::ContextState &state)
@@ -819,7 +918,9 @@ gl::Error Renderer9::setSamplerState(gl::SamplerType type, int index, gl::Textur
         mDevice->SetSamplerState(d3dSampler, D3DSAMP_MIPMAPLODBIAS, static_cast<DWORD>(lodBias));
         if (getNativeExtensions().textureFilterAnisotropic)
         {
-            mDevice->SetSamplerState(d3dSampler, D3DSAMP_MAXANISOTROPY, (DWORD)samplerState.maxAnisotropy);
+            DWORD maxAnisotropy =
+                std::min(mDeviceCaps.MaxAnisotropy, static_cast<DWORD>(samplerState.maxAnisotropy));
+            mDevice->SetSamplerState(d3dSampler, D3DSAMP_MAXANISOTROPY, maxAnisotropy);
         }
     }
 
@@ -906,7 +1007,18 @@ gl::Error Renderer9::updateState(Context9 *context, GLenum drawMode)
     setScissorRectangle(glState.getScissor(), glState.isScissorTestEnabled());
 
     // Setting blend, depth stencil, and rasterizer states
-    int samples                    = framebuffer->getSamples(data);
+    // Since framebuffer->getSamples will return the original samples which may be different with
+    // the sample counts that we set in render target view, here we use renderTarget->getSamples to
+    // get the actual samples.
+    GLsizei samples           = 0;
+    auto firstColorAttachment = framebuffer->getFirstColorbuffer();
+    if (firstColorAttachment)
+    {
+        ASSERT(firstColorAttachment->isAttached());
+        RenderTarget9 *renderTarget = nullptr;
+        ANGLE_TRY(firstColorAttachment->getRenderTarget(&renderTarget));
+        samples = renderTarget->getSamples();
+    }
     gl::RasterizerState rasterizer = glState.getRasterizerState();
     rasterizer.pointDrawMode       = (drawMode == GL_POINTS);
     rasterizer.multiSample         = (samples != 0);
@@ -929,7 +1041,18 @@ gl::Error Renderer9::setBlendDepthRasterStates(const gl::ContextState &glData, G
     const auto &glState  = glData.getState();
     auto drawFramebuffer = glState.getDrawFramebuffer();
     ASSERT(!drawFramebuffer->hasAnyDirtyBit());
-    int samples                    = drawFramebuffer->getSamples(glData);
+    // Since framebuffer->getSamples will return the original samples which may be different with
+    // the sample counts that we set in render target view, here we use renderTarget->getSamples to
+    // get the actual samples.
+    GLsizei samples           = 0;
+    auto firstColorAttachment = drawFramebuffer->getFirstColorbuffer();
+    if (firstColorAttachment)
+    {
+        ASSERT(firstColorAttachment->isAttached());
+        RenderTarget9 *renderTarget = nullptr;
+        ANGLE_TRY(firstColorAttachment->getRenderTarget(&renderTarget));
+        samples = renderTarget->getSamples();
+    }
     gl::RasterizerState rasterizer = glState.getRasterizerState();
     rasterizer.pointDrawMode       = (drawMode == GL_POINTS);
     rasterizer.multiSample         = (samples != 0);
@@ -1790,17 +1913,26 @@ gl::Error Renderer9::clear(const ClearParameters &clearParams,
         RenderTarget9 *colorRenderTarget9 = GetAs<RenderTarget9>(colorRenderTarget);
         ASSERT(colorRenderTarget9);
 
-        const gl::InternalFormat &formatInfo = gl::GetInternalFormatInfo(colorBuffer->getInternalFormat());
+        const gl::InternalFormat &formatInfo = *colorBuffer->getFormat().info;
         const d3d9::D3DFormat &d3dFormatInfo = d3d9::GetD3DFormatInfo(colorRenderTarget9->getD3DFormat());
 
-        color = D3DCOLOR_ARGB(gl::unorm<8>((formatInfo.alphaBits == 0 && d3dFormatInfo.alphaBits > 0) ? 1.0f : clearParams.colorFClearValue.alpha),
-                              gl::unorm<8>((formatInfo.redBits   == 0 && d3dFormatInfo.redBits   > 0) ? 0.0f : clearParams.colorFClearValue.red),
-                              gl::unorm<8>((formatInfo.greenBits == 0 && d3dFormatInfo.greenBits > 0) ? 0.0f : clearParams.colorFClearValue.green),
-                              gl::unorm<8>((formatInfo.blueBits  == 0 && d3dFormatInfo.blueBits  > 0) ? 0.0f : clearParams.colorFClearValue.blue));
+        color =
+            D3DCOLOR_ARGB(gl::unorm<8>((formatInfo.alphaBits == 0 && d3dFormatInfo.alphaBits > 0)
+                                           ? 1.0f
+                                           : clearParams.colorFClearValue.alpha),
+                          gl::unorm<8>((formatInfo.redBits == 0 && d3dFormatInfo.redBits > 0)
+                                           ? 0.0f
+                                           : clearParams.colorFClearValue.red),
+                          gl::unorm<8>((formatInfo.greenBits == 0 && d3dFormatInfo.greenBits > 0)
+                                           ? 0.0f
+                                           : clearParams.colorFClearValue.green),
+                          gl::unorm<8>((formatInfo.blueBits == 0 && d3dFormatInfo.blueBits > 0)
+                                           ? 0.0f
+                                           : clearParams.colorFClearValue.blue));
 
-        if ((formatInfo.redBits   > 0 && !clearParams.colorMaskRed) ||
+        if ((formatInfo.redBits > 0 && !clearParams.colorMaskRed) ||
             (formatInfo.greenBits > 0 && !clearParams.colorMaskGreen) ||
-            (formatInfo.blueBits  > 0 && !clearParams.colorMaskBlue) ||
+            (formatInfo.blueBits > 0 && !clearParams.colorMaskBlue) ||
             (formatInfo.alphaBits > 0 && !clearParams.colorMaskAlpha))
         {
             needMaskedColorClear = true;
@@ -2037,19 +2169,7 @@ void Renderer9::releaseDeviceResources()
 bool Renderer9::testDeviceLost()
 {
     HRESULT status = getDeviceStatusCode();
-    bool isLost = FAILED(status);
-
-    if (isLost)
-    {
-        // ensure we note the device loss --
-        // we'll probably get this done again by notifyDeviceLost
-        // but best to remember it!
-        // Note that we don't want to clear the device loss status here
-        // -- this needs to be done by resetDevice
-        mDeviceLost = true;
-    }
-
-    return isLost;
+    return FAILED(status);
 }
 
 HRESULT Renderer9::getDeviceStatusCode()
@@ -2151,8 +2271,6 @@ bool Renderer9::resetDevice()
         // reset device defaults
         initializeDevice();
     }
-
-    mDeviceLost = false;
 
     return true;
 }
@@ -2328,6 +2446,30 @@ gl::Error Renderer9::copyImage2DArray(const gl::Framebuffer *framebuffer, const 
 {
     // 2D array textures are not available in the D3D9 backend.
     UNREACHABLE();
+    return gl::Error(GL_INVALID_OPERATION);
+}
+
+gl::Error Renderer9::copyTexture(const gl::Texture *source,
+                                 GLint sourceLevel,
+                                 const gl::Rectangle &sourceRect,
+                                 GLenum destFormat,
+                                 const gl::Offset &destOffset,
+                                 TextureStorage *storage,
+                                 GLint destLevel,
+                                 bool unpackFlipY,
+                                 bool unpackPremultiplyAlpha,
+                                 bool unpackUnmultiplyAlpha)
+{
+    UNIMPLEMENTED();
+    return gl::Error(GL_INVALID_OPERATION);
+}
+
+gl::Error Renderer9::copyCompressedTexture(const gl::Texture *source,
+                                           GLint sourceLevel,
+                                           TextureStorage *storage,
+                                           GLint destLevel)
+{
+    UNIMPLEMENTED();
     return gl::Error(GL_INVALID_OPERATION);
 }
 
@@ -2636,9 +2778,10 @@ TextureStorage *Renderer9::createTextureStorage2D(SwapChainD3D *swapChain)
     return new TextureStorage9_2D(this, swapChain9);
 }
 
-TextureStorage *Renderer9::createTextureStorageEGLImage(EGLImageD3D *eglImage)
+TextureStorage *Renderer9::createTextureStorageEGLImage(EGLImageD3D *eglImage,
+                                                        RenderTargetD3D *renderTargetD3D)
 {
-    return new TextureStorage9_EGLImage(this, eglImage);
+    return new TextureStorage9_EGLImage(this, eglImage, GetAs<RenderTarget9>(renderTargetD3D));
 }
 
 TextureStorage *Renderer9::createTextureStorageExternal(
@@ -2879,6 +3022,11 @@ gl::Error Renderer9::genericDrawArrays(Context9 *context,
 FramebufferImpl *Renderer9::createDefaultFramebuffer(const gl::FramebufferState &state)
 {
     return new Framebuffer9(state, this);
+}
+
+gl::Version Renderer9::getMaxSupportedESVersion() const
+{
+    return gl::Version(2, 0);
 }
 
 }  // namespace rx

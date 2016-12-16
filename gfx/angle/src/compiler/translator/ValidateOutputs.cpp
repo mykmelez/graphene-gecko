@@ -9,6 +9,9 @@
 #include "compiler/translator/InitializeParseContext.h"
 #include "compiler/translator/ParseContext.h"
 
+namespace sh
+{
+
 namespace
 {
 void error(int *errorCount, TInfoSinkBase &sink, const TIntermSymbol &symbol, const char *reason)
@@ -60,7 +63,7 @@ int ValidateOutputs::validateAndCountErrors(TInfoSinkBase &sink) const
     for (const auto &symbol : mOutputs)
     {
         const TType &type         = symbol->getType();
-        const size_t elementCount = static_cast<size_t>(type.isArray() ? type.getArraySize() : 1);
+        const size_t elementCount = static_cast<size_t>(type.isArray() ? type.getArraySize() : 1u);
         const size_t location     = static_cast<size_t>(type.getLayoutQualifier().location);
 
         ASSERT(type.getLayoutQualifier().location != -1);
@@ -106,3 +109,5 @@ int ValidateOutputs::validateAndCountErrors(TInfoSinkBase &sink) const
     }
     return errorCount;
 }
+
+}  // namespace sh

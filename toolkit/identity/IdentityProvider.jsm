@@ -102,7 +102,7 @@ IdentityProviderService.prototype = {
   },
 
   get certDuration() {
-    switch(this.securityLevel) {
+    switch (this.securityLevel) {
       default:
         return 3600;
     }
@@ -178,7 +178,6 @@ IdentityProviderService.prototype = {
     provFlow.caller = aCaller;
 
     let identity = provFlow.identity;
-    let frame = provFlow.provisioningFrame;
 
     // Determine recommended length of cert.
     let duration = this.certDuration;

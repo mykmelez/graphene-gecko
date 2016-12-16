@@ -152,6 +152,7 @@ nsJSUtils::EvaluateString(JSContext* aCx,
 
   MOZ_ASSERT_IF(aCompileOptions.versionSet,
                 aCompileOptions.version != JSVERSION_UNKNOWN);
+  MOZ_ASSERT_IF(aEvaluateOptions.coerceToString, !aCompileOptions.noScriptRval);
   MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
   MOZ_ASSERT(aSrcBuf.get());
   MOZ_ASSERT(js::GetGlobalForObjectCrossCompartment(aEvaluationGlobal) ==
@@ -204,6 +205,13 @@ nsJSUtils::EvaluateString(JSContext* aCx,
       }
     } else if (ok) {
       ok = JS::Evaluate(aCx, scopeChain, aCompileOptions, aSrcBuf, aRetValue);
+    }
+
+    if (ok && aEvaluateOptions.coerceToString && !aRetValue.isUndefined()) {
+      JS::Rooted<JS::Value> value(aCx, aRetValue);
+      JSString* str = JS::ToString(aCx, value);
+      ok = !!str;
+      aRetValue.set(ok ? JS::StringValue(str) : JS::UndefinedValue());
     }
   }
 
@@ -304,7 +312,6 @@ nsJSUtils::ModuleDeclarationInstantiation(JSContext* aCx, JS::Handle<JSObject*> 
 
   MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(nsContentUtils::IsInMicroTask());
 
   NS_ENSURE_TRUE(xpc::Scriptability::Get(aModule).Allowed(), NS_OK);
 
@@ -367,7 +374,10 @@ nsJSUtils::ResetTimeZone()
 
 bool nsAutoJSString::init(const JS::Value &v)
 {
-  JSContext* cx = nsContentUtils::RootingCx();
+  // Note: it's okay to use danger::GetJSContext here instead of AutoJSAPI,
+  // because the init() call below is careful not to run script (for instance,
+  // it only calls JS::ToString for non-object values).
+  JSContext* cx = danger::GetJSContext();
   if (!init(cx, v)) {
     JS_ClearPendingException(cx);
     return false;

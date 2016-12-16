@@ -143,8 +143,14 @@
  * Use only one arena by default.  Mozilla does not currently make extensive
  * use of concurrent allocation, so the increased fragmentation associated with
  * multiple arenas is not warranted.
+ *
+ * When using the Servo style system, we do indeed make use of significant
+ * concurrent allocation, and the overhead matters. Bug 1291355 tracks
+ * investigating the fragmentation overhead of turning this on for users.
  */
-#define	MOZ_MEMORY_NARENAS_DEFAULT_ONE
+#ifndef MOZ_STYLO
+#define MOZ_MEMORY_NARENAS_DEFAULT_ONE
+#endif
 
 /*
  * Pass this set of options to jemalloc as its default. It does not override
@@ -238,7 +244,7 @@
 
 #ifndef NO_TLS
 static unsigned long tlsIndex = 0xffffffff;
-#endif 
+#endif
 
 #define	__thread
 #define	_pthread_self() __threadid()
@@ -1498,6 +1504,7 @@ static malloc_zone_t * szone = (malloc_zone_t*)(&l_szone);
 static lion_malloc_introspection l_ozone_introspect;
 static malloc_introspection_t * const ozone_introspect =
 	(malloc_introspection_t*)(&l_ozone_introspect);
+static malloc_zone_t *get_default_zone();
 static void szone2ozone(malloc_zone_t *zone, size_t size);
 static size_t zone_version_size(int version);
 #else
@@ -2420,10 +2427,10 @@ pages_map(void *addr, size_t size)
          * or the nearest available memory above that address, providing a near-guarantee
          * that those bits are clear. If they are not, we return NULL below to indicate
          * out-of-memory.
-         * 
-         * The addr is chosen as 0x0000070000000000, which still allows about 120TB of virtual 
+         *
+         * The addr is chosen as 0x0000070000000000, which still allows about 120TB of virtual
          * address space.
-         * 
+         *
          * See Bug 589735 for more information.
          */
 	bool check_placement = true;
@@ -2445,8 +2452,8 @@ pages_map(void *addr, size_t size)
 		ret = NULL;
 	}
 #if defined(__ia64__)
-        /* 
-         * If the allocated memory doesn't have its upper 17 bits clear, consider it 
+        /*
+         * If the allocated memory doesn't have its upper 17 bits clear, consider it
          * as out of memory.
         */
         else if ((long long)ret & 0xffff800000000000) {
@@ -5618,7 +5625,7 @@ malloc_init_hard(void)
 				"", "");
 		abort();
 	}
-#else	
+#else
 	pagesize = (size_t) result;
 	pagesize_mask = (size_t) result - 1;
 	pagesize_2pow = ffs((int)result) - 1;
@@ -6075,7 +6082,7 @@ MALLOC_OUT:
 	/*
 	* Overwrite the default memory allocator to use jemalloc everywhere.
 	*/
-	default_zone = malloc_default_zone();
+	default_zone = get_default_zone();
 
 	/*
 	 * We only use jemalloc with MacOS 10.6 and 10.7.  jemalloc is disabled
@@ -6464,7 +6471,7 @@ MOZ_MEMORY_API void
 free_impl(void *ptr)
 {
 	size_t offset;
-	
+
 	DARWIN_ONLY((szone->free)(szone, ptr); return);
 
 	UTRACE(ptr, 0, 0);
@@ -7056,6 +7063,32 @@ zone_version_size(int version)
     }
 }
 
+static malloc_zone_t *get_default_zone()
+{
+  malloc_zone_t **zones = NULL;
+  unsigned int num_zones = 0;
+
+  /*
+   * On OSX 10.12, malloc_default_zone returns a special zone that is not
+   * present in the list of registered zones. That zone uses a "lite zone"
+   * if one is present (apparently enabled when malloc stack logging is
+   * enabled), or the first registered zone otherwise. In practice this
+   * means unless malloc stack logging is enabled, the first registered
+   * zone is the default.
+   * So get the list of zones to get the first one, instead of relying on
+   * malloc_default_zone.
+   */
+  if (KERN_SUCCESS != malloc_get_all_zones(0, NULL, (vm_address_t**) &zones,
+                                           &num_zones)) {
+    /* Reset the value in case the failure happened after it was set. */
+    num_zones = 0;
+  }
+  if (num_zones) {
+    return zones[0];
+  }
+  return malloc_default_zone();
+}
+
 /*
  * Overlay the default scalable zone (szone) such that existing allocations are
  * drained, and further allocations come from jemalloc. This is necessary
@@ -7176,8 +7209,8 @@ MOZ_MEMORY_API void *(*__memalign_hook)(size_t alignment, size_t size) = MEMALIG
  * we need to initialize the heap at the first opportunity we get.
  * DLL_PROCESS_ATTACH in DllMain is that opportunity.
  */
-BOOL APIENTRY DllMain(HINSTANCE hModule, 
-                      DWORD reason, 
+BOOL APIENTRY DllMain(HINSTANCE hModule,
+                      DWORD reason,
                       LPVOID lpReserved)
 {
   switch (reason) {
@@ -7188,7 +7221,7 @@ BOOL APIENTRY DllMain(HINSTANCE hModule,
       /* Initialize the heap */
       malloc_init_hard();
       break;
-    
+
     case DLL_PROCESS_DETACH:
       break;
 

@@ -13,7 +13,7 @@ function test() {
   const TEST_PAGE_URL = 'data:text/html,<body><iframe src=""></iframe></body>';
   const TEST_IFRAME_URL = "http://test2.example.org/";
 
-  Task.spawn(function () {
+  Task.spawn(function* () {
     // Prepare the test tab
     let tab = gBrowser.addTab();
     yield FullZoomHelper.selectTabAndWaitForLocationChange(tab);
@@ -29,7 +29,7 @@ function test() {
 
     // Start the sub-document load.
     let deferred = Promise.defer();
-    executeSoon(function () {
+    executeSoon(function() {
       BrowserTestUtils.browserLoaded(testBrowser, true).then(url => {
         is(url, TEST_IFRAME_URL, "got the load event for the iframe");
         is(ZoomManager.zoom, zoomLevel, "zoom is retained after sub-document load");

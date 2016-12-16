@@ -44,7 +44,46 @@ AndroidContentController::NotifyDefaultPrevented(IAPZCTreeManager* aManager,
 }
 
 void
-AndroidContentController::HandleTap(TapType aType, const CSSPoint& aPoint,
+AndroidContentController::DispatchSingleTapToObservers(const LayoutDevicePoint& aPoint,
+                                                       const ScrollableLayerGuid& aGuid) const
+{
+    nsIContent* content = nsLayoutUtils::FindContentFor(aGuid.mScrollId);
+    nsPresContext* context = content
+        ? mozilla::layers::APZCCallbackHelper::GetPresContextForContent(content)
+        : nullptr;
+
+    if (!context) {
+      return;
+    }
+
+    CSSPoint point = mozilla::layers::APZCCallbackHelper::ApplyCallbackTransform(
+        aPoint / context->CSSToDevPixelScale(), aGuid);
+
+    nsPresContext* rcdContext = context->GetToplevelContentDocumentPresContext();
+    if (rcdContext && rcdContext->PresShell()->ScaleToResolution()) {
+        // We need to convert from the root document to the root content document,
+        // by unapplying the resolution that's on the content document.
+        const float resolution = rcdContext->PresShell()->GetResolution();
+        point.x /= resolution;
+        point.y /= resolution;
+    }
+
+    CSSIntPoint rounded = RoundedToInt(point);
+    nsAppShell::PostEvent([rounded] {
+        nsCOMPtr<nsIObserverService> obsServ =
+            mozilla::services::GetObserverService();
+        if (!obsServ) {
+            return;
+        }
+
+        nsPrintfCString data("{\"x\":%d,\"y\":%d}", rounded.x, rounded.y);
+        obsServ->NotifyObservers(nullptr, "Gesture:SingleTap",
+                                 NS_ConvertASCIItoUTF16(data).get());
+    });
+}
+
+void
+AndroidContentController::HandleTap(TapType aType, const LayoutDevicePoint& aPoint,
                                     Modifiers aModifiers,
                                     const ScrollableLayerGuid& aGuid,
                                     uint64_t aInputBlockId)
@@ -54,34 +93,9 @@ AndroidContentController::HandleTap(TapType aType, const CSSPoint& aPoint,
     // HandleTap). We want to post the SingleTap message once; it can be
     // done from either thread but we need access to the callback transform
     // so we do it from the main thread.
-    if (NS_IsMainThread() && aType == TapType::eSingleTap) {
-        CSSPoint point = mozilla::layers::APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid);
-
-        nsIContent* content = nsLayoutUtils::FindContentFor(aGuid.mScrollId);
-        nsIPresShell* shell = content
-            ? mozilla::layers::APZCCallbackHelper::GetRootContentDocumentPresShellForContent(content)
-            : nullptr;
-
-        if (shell && shell->ScaleToResolution()) {
-            // We need to convert from the root document to the root content document,
-            // by unapplying the resolution that's on the content document.
-            const float resolution = shell->GetResolution();
-            point.x /= resolution;
-            point.y /= resolution;
-        }
-
-        CSSIntPoint rounded = RoundedToInt(point);
-        nsAppShell::PostEvent([rounded] {
-            nsCOMPtr<nsIObserverService> obsServ =
-                mozilla::services::GetObserverService();
-            if (!obsServ) {
-                return;
-            }
-
-            nsPrintfCString data("{\"x\":%d,\"y\":%d}", rounded.x, rounded.y);
-            obsServ->NotifyObservers(nullptr, "Gesture:SingleTap",
-                                     NS_ConvertASCIItoUTF16(data).get());
-        });
+    if (NS_IsMainThread() &&
+        (aType == TapType::eSingleTap || aType == TapType::eSecondTap)) {
+        DispatchSingleTapToObservers(aPoint, aGuid);
     }
 
     ChromeProcessController::HandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId);
@@ -93,17 +107,17 @@ AndroidContentController::PostDelayedTask(already_AddRefed<Runnable> aTask, int 
     AndroidBridge::Bridge()->PostTaskToUiThread(Move(aTask), aDelayMs);
 }
 void
-AndroidContentController::UpdateOverscrollVelocity(const float aX, const float aY)
+AndroidContentController::UpdateOverscrollVelocity(const float aX, const float aY, const bool aIsRootContent)
 {
-  if (mAndroidWindow) {
+  if (aIsRootContent && mAndroidWindow) {
     mAndroidWindow->UpdateOverscrollVelocity(aX, aY);
   }
 }
 
 void
-AndroidContentController::UpdateOverscrollOffset(const float aX, const float aY)
+AndroidContentController::UpdateOverscrollOffset(const float aX, const float aY, const bool aIsRootContent)
 {
-  if (mAndroidWindow) {
+  if (aIsRootContent && mAndroidWindow) {
     mAndroidWindow->UpdateOverscrollOffset(aX, aY);
   }
 }

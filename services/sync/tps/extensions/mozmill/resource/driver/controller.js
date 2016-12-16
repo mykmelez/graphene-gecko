@@ -870,7 +870,7 @@ MozMillController.prototype.mouseMove = function (doc, start, dest) {
 
 /**
  * Drag an element to the specified offset on another element, firing mouse and
- * drag events. Adapted from ChromeUtils.js synthesizeDrop()
+ * drag events. Adapted from EventUtils.js synthesizeDrop()
  *
  * @deprecated Use the MozMillElement object
  *
@@ -978,7 +978,7 @@ function browserAdditions (controller) {
       }, "Timeout", timeout, aInterval);
     }
     catch (ex) {
-      if (!ex instanceof errors.TimeoutError) {
+      if (!(ex instanceof errors.TimeoutError)) {
         throw ex;
       }
       timed_out = true;

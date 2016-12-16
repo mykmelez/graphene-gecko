@@ -62,7 +62,9 @@ if CONFIG['_MSC_VER']:
 
 EXPORTS.mozilla += ['ShmemPool.h',]
 
-EXPORTS.mozilla.media += ['MediaChild.h',
+EXPORTS.mozilla.media += ['CamerasTypes.h',
+                          'DeviceChangeCallback.h',
+                          'MediaChild.h',
                           'MediaParent.h',
                           'MediaSystemResourceClient.h',
                           'MediaSystemResourceManager.h',

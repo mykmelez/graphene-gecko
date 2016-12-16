@@ -11,12 +11,14 @@ var gOtherAddon;
 var gManagerWindow;
 var gCategoryUtilities;
 
-var installedAddons = [];
-
 function installAddon(details) {
   let id = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator)
                                               .generateUUID().number;
-  let xpi = Extension.generateXPI(id, details);
+  if (!details.manifest) {
+    details.manifest = {};
+  }
+  details.manifest.applications = {gecko: {id}};
+  let xpi = Extension.generateXPI(details);
 
   return AddonManager.installTemporaryAddon(xpi).then(addon => {
     SimpleTest.registerCleanupFunction(function() {
@@ -120,11 +122,13 @@ add_task(function* test_inline_browser_addon() {
 
     let heightDiff = browser.clientHeight - expected;
     ok(heightDiff >= 0 && heightDiff < 50,
-       "Browser should be slightly taller than the document body");
+       `Browser should be slightly taller than the document body (${browser.clientHeight} vs. ${expected})`);
   }
 
   // Delay long enough to avoid hitting our resize rate limit.
   let delay = () => new Promise(resolve => setTimeout(resolve, 300));
+
+  yield delay();
 
   checkHeights(300);
 

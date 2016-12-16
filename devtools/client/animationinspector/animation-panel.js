@@ -12,6 +12,7 @@
 const {AnimationsTimeline} = require("devtools/client/animationinspector/components/animation-timeline");
 const {RateSelector} = require("devtools/client/animationinspector/components/rate-selector");
 const {formatStopwatchTime} = require("devtools/client/animationinspector/utils");
+const {KeyCodes} = require("devtools/client/shared/keycodes");
 
 var $ = (selector, target = document) => target.querySelector(selector);
 
@@ -29,10 +30,14 @@ var AnimationsPanel = {
       return;
     }
     if (this.initialized) {
-      yield this.initialized.promise;
+      yield this.initialized;
       return;
     }
-    this.initialized = promise.defer();
+
+    let resolver;
+    this.initialized = new Promise(resolve => {
+      resolver = resolve;
+    });
 
     this.playersEl = $("#players");
     this.errorMessageEl = $("#error-message");
@@ -45,6 +50,8 @@ var AnimationsPanel = {
 
     this.rewindTimelineButtonEl.setAttribute("title",
       L10N.getStr("timeline.rewindButtonTooltip"));
+
+    $("#all-animations-label").textContent = L10N.getStr("panel.allAnimations");
 
     // If the server doesn't support toggling all animations at once, hide the
     // whole global toolbar.
@@ -75,7 +82,7 @@ var AnimationsPanel = {
 
     yield this.refreshAnimationsUI();
 
-    this.initialized.resolve();
+    resolver();
     this.emit(this.PANEL_INITIALIZED);
   }),
 
@@ -85,10 +92,14 @@ var AnimationsPanel = {
     }
 
     if (this.destroyed) {
-      yield this.destroyed.promise;
+      yield this.destroyed;
       return;
     }
-    this.destroyed = promise.defer();
+
+    let resolver;
+    this.destroyed = new Promise(resolve => {
+      resolver = resolve;
+    });
 
     this.stopListeners();
 
@@ -105,7 +116,7 @@ var AnimationsPanel = {
     this.playTimelineButtonEl = this.rewindTimelineButtonEl = null;
     this.timelineCurrentTimeEl = this.rateSelectorEl = null;
 
-    this.destroyed.resolve();
+    resolver();
   }),
 
   startListeners: function () {
@@ -162,12 +173,10 @@ var AnimationsPanel = {
   },
 
   onKeyDown: function (event) {
-    let keyEvent = Ci.nsIDOMKeyEvent;
-
     // If the space key is pressed, it should toggle the play state of
     // the animations displayed in the panel, or of all the animations on
     // the page if the selected node does not have any animation on it.
-    if (event.keyCode === keyEvent.DOM_VK_SPACE) {
+    if (event.keyCode === KeyCodes.DOM_VK_SPACE) {
       if (AnimationsController.animationPlayers.length > 0) {
         this.playPauseTimeline().catch(ex => console.error(ex));
       } else {
@@ -184,8 +193,8 @@ var AnimationsPanel = {
     } else {
       document.body.setAttribute("empty", "true");
       document.body.removeAttribute("timeline");
-      $("#error-type").textContent =
-        L10N.getStr("panel.invalidElementSelected");
+      $("#error-type").textContent = L10N.getStr("panel.invalidElementSelected");
+      $("#error-hint").textContent = L10N.getStr("panel.selectElement");
     }
   },
 

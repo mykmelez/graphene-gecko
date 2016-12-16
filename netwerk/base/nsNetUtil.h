@@ -118,53 +118,12 @@ nsresult NS_NewFileURI(nsIURI **result,
 * @param aURI
 *        nsIURI from which to make a channel
 * @param aLoadingNode
-*        The loadingDocument of the channel.
-*        The element or document where the result of this request will be
-*        used. This is the document/element that will get access to the
-*        result of this request. For example for an image load, it's the
-*        document in which the image will be loaded. And for a CSS
-*        stylesheet it's the document whose rendering will be affected by
-*        the stylesheet.
-*        If possible, pass in the element which is performing the load. But
-*        if the load is coming from a JS API (such as XMLHttpRequest) or if
-*        the load might be coalesced across multiple elements (such as
-*        for <img>) then pass in the Document node instead.
-*        For loads that are not related to any document, such as loads coming
-*        from addons or internal browser features, use null here.
 * @param aLoadingPrincipal
-*        The loadingPrincipal of the channel.
-*        The principal of the document where the result of this request will
-*        be used.
-*        This defaults to the principal of aLoadingNode, so when aLoadingNode
-*        is passed this can be left as null. However for loads where
-*        aLoadingNode is null this argument must be passed.
-*        For example for loads from a WebWorker, pass the principal
-*        of that worker. For loads from an addon or from internal browser
-*        features, pass the system principal.
-*        This principal should almost always be the system principal if
-*        aLoadingNode is null. The only exception to this is for loads
-*        from WebWorkers since they don't have any nodes to be passed as
-*        aLoadingNode.
-*        Please note, aLoadingPrincipal is *not* the principal of the
-*        resource being loaded. But rather the principal of the context
-*        where the resource will be used.
 * @param aTriggeringPrincipal
-*        The triggeringPrincipal of the load.
-*        The triggeringPrincipal is the principal of the resource that caused
-*        this particular URL to be loaded.
-*        Most likely the triggeringPrincipal and the loadingPrincipal are
-*        identical, in which case the triggeringPrincipal can be left out.
-*        In some cases the loadingPrincipal and the triggeringPrincipal are
-*        different however, e.g. a stylesheet may import a subresource. In
-*        that case the principal of the stylesheet which contains the
-*        import command is the triggeringPrincipal, and the principal of
-*        the document whose rendering is affected is the loadingPrincipal.
 * @param aSecurityFlags
-*        The securityFlags of the channel.
-*        Any of the securityflags defined in nsILoadInfo.idl
 * @param aContentPolicyType
-*        The contentPolicyType of the channel.
-*        Any of the content types defined in nsIContentPolicy.idl
+*        These will be used as values for the nsILoadInfo object on the
+*        created channel. For details, see nsILoadInfo in nsILoadInfo.idl
 *
 * Please note, if you provide both a loadingNode and a loadingPrincipal,
 * then loadingPrincipal must be equal to loadingNode->NodePrincipal().
@@ -717,23 +676,6 @@ bool NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport = false);
 #define NECKO_SAFEBROWSING_APP_ID UINT32_MAX - 1
 
 /**
- * Gets AppId and isInIsolatedMozBrowserElement from channel's nsILoadContext.
- * Returns false if error or channel's callbacks don't implement nsILoadContext.
- */
-bool NS_GetAppInfo(nsIChannel *aChannel,
-                   uint32_t *aAppID,
-                   bool *aIsInIsolatedMozBrowserElement);
-
-/**
- *  Gets appId and browserOnly parameters from the TOPIC_WEB_APP_CLEAR_DATA
- *  nsIObserverService notification.  Used when clearing user data or
- *  uninstalling web apps.
- */
-nsresult NS_GetAppInfoFromClearDataNotification(nsISupports *aSubject,
-                                                uint32_t *aAppID,
-                                                bool *aBrowserOnly);
-
-/**
  * Determines whether appcache should be checked for a given URI.
  */
 bool NS_ShouldCheckAppCache(nsIURI *aURI, bool usePrivateBrowsing);
@@ -811,10 +753,6 @@ NS_NewNotificationCallbacksAggregation(nsIInterfaceRequestor  *callbacks,
  * Helper function for testing online/offline state of the browser.
  */
 bool NS_IsOffline();
-
-bool NS_IsAppOffline(uint32_t appId);
-
-bool NS_IsAppOffline(nsIPrincipal *principal);
 
 /**
  * Helper functions for implementing nsINestedURI::innermostURI.

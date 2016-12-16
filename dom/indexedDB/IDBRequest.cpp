@@ -341,7 +341,6 @@ IDBRequest::GetResult(JS::MutableHandle<JS::Value> aResult,
     return;
   }
 
-  JS::ExposeValueToActiveJS(mResultVal);
   aResult.set(mResultVal);
 }
 
@@ -452,7 +451,7 @@ NS_IMPL_ADDREF_INHERITED(IDBRequest, IDBWrapperCache)
 NS_IMPL_RELEASE_INHERITED(IDBRequest, IDBWrapperCache)
 
 nsresult
-IDBRequest::PreHandleEvent(EventChainPreVisitor& aVisitor)
+IDBRequest::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   AssertIsOnOwningThread();
 
@@ -574,7 +573,7 @@ IDBOpenDBRequest::CreateForJS(JSContext* aCx,
     workerPrivate->AssertIsOnWorkerThread();
 
     nsAutoPtr<WorkerHolder> workerHolder(new WorkerHolder(workerPrivate));
-    if (NS_WARN_IF(!workerHolder->HoldWorker(workerPrivate))) {
+    if (NS_WARN_IF(!workerHolder->HoldWorker(workerPrivate, Canceling))) {
       workerHolder->NoteAddWorkerHolderFailed();
       return nullptr;
     }

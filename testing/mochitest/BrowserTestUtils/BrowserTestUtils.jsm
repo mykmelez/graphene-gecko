@@ -205,6 +205,27 @@ this.BrowserTestUtils = {
   },
 
   /**
+   * Waits for the selected browser to load in a new window. This
+   * is most useful when you've got a window that might not have
+   * loaded its DOM yet, and where you can't easily use browserLoaded
+   * on gBrowser.selectedBrowser since gBrowser doesn't yet exist.
+   *
+   * @param {win}
+   *        A newly opened window for which we're waiting for the
+   *        first browser load.
+   *
+   * @return {Promise}
+   * @resolves Once the selected browser fires its load event.
+   */
+  firstBrowserLoaded(win) {
+    let mm = win.messageManager;
+    return this.waitForMessage(mm, "browser-test-utils:loadEvent", (msg) => {
+      let selectedBrowser = win.gBrowser.selectedBrowser;
+      return msg.target == selectedBrowser;
+    });
+  },
+
+  /**
    * Waits for the web progress listener associated with this tab to fire a
    * STATE_STOP for the toplevel document.
    *
@@ -252,6 +273,9 @@ this.BrowserTestUtils = {
    *
    * @return {Promise}
    * @resolves With the {xul:tab} when a tab is opened and its location changes to the given URL.
+   *
+   * NB: this method will not work if you open a new tab with e.g. BrowserOpenTab
+   * and the tab does not load a URL, because no onLocationChange will fire.
    */
   waitForNewTab(tabbrowser, url) {
     return new Promise((resolve, reject) => {
@@ -273,6 +297,34 @@ this.BrowserTestUtils = {
         tabbrowser.addTabsProgressListener(progressListener);
 
       });
+    });
+  },
+
+  /**
+   * Waits for onLocationChange.
+   *
+   * @param {tabbrowser} tabbrowser
+   *        The tabbrowser to wait for the location change on.
+   * @param {string} url
+   *        The string URL to look for. The URL must match the URL in the
+   *        location bar exactly.
+   * @return {Promise}
+   * @resolves When onLocationChange fires.
+   */
+  waitForLocationChange(tabbrowser, url) {
+    return new Promise((resolve, reject) => {
+      let progressListener = {
+        onLocationChange(aBrowser) {
+          if ((url && aBrowser.currentURI.spec != url) ||
+              (!url && aBrowser.currentURI.spec == "about:blank")) {
+            return;
+          }
+
+          tabbrowser.removeTabsProgressListener(progressListener);
+          resolve();
+        },
+      };
+      tabbrowser.addTabsProgressListener(progressListener);
     });
   },
 
@@ -362,16 +414,25 @@ this.BrowserTestUtils = {
    *        The window we should wait to have "domwindowopened" sent through
    *        the observer service for. If this is not supplied, we'll just
    *        resolve when the first "domwindowopened" notification is seen.
+   * @param {function} checkFn [optional]
+   *        Called with the nsIDOMWindow object as argument, should return true
+   *        if the event is the expected one, or false if it should be ignored
+   *        and observing should continue. If not specified, the first window
+   *        resolves the returned promise.
    * @return {Promise}
    *         A Promise which resolves when a "domwindowopened" notification
    *         has been fired by the window watcher.
    */
-  domWindowOpened(win) {
+  domWindowOpened(win, checkFn) {
     return new Promise(resolve => {
       function observer(subject, topic, data) {
         if (topic == "domwindowopened" && (!win || subject === win)) {
+          let observedWindow = subject.QueryInterface(Ci.nsIDOMWindow);
+          if (checkFn && !checkFn(observedWindow)) {
+            return;
+          }
           Services.ww.unregisterNotification(observer);
-          resolve(subject.QueryInterface(Ci.nsIDOMWindow));
+          resolve(observedWindow);
         }
       }
       Services.ww.registerNotification(observer);
@@ -407,6 +468,8 @@ this.BrowserTestUtils = {
    *          remote:  A boolean indicating if the window should run
    *                   remote browser tabs or not. If omitted, the window
    *                   will choose the profile default state.
+   *          width: Desired width of window
+   *          height: Desired height of window
    *        }
    * @return {Promise}
    *         Resolves with the new window once it is loaded.
@@ -421,6 +484,13 @@ this.BrowserTestUtils = {
       features += ",private";
     }
 
+    if (options.width) {
+      features += ",width=" + options.width;
+    }
+    if (options.height) {
+      features += ",height=" + options.height;
+    }
+
     if (options.hasOwnProperty("remote")) {
       let remoteState = options.remote ? "remote" : "non-remote";
       features += `,${remoteState}`;
@@ -433,11 +503,11 @@ this.BrowserTestUtils = {
     // Wait for browser-delayed-startup-finished notification, it indicates
     // that the window has loaded completely and is ready to be used for
     // testing.
-    yield this.waitForEvent(win, "load");
     let startupPromise =
       TestUtils.topicObserved("browser-delayed-startup-finished",
                               subject => subject == win).then(() => win);
-    let loadPromise = this.browserLoaded(win.gBrowser.selectedBrowser);
+
+    let loadPromise = this.firstBrowserLoaded(win);
 
     yield startupPromise;
     yield loadPromise;
@@ -761,12 +831,16 @@ this.BrowserTestUtils = {
    *
    * @param (Browser) browser
    *        A remote <xul:browser> element. Must not be null.
+   * @param (bool) shouldShowTabCrashPage
+   *        True if it is expected that the tab crashed page will be shown
+   *        for this browser. If so, the Promise will only resolve once the
+   *        tab crash page has loaded.
    *
    * @returns (Promise)
    * @resolves An Object with key-value pairs representing the data from the
    *           crash report's extra file (if applicable).
    */
-  crashBrowser: Task.async(function*(browser) {
+  crashBrowser: Task.async(function*(browser, shouldShowTabCrashPage=true) {
     let extra = {};
     let KeyValueParser = {};
     if (AppConstants.MOZ_CRASHREPORTER) {
@@ -824,6 +898,8 @@ this.BrowserTestUtils = {
       dies();
     }
 
+    let expectedPromises = [];
+
     let crashCleanupPromise = new Promise((resolve, reject) => {
       let observer = (subject, topic, data) => {
         if (topic != "ipc:content-shutdown") {
@@ -867,31 +943,39 @@ this.BrowserTestUtils = {
 
         Services.obs.removeObserver(observer, 'ipc:content-shutdown');
         dump("\nCrash cleaned up\n");
-        resolve();
+        // There might be other ipc:content-shutdown handlers that need to run before
+        // we want to continue, so we'll resolve on the next tick of the event loop.
+        TestUtils.executeSoon(() => resolve());
       };
 
       Services.obs.addObserver(observer, 'ipc:content-shutdown', false);
     });
 
-    let aboutTabCrashedLoadPromise = new Promise((resolve, reject) => {
-      browser.addEventListener("AboutTabCrashedReady", function onCrash() {
-        browser.removeEventListener("AboutTabCrashedReady", onCrash, false);
-        dump("\nabout:tabcrashed loaded and ready\n");
-        resolve();
-      }, false, true);
-    });
+    expectedPromises.push(crashCleanupPromise);
+
+    if (shouldShowTabCrashPage) {
+      expectedPromises.push(new Promise((resolve, reject) => {
+        browser.addEventListener("AboutTabCrashedReady", function onCrash() {
+          browser.removeEventListener("AboutTabCrashedReady", onCrash, false);
+          dump("\nabout:tabcrashed loaded and ready\n");
+          resolve();
+        }, false, true);
+      }));
+    }
 
     // This frame script will crash the remote browser as soon as it is
     // evaluated.
     let mm = browser.messageManager;
     mm.loadFrameScript("data:,(" + frame_script.toString() + ")();", false);
 
-    yield Promise.all([crashCleanupPromise, aboutTabCrashedLoadPromise]);
+    yield Promise.all(expectedPromises);
 
-    let gBrowser = browser.ownerDocument.defaultView.gBrowser;
-    let tab = gBrowser.getTabForBrowser(browser);
-    if (tab.getAttribute("crashed") != "true") {
-      throw new Error("Tab should be marked as crashed");
+    if (shouldShowTabCrashPage) {
+      let gBrowser = browser.ownerDocument.defaultView.gBrowser;
+      let tab = gBrowser.getTabForBrowser(browser);
+      if (tab.getAttribute("crashed") != "true") {
+        throw new Error("Tab should be marked as crashed");
+      }
     }
 
     return extra;
@@ -1118,6 +1202,31 @@ this.BrowserTestUtils = {
    */
   waitForNotificationBar(tabbrowser, browser, notificationValue) {
     let notificationBox = tabbrowser.getNotificationBox(browser);
+    return this.waitForNotificationInNotificationBox(notificationBox,
+                                                     notificationValue);
+  },
+
+  /**
+   * Waits for a <xul:notification> with a particular value to appear
+   * in the global <xul:notificationbox> of the given browser window.
+   *
+   * @param win (<xul:window>)
+   *        The browser window in whose global notificationbox the
+   *        notification is expected to appear.
+   * @param notificationValue (string)
+   *        The "value" of the notification, which is often used as
+   *        a unique identifier. Example: "captive-portal-detected".
+   * @return Promise
+   *        Resolves to the <xul:notification> that is being shown.
+   */
+  waitForGlobalNotificationBar(win, notificationValue) {
+    let notificationBox =
+      win.document.getElementById("high-priority-global-notificationbox");
+    return this.waitForNotificationInNotificationBox(notificationBox,
+                                                     notificationValue);
+  },
+
+  waitForNotificationInNotificationBox(notificationBox, notificationValue) {
     return new Promise((resolve) => {
       let check = (event) => {
         return event.target.value == notificationValue;

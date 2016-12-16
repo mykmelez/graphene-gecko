@@ -113,6 +113,7 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
                                       int32_t aInitialHeight,
                                       bool aIsHiddenWindow,
                                       nsITabParent *aOpeningTab,
+                                      mozIDOMWindowProxy *aOpenerWindow,
                                       nsWidgetInitData& widgetInitData)
 {
   nsresult rv;
@@ -171,13 +172,13 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
   }
 
   mWindow->SetWidgetListener(this);
-  mWindow->Create((nsIWidget *)parentWidget,          // Parent nsIWidget
-                  nullptr,                            // Native parent widget
-                  deskRect,                           // Widget dimensions
-                  &widgetInitData);                   // Widget initialization data
+  rv = mWindow->Create((nsIWidget *)parentWidget, // Parent nsIWidget
+                       nullptr,                   // Native parent widget
+                       deskRect,                  // Widget dimensions
+                       &widgetInitData);          // Widget initialization data
+  NS_ENSURE_SUCCESS(rv, rv);
 
-  LayoutDeviceIntRect r;
-  mWindow->GetClientBounds(r);
+  LayoutDeviceIntRect r = mWindow->GetClientBounds();
   // Match the default background color of content. Important on windows
   // since we no longer use content child widgets.
   mWindow->SetBackgroundColor(NS_RGB(255,255,255));
@@ -209,15 +210,28 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
     webProgress->AddProgressListener(this, nsIWebProgress::NOTIFY_STATE_NETWORK);
   }
 
+  if (aOpenerWindow) {
+    nsPIDOMWindowOuter* window = mDocShell->GetWindow();
+    MOZ_ASSERT(window);
+    window->SetOpenerWindow(nsPIDOMWindowOuter::From(aOpenerWindow), true);
+  }
+
   // Eagerly create an about:blank content viewer with the right principal here,
   // rather than letting it happening in the upcoming call to
   // SetInitialPrincipalToSubject. This avoids creating the about:blank document
   // and then blowing it away with a second one, which can cause problems for the
   // top-level chrome window case. See bug 789773.
+  // Note that we don't accept expanded principals here, similar to
+  // SetInitialPrincipalToSubject.
   if (nsContentUtils::IsInitialized()) { // Sometimes this happens really early  See bug 793370.
-    rv = mDocShell->CreateAboutBlankContentViewer(nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller());
+    MOZ_ASSERT(mDocShell->ItemType() == nsIDocShellTreeItem::typeChrome);
+    nsCOMPtr<nsIPrincipal> principal = nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller();
+    if (nsContentUtils::IsExpandedPrincipal(principal)) {
+      principal = nullptr;
+    }
+    rv = mDocShell->CreateAboutBlankContentViewer(principal);
     NS_ENSURE_SUCCESS(rv, rv);
-    nsCOMPtr<nsIDocument> doc = mDocShell ? mDocShell->GetDocument() : nullptr;
+    nsCOMPtr<nsIDocument> doc = mDocShell->GetDocument();
     NS_ENSURE_TRUE(!!doc, NS_ERROR_FAILURE);
     doc->SetIsInitialDocument(true);
   }
@@ -608,7 +622,6 @@ nsWebShellWindow::OnStateChange(nsIWebProgress *aProgress,
 #endif // USE_NATIVE_MENUS
 
   OnChromeLoaded();
-  LoadContentAreas();
 
   return NS_OK;
 }
@@ -642,81 +655,6 @@ nsWebShellWindow::OnSecurityChange(nsIWebProgress *aWebProgress,
   return NS_OK;
 }
 
-
-//----------------------------------------
-
-// if the main document URL specified URLs for any content areas, start them loading
-void nsWebShellWindow::LoadContentAreas() {
-
-  nsAutoString searchSpec;
-
-  // fetch the chrome document URL
-  nsCOMPtr<nsIContentViewer> contentViewer;
-  // yes, it's possible for the docshell to be null even this early
-  // see bug 57514.
-  if (mDocShell)
-    mDocShell->GetContentViewer(getter_AddRefs(contentViewer));
-  if (contentViewer) {
-    nsIDocument* doc = contentViewer->GetDocument();
-    if (doc) {
-      nsIURI* mainURL = doc->GetDocumentURI();
-
-      nsCOMPtr<nsIURL> url = do_QueryInterface(mainURL);
-      if (url) {
-        nsAutoCString search;
-        url->GetQuery(search);
-
-        AppendUTF8toUTF16(search, searchSpec);
-      }
-    }
-  }
-
-  // content URLs are specified in the search part of the URL
-  // as <contentareaID>=<escapedURL>[;(repeat)]
-  if (!searchSpec.IsEmpty()) {
-    int32_t     begPos,
-                eqPos,
-                endPos;
-    nsString    contentAreaID,
-                contentURL;
-    char        *urlChar;
-    nsresult rv;
-    for (endPos = 0; endPos < (int32_t)searchSpec.Length(); ) {
-      // extract contentAreaID and URL substrings
-      begPos = endPos;
-      eqPos = searchSpec.FindChar('=', begPos);
-      if (eqPos < 0)
-        break;
-
-      endPos = searchSpec.FindChar(';', eqPos);
-      if (endPos < 0)
-        endPos = searchSpec.Length();
-      searchSpec.Mid(contentAreaID, begPos, eqPos-begPos);
-      searchSpec.Mid(contentURL, eqPos+1, endPos-eqPos-1);
-      endPos++;
-
-      // see if we have a docshell with a matching contentAreaID
-      nsCOMPtr<nsIDocShellTreeItem> content;
-      rv = GetContentShellById(contentAreaID.get(), getter_AddRefs(content));
-      if (NS_SUCCEEDED(rv) && content) {
-        nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(content));
-        if (webNav) {
-          urlChar = ToNewCString(contentURL);
-          if (urlChar) {
-            nsUnescape(urlChar);
-            contentURL.AssignWithConversion(urlChar);
-            webNav->LoadURI(contentURL.get(),
-                          nsIWebNavigation::LOAD_FLAGS_NONE,
-                          nullptr,
-                          nullptr,
-                          nullptr);
-            free(urlChar);
-          }
-        }
-      }
-    }
-  }
-}
 
 /**
  * ExecuteCloseHandler - Run the close handler, if any.

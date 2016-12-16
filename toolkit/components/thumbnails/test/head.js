@@ -16,7 +16,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
 var oldEnabledPref = Services.prefs.getBoolPref("browser.pagethumbnails.capturing_disabled");
 Services.prefs.setBoolPref("browser.pagethumbnails.capturing_disabled", false);
 
-registerCleanupFunction(function () {
+registerCleanupFunction(function() {
   while (gBrowser.tabs.length > 1)
     gBrowser.removeTab(gBrowser.tabs[1]);
   Services.prefs.setBoolPref("browser.pagethumbnails.capturing_disabled", oldEnabledPref)
@@ -36,10 +36,10 @@ var TestRunner = {
   /**
    * Starts the test runner.
    */
-  run: function () {
+  run: function() {
     waitForExplicitFinish();
 
-    SessionStore.promiseInitialized.then(function () {
+    SessionStore.promiseInitialized.then(function() {
       this._iter = runTests();
       if (this._iter) {
         this.next();
@@ -54,13 +54,14 @@ var TestRunner = {
    * @param aValue This value will be passed to the yielder via the runner's
    *               iterator.
    */
-  next: function (aValue) {
-    let { done, value } = TestRunner._iter.next(aValue);
-    if (done) {
+  next: function(aValue) {
+    let obj = TestRunner._iter.next(aValue);
+    if (obj.done) {
       finish();
       return;
     }
 
+    let value = obj.value || obj;
     if (value && typeof value.then == "function") {
       value.then(result => {
         next(result);
@@ -128,9 +129,9 @@ function captureAndCheckColor(aRed, aGreen, aBlue, aMessage) {
   dontExpireThumbnailURLs([browser.currentURI.spec]);
 
   // Capture the screenshot.
-  PageThumbs.captureAndStore(browser, function () {
-    retrieveImageDataForURL(browser.currentURI.spec, function ([r, g, b]) {
-      is("" + [r,g,b], "" + [aRed, aGreen, aBlue], aMessage);
+  PageThumbs.captureAndStore(browser, function() {
+    retrieveImageDataForURL(browser.currentURI.spec, function([r, g, b]) {
+      is("" + [r, g, b], "" + [aRed, aGreen, aBlue], aMessage);
       next();
     });
   });
@@ -151,7 +152,7 @@ function retrieveImageDataForURL(aURL, aCallback) {
   let img = document.createElementNS(htmlns, "img");
   img.setAttribute("src", thumb);
 
-  whenLoaded(img, function () {
+  whenLoaded(img, function() {
     let canvas = document.createElementNS(htmlns, "canvas");
     canvas.setAttribute("width", width);
     canvas.setAttribute("height", height);
@@ -250,7 +251,7 @@ function dontExpireThumbnailURLs(aURLs) {
   let dontExpireURLs = (cb) => cb(aURLs);
   PageThumbs.addExpirationFilter(dontExpireURLs);
 
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     PageThumbs.removeExpirationFilter(dontExpireURLs);
   });
 }
@@ -281,7 +282,7 @@ function bgAddPageThumbObserver(url) {
   return new Promise((resolve, reject) => {
     function observe(subject, topic, data) { // jshint ignore:line
       if (data === url) {
-        switch(topic) {
+        switch (topic) {
           case "page-thumbnail:create":
             resolve();
             break;

@@ -4,9 +4,6 @@
 
 "use strict";
 
-/* eslint-disable mozilla/reject-some-requires */
-const {Ci} = require("chrome");
-/* eslint-enable mozilla/reject-some-requires */
 const {l10n} = require("devtools/shared/inspector/css-logic");
 const {getCssProperties} = require("devtools/shared/fronts/css-properties");
 const {InplaceEditor, editableField} =
@@ -15,13 +12,13 @@ const {
   createChild,
   appendText,
   advanceValidate,
-  blurOnMultipleProperties,
-  throttle
+  blurOnMultipleProperties
 } = require("devtools/client/inspector/shared/utils");
 const {
   parseDeclarations,
   parseSingleValue,
-} = require("devtools/shared/css-parsing-utils");
+} = require("devtools/shared/css/parsing-utils");
+const Services = require("Services");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -78,7 +75,7 @@ function TextPropertyEditor(ruleEditor, property) {
   this._onSwatchCommit = this._onSwatchCommit.bind(this);
   this._onSwatchPreview = this._onSwatchPreview.bind(this);
   this._onSwatchRevert = this._onSwatchRevert.bind(this);
-  this._onValidate = throttle(this._previewValue, 10, this);
+  this._onValidate = this.ruleView.throttle(this._previewValue, 10, this);
   this.update = this.update.bind(this);
   this.updatePropertyState = this.updatePropertyState.bind(this);
 
@@ -221,7 +218,9 @@ TextPropertyEditor.prototype = {
         destroy: this.updatePropertyState,
         advanceChars: ":",
         contentType: InplaceEditor.CONTENT_TYPES.CSS_PROPERTY,
-        popup: this.popup
+        popup: this.popup,
+        cssProperties: this.cssProperties,
+        contextMenu: this.ruleView.inspector.onTextBoxContextMenu
       });
 
       // Auto blur name field on multiple CSS rules get pasted in.
@@ -290,7 +289,9 @@ TextPropertyEditor.prototype = {
         property: this.prop,
         popup: this.popup,
         multiline: true,
-        maxWidth: () => this.container.getBoundingClientRect().width
+        maxWidth: () => this.container.getBoundingClientRect().width,
+        cssProperties: this.cssProperties,
+        contextMenu: this.ruleView.inspector.onTextBoxContextMenu
       });
     }
   },
@@ -341,14 +342,15 @@ TextPropertyEditor.prototype = {
 
     let outputParser = this.ruleView._outputParser;
     let parserOptions = {
-      colorSwatchClass: SHARED_SWATCH_CLASS + " " + COLOR_SWATCH_CLASS,
-      colorClass: "ruleview-color",
-      bezierSwatchClass: SHARED_SWATCH_CLASS + " " + BEZIER_SWATCH_CLASS,
-      bezierClass: "ruleview-bezier",
-      filterSwatchClass: SHARED_SWATCH_CLASS + " " + FILTER_SWATCH_CLASS,
-      filterClass: "ruleview-filter",
-      angleSwatchClass: SHARED_SWATCH_CLASS + " " + ANGLE_SWATCH_CLASS,
       angleClass: "ruleview-angle",
+      angleSwatchClass: SHARED_SWATCH_CLASS + " " + ANGLE_SWATCH_CLASS,
+      bezierClass: "ruleview-bezier",
+      bezierSwatchClass: SHARED_SWATCH_CLASS + " " + BEZIER_SWATCH_CLASS,
+      colorClass: "ruleview-color",
+      colorSwatchClass: SHARED_SWATCH_CLASS + " " + COLOR_SWATCH_CLASS,
+      filterClass: "ruleview-filter",
+      filterSwatchClass: SHARED_SWATCH_CLASS + " " + FILTER_SWATCH_CLASS,
+      gridClass: "ruleview-grid",
       defaultColorType: !propDirty,
       urlClass: "theme-link",
       baseURI: this.sheetHref
@@ -423,6 +425,15 @@ TextPropertyEditor.prototype = {
       }
     }
 
+    let gridToggle = this.valueSpan.querySelector(".ruleview-grid");
+    if (gridToggle) {
+      gridToggle.setAttribute("title", l10n("rule.gridToggle.tooltip"));
+      if (this.ruleView.highlighters.gridHighlighterShown ===
+          this.ruleView.inspector.selection.nodeFront) {
+        gridToggle.classList.add("active");
+      }
+    }
+
     // Now that we have updated the property's value, we might have a pending
     // click on the value container. If we do, we have to trigger a click event
     // on the right element.
@@ -452,6 +463,7 @@ TextPropertyEditor.prototype = {
 
   _onStartEditing: function () {
     this.element.classList.remove("ruleview-overridden");
+    this.filterProperty.hidden = true;
     this.enable.style.visibility = "hidden";
   },
 
@@ -642,7 +654,7 @@ TextPropertyEditor.prototype = {
     // Remove a property if the property value is empty and the property
     // value is not about to be focused
     if (!this.prop.value &&
-        direction !== Ci.nsIFocusManager.MOVEFOCUS_FORWARD) {
+        direction !== Services.focus.MOVEFOCUS_FORWARD) {
       this.remove(direction);
       return;
     }
@@ -723,6 +735,10 @@ TextPropertyEditor.prototype = {
       return;
     }
 
+    if (this.isDisplayGrid()) {
+      this.ruleView.highlighters.hideGridHighlighter();
+    }
+
     // First, set this property value (common case, only modified a property)
     this.prop.setValue(val.value, val.priority);
 
@@ -741,7 +757,7 @@ TextPropertyEditor.prototype = {
     // A timeout is used here to accurately check the state, since the inplace
     // editor `done` and `destroy` events fire before the next editor
     // is focused.
-    if (!value.trim() && direction !== Ci.nsIFocusManager.MOVEFOCUS_BACKWARD) {
+    if (!value.trim() && direction !== Services.focus.MOVEFOCUS_BACKWARD) {
       setTimeout(() => {
         if (!this.editing) {
           this.remove(direction);
@@ -849,6 +865,15 @@ TextPropertyEditor.prototype = {
    */
   isValid: function () {
     return this.prop.isValid();
+  },
+
+  /**
+   * Returns true if the property is a `display: grid` declaration.
+   *
+   * @return {Boolean} true if the property is a `display: grid` declaration.
+   */
+  isDisplayGrid: function () {
+    return this.prop.name === "display" && this.prop.value === "grid";
   }
 };
 

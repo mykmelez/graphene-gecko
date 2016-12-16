@@ -18,7 +18,6 @@
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nscore.h"                     // for nsACString
 #include "mozilla/EnumeratedArray.h"
-#include "gfxVR.h"
 
 namespace mozilla {
 namespace layers {
@@ -96,36 +95,6 @@ struct EffectMask : public Effect
   gfx::Matrix4x4 mMaskTransform;
 };
 
-struct EffectVRDistortion : public Effect
-{
-  EffectVRDistortion(gfx::VRHMDInfo* aHMD,
-                     CompositingRenderTarget* aRenderTarget)
-    : Effect(EffectTypes::VR_DISTORTION)
-    , mHMD(aHMD)
-    , mRenderTarget(aRenderTarget)
-    , mTexture(aRenderTarget)
-  {}
-
-  EffectVRDistortion(gfx::VRHMDInfo* aHMD,
-                     TextureSource* aTexture)
-    : Effect(EffectTypes::VR_DISTORTION)
-    , mHMD(aHMD)
-    , mRenderTarget(nullptr)
-    , mTexture(aTexture)
-  {}
-
-  virtual const char* Name() { return "EffectVRDistortion"; }
-  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
-
-  RefPtr<gfx::VRHMDInfo> mHMD;
-  RefPtr<CompositingRenderTarget> mRenderTarget;
-  TextureSource* mTexture;
-
-  // The viewport for each eye in the source and
-  // destination textures.
-  gfx::IntRect mViewports[2];
-};
-
 struct EffectBlendMode : public Effect
 {
   explicit EffectBlendMode(gfx::CompositionOp aBlendMode)
@@ -189,11 +158,14 @@ struct EffectRGB : public TexturedEffect
 
 struct EffectYCbCr : public TexturedEffect
 {
-  EffectYCbCr(TextureSource *aSource, gfx::SamplingFilter aSamplingFilter)
+  EffectYCbCr(TextureSource *aSource, YUVColorSpace aYUVColorSpace, gfx::SamplingFilter aSamplingFilter)
     : TexturedEffect(EffectTypes::YCBCR, aSource, false, aSamplingFilter)
+    , mYUVColorSpace(aYUVColorSpace)
   {}
 
   virtual const char* Name() { return "EffectYCbCr"; }
+
+  YUVColorSpace mYUVColorSpace;
 };
 
 struct EffectNV12 : public TexturedEffect
@@ -270,11 +242,11 @@ CreateTexturedEffect(gfx::SurfaceFormat aFormat,
   case gfx::SurfaceFormat::R8G8B8A8:
     result = new EffectRGB(aSource, isAlphaPremultiplied, aSamplingFilter);
     break;
-  case gfx::SurfaceFormat::YUV:
-    result = new EffectYCbCr(aSource, aSamplingFilter);
-    break;
   case gfx::SurfaceFormat::NV12:
     result = new EffectNV12(aSource, aSamplingFilter);
+    break;
+  case gfx::SurfaceFormat::YUV:
+    MOZ_ASSERT_UNREACHABLE("gfx::SurfaceFormat::YUV is invalid");
     break;
   default:
     NS_WARNING("unhandled program type");
@@ -283,6 +255,30 @@ CreateTexturedEffect(gfx::SurfaceFormat aFormat,
 
   result->mState = state;
 
+  return result.forget();
+}
+
+inline already_AddRefed<TexturedEffect>
+CreateTexturedEffect(TextureHost* aHost,
+                     TextureSource* aSource,
+                     const gfx::SamplingFilter aSamplingFilter,
+                     bool isAlphaPremultiplied,
+                     const LayerRenderState &state = LayerRenderState())
+{
+  MOZ_ASSERT(aHost);
+  MOZ_ASSERT(aSource);
+
+  RefPtr<TexturedEffect> result;
+  if (aHost->GetReadFormat() == gfx::SurfaceFormat::YUV) {
+    MOZ_ASSERT(aHost->GetYUVColorSpace() != YUVColorSpace::UNKNOWN);
+    result = new EffectYCbCr(aSource, aHost->GetYUVColorSpace(), aSamplingFilter);
+  } else {
+    result = CreateTexturedEffect(aHost->GetReadFormat(),
+                                  aSource,
+                                  aSamplingFilter,
+                                  isAlphaPremultiplied,
+                                  state);
+  }
   return result.forget();
 }
 

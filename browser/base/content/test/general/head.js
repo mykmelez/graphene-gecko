@@ -32,7 +32,7 @@ function waitForNotificationClose(notification, cb) {
   observer.observe(parent, {childList: true});
 }
 
-function closeAllNotifications () {
+function closeAllNotifications() {
   let notificationBox = document.getElementById("global-notificationbox");
 
   if (!notificationBox || !notificationBox.currentNotification) {
@@ -41,7 +41,7 @@ function closeAllNotifications () {
 
   let deferred = Promise.defer();
   for (let notification of notificationBox.allNotifications) {
-    waitForNotificationClose(notification, function () {
+    waitForNotificationClose(notification, function() {
       if (notificationBox.allNotifications.length === 0) {
         deferred.resolve();
       }
@@ -75,9 +75,9 @@ function updateTabContextMenu(tab, onOpened) {
       yield onOpened();
       onFinished();
     });
-  } else {
-    onFinished();
   }
+  onFinished();
+  return Promise.resolve();
 }
 
 function openToolbarCustomizationUI(aCallback, aBrowserWin) {
@@ -258,7 +258,7 @@ function promiseWindowClosed(win) {
   return promise;
 }
 
-function promiseOpenAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
+function promiseOpenAndLoadWindow(aOptions, aWaitForDelayedStartup = false) {
   let deferred = Promise.defer();
   let win = OpenBrowserWindow(aOptions);
   if (aWaitForDelayedStartup) {
@@ -327,7 +327,7 @@ function waitForAsyncUpdates(aCallback, aScope, aArguments) {
  */
 function promiseIsURIVisited(aURI, aExpectedValue) {
   let deferred = Promise.defer();
-  PlacesUtils.asyncHistory.isURIVisited(aURI, function(aURI, aIsVisited) {
+  PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
     deferred.resolve(aIsVisited);
   });
 
@@ -372,10 +372,10 @@ function promiseHistoryClearedState(aURIs, aShouldBeCleared) {
     if (++callbackCount == aURIs.length)
       deferred.resolve();
   }
-  aURIs.forEach(function (aURI) {
-    PlacesUtils.asyncHistory.isURIVisited(aURI, function(aURI, aIsVisited) {
-      is(aIsVisited, !aShouldBeCleared,
-         "history visit " + aURI.spec + " should " + niceStr + " exist");
+  aURIs.forEach(function(aURI) {
+    PlacesUtils.asyncHistory.isURIVisited(aURI, function(uri, isVisited) {
+      is(isVisited, !aShouldBeCleared,
+         "history visit " + uri.spec + " should " + niceStr + " exist");
       callbackDone();
     });
   });
@@ -399,8 +399,8 @@ function promiseHistoryClearedState(aURIs, aShouldBeCleared) {
  *        progress listener callback.
  * @return promise
  */
-function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser, aStopFromProgressListener=true) {
-  function content_script(aStopFromProgressListener) {
+function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrowser, aStopFromProgressListener = true) {
+  function content_script(contentStopFromProgressListener) {
     let { interfaces: Ci, utils: Cu } = Components;
     Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
     let wp = docShell.QueryInterface(Ci.nsIWebProgress);
@@ -418,7 +418,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser
     }
 
     let progressListener = {
-      onStateChange: function (webProgress, req, flags, status) {
+      onStateChange: function(webProgress, req, flags, status) {
         dump("waitForDocLoadAndStopIt: onStateChange " + flags.toString(16) + ": " + req.name + "\n");
 
         if (webProgress.isTopLevel &&
@@ -428,7 +428,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser
           let chan = req.QueryInterface(Ci.nsIChannel);
           dump(`waitForDocLoadAndStopIt: Document start: ${chan.URI.spec}\n`);
 
-          stopContent(aStopFromProgressListener, chan.originalURI.spec);
+          stopContent(contentStopFromProgressListener, chan.originalURI.spec);
         }
       },
       QueryInterface: XPCOMUtils.generateQI(["nsISupportsWeakReference"])
@@ -440,7 +440,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser
      * event handler is the easiest way to ensure the weakly referenced
      * progress listener is kept alive as long as necessary.
      */
-    addEventListener("unload", function () {
+    addEventListener("unload", function() {
       try {
         wp.removeProgressListener(progressListener);
       } catch (e) { /* Will most likely fail. */ }
@@ -467,10 +467,10 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser
  *
  * @return promise
  */
-function waitForDocLoadComplete(aBrowser=gBrowser) {
+function waitForDocLoadComplete(aBrowser = gBrowser) {
   return new Promise(resolve => {
     let listener = {
-      onStateChange: function (webProgress, req, flags, status) {
+      onStateChange: function(webProgress, req, flags, status) {
         let docStop = Ci.nsIWebProgressListener.STATE_IS_NETWORK |
                       Ci.nsIWebProgressListener.STATE_STOP;
         info("Saw state " + flags.toString(16) + " and status " + status.toString(16));
@@ -541,7 +541,7 @@ var FullZoomHelper = {
           resolve();
       }, true);
 
-      this.waitForLocationChange().then(function () {
+      this.waitForLocationChange().then(function() {
         didZoom = true;
         if (didLoad)
           resolve();
@@ -586,7 +586,7 @@ var FullZoomHelper = {
       else if (direction == this.FORWARD)
         gBrowser.goForward();
 
-      this.waitForLocationChange().then(function () {
+      this.waitForLocationChange().then(function() {
         didZoom = true;
         if (didPs)
           resolve();
@@ -595,7 +595,7 @@ var FullZoomHelper = {
   },
 
   failAndContinue: function failAndContinue(func) {
-    return function (err) {
+    return function(err) {
       ok(false, err);
       func();
     };
@@ -616,7 +616,6 @@ var FullZoomHelper = {
  */
 function promiseTabLoadEvent(tab, url)
 {
-  let deferred = Promise.defer();
   info("Wait tab event: load");
 
   function handle(loadedUrl) {
@@ -629,26 +628,12 @@ function promiseTabLoadEvent(tab, url)
     return true;
   }
 
-  // Create two promises: one resolved from the content process when the page
-  // loads and one that is rejected if we take too long to load the url.
   let loaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser, false, handle);
-
-  let timeout = setTimeout(() => {
-    deferred.reject(new Error("Timed out while waiting for a 'load' event"));
-  }, 30000);
-
-  loaded.then(() => {
-    clearTimeout(timeout);
-    deferred.resolve()
-  });
 
   if (url)
     BrowserTestUtils.loadURI(tab.linkedBrowser, url);
 
-  // Promise.all rejects if either promise rejects (i.e. if we time out) and
-  // if our loaded promise resolves before the timeout, then we resolve the
-  // timeout promise as well, causing the all promise to resolve.
-  return Promise.all([deferred.promise, loaded]);
+  return loaded;
 }
 
 /**
@@ -692,7 +677,7 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
     throw new Error("assertMixedContentBlockingState requires a browser and a states object");
   }
 
-  let {passiveLoaded,activeLoaded,activeBlocked} = states;
+  let {passiveLoaded, activeLoaded, activeBlocked} = states;
   let {gIdentityHandler} = tabbrowser.ownerGlobal;
   let doc = tabbrowser.ownerDocument;
   let identityBox = gIdentityHandler._identityBox;
@@ -735,19 +720,19 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
 
     is_element_visible(connectionIcon);
     if (activeLoaded) {
-      is(connectionIconImage, "url(\"chrome://browser/skin/identity-mixed-active-loaded.svg\")",
+      is(connectionIconImage, "url(\"chrome://browser/skin/connection-mixed-active-loaded.svg#icon\")",
         "Using active loaded icon");
     }
     if (activeBlocked && !passiveLoaded) {
-      is(connectionIconImage, "url(\"chrome://browser/skin/identity-secure.svg\")",
+      is(connectionIconImage, "url(\"chrome://browser/skin/connection-secure.svg\")",
         "Using active blocked icon");
     }
     if (passiveLoaded && !(activeLoaded || activeBlocked)) {
-      is(connectionIconImage, "url(\"chrome://browser/skin/identity-mixed-passive-loaded.svg\")",
+      is(connectionIconImage, "url(\"chrome://browser/skin/connection-mixed-passive-loaded.svg#icon\")",
         "Using passive loaded icon");
     }
     if (passiveLoaded && activeBlocked) {
-      is(connectionIconImage, "url(\"chrome://browser/skin/identity-mixed-passive-loaded.svg\")",
+      is(connectionIconImage, "url(\"chrome://browser/skin/connection-mixed-passive-loaded.svg#icon\")",
         "Using active blocked and passive loaded icon");
     }
   }
@@ -788,9 +773,9 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
   }
 
   if (stateSecure) {
-    is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/conn-secure.svg\")",
+    is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-secure\")",
       "CC using secure icon");
-    is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/conn-secure.svg\")",
+    is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-secure\")",
       "CC using secure icon");
   }
 
@@ -801,15 +786,15 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
       is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/mcb-disabled.svg\")",
         "CC using active loaded icon");
     } else if (activeBlocked || passiveLoaded) {
-      is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/conn-degraded.svg\")",
+      is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-degraded\")",
         "CC using degraded icon");
-      is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/conn-degraded.svg\")",
+      is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-degraded\")",
         "CC using degraded icon");
     } else {
       // There is a case here with weak ciphers, but no bc tests are handling this yet.
-      is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/conn-degraded.svg\")",
+      is(securityViewBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-degraded\")",
         "CC using degraded icon");
-      is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/conn-degraded.svg\")",
+      is(securityContentBG, "url(\"chrome://browser/skin/controlcenter/connection.svg#connection-degraded\")",
         "CC using degraded icon");
     }
   }
@@ -837,7 +822,7 @@ function is_hidden(element) {
   if (style.visibility != "visible")
     return true;
   if (style.display == "-moz-popup")
-    return ["hiding","closed"].indexOf(element.state) != -1;
+    return ["hiding", "closed"].indexOf(element.state) != -1;
 
   // Hiding a parent element will hide all its children
   if (element.parentNode != element.ownerDocument)
@@ -921,8 +906,8 @@ function promiseTopicObserved(aTopic)
 {
   return new Promise((resolve) => {
     Services.obs.addObserver(
-      function PTO_observe(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(PTO_observe, aTopic);
+      function PTO_observe(aSubject, aTopic2, aData) {
+        Services.obs.removeObserver(PTO_observe, aTopic2);
         resolve({subject: aSubject, data: aData});
       }, aTopic, false);
   });
@@ -933,12 +918,12 @@ function promiseNewSearchEngine(basename) {
     info("Waiting for engine to be added: " + basename);
     let url = getRootDirectory(gTestPath) + basename;
     Services.search.addEngine(url, null, "", false, {
-      onSuccess: function (engine) {
+      onSuccess: function(engine) {
         info("Search engine added: " + basename);
         registerCleanupFunction(() => Services.search.removeEngine(engine));
         resolve(engine);
       },
-      onError: function (errCode) {
+      onError: function(errCode) {
         Assert.ok(false, "addEngine failed with error code " + errCode);
         reject();
       },
@@ -981,7 +966,7 @@ function isSecurityState(expectedState) {
 function promiseOnBookmarkItemAdded(aExpectedURI) {
   return new Promise((resolve, reject) => {
     let bookmarksObserver = {
-      onItemAdded: function (aItemId, aFolderId, aIndex, aItemType, aURI) {
+      onItemAdded: function(aItemId, aFolderId, aIndex, aItemType, aURI) {
         info("Added a bookmark to " + aURI.spec);
         PlacesUtils.bookmarks.removeObserver(bookmarksObserver);
         if (aURI.equals(aExpectedURI)) {
@@ -991,112 +976,18 @@ function promiseOnBookmarkItemAdded(aExpectedURI) {
           reject(new Error("Added an unexpected bookmark"));
         }
       },
-      onBeginUpdateBatch: function () {},
-      onEndUpdateBatch: function () {},
-      onItemRemoved: function () {},
-      onItemChanged: function () {},
-      onItemVisited: function () {},
-      onItemMoved: function () {},
+      onBeginUpdateBatch: function() {},
+      onEndUpdateBatch: function() {},
+      onItemRemoved: function() {},
+      onItemChanged: function() {},
+      onItemVisited: function() {},
+      onItemMoved: function() {},
       QueryInterface: XPCOMUtils.generateQI([
         Ci.nsINavBookmarkObserver,
       ])
     };
     info("Waiting for a bookmark to be added");
     PlacesUtils.bookmarks.addObserver(bookmarksObserver, false);
-  });
-}
-
-/**
- * For an nsIPropertyBag, returns the value for a given
- * key.
- *
- * @param bag
- *        The nsIPropertyBag to retrieve the value from
- * @param key
- *        The key that we want to get the value for from the
- *        bag
- * @returns The value corresponding to the key from the bag,
- *          or null if the value could not be retrieved (for
- *          example, if no value is set at that key).
-*/
-function getPropertyBagValue(bag, key) {
-  try {
-    let val = bag.getProperty(key);
-    return val;
-  } catch(e if e.result == Cr.NS_ERROR_FAILURE) {}
-
-  return null;
-}
-
-/**
- * Returns a Promise that resolves once a crash report has
- * been submitted. This function will also test the crash
- * reports extra data to see if it matches expectedExtra.
- *
- * @param expectedExtra (object)
- *        An Object whose key-value pairs will be compared
- *        against the key-value pairs in the extra data of the
- *        crash report. A test failure will occur if there is
- *        a mismatch.
- *
- *        If the value of the key-value pair is "null", this will
- *        be interpreted as "this key should not be included in the
- *        extra data", and will cause a test failure if it is detected
- *        in the crash report.
- *
- *        Note that this will ignore any keys that are not included
- *        in expectedExtra. It's possible that the crash report
- *        will contain other extra information that is not
- *        compared against.
- * @returns Promise
- */
-function promiseCrashReport(expectedExtra={}) {
-  return Task.spawn(function*() {
-    info("Starting wait on crash-report-status");
-    let [subject, data] =
-      yield TestUtils.topicObserved("crash-report-status", (subject, data) => {
-        return data == "success";
-      });
-    info("Topic observed!");
-
-    if (!(subject instanceof Ci.nsIPropertyBag2)) {
-      throw new Error("Subject was not a Ci.nsIPropertyBag2");
-    }
-
-    let remoteID = getPropertyBagValue(subject, "serverCrashID");
-    if (!remoteID) {
-      throw new Error("Report should have a server ID");
-    }
-
-    let file = Cc["@mozilla.org/file/local;1"]
-                 .createInstance(Ci.nsILocalFile);
-    file.initWithPath(Services.crashmanager._submittedDumpsDir);
-    file.append(remoteID + ".txt");
-    if (!file.exists()) {
-      throw new Error("Report should have been received by the server");
-    }
-
-    file.remove(false);
-
-    let extra = getPropertyBagValue(subject, "extra");
-    if (!(extra instanceof Ci.nsIPropertyBag2)) {
-      throw new Error("extra was not a Ci.nsIPropertyBag2");
-    }
-
-    info("Iterating crash report extra keys");
-    let enumerator = extra.enumerator;
-    while (enumerator.hasMoreElements()) {
-      let key = enumerator.getNext().QueryInterface(Ci.nsIProperty).name;
-      let value = extra.getPropertyAsAString(key);
-      if (key in expectedExtra) {
-        if (expectedExtra[key] == null) {
-          ok(false, `Got unexpected key ${key} with value ${value}`);
-        } else {
-          is(value, expectedExtra[key],
-             `Crash report had the right extra value for ${key}`);
-        }
-      }
-    }
   });
 }
 
@@ -1132,8 +1023,17 @@ function* loadBadCertPage(url) {
                              "cert-exception-ui-ready", false);
   });
 
-  yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
-  yield promiseErrorPageLoaded(gBrowser.selectedBrowser);
+  // Sometimes clearing the cert override is not immediately picked up,
+  // so we reload until we are on an actual cert error page.
+  yield BrowserTestUtils.waitForCondition(function*() {
+    yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+    yield promiseErrorPageLoaded(gBrowser.selectedBrowser);
+    let isErrorPage = yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
+      return content.document.documentURI.startsWith("about:certerror");
+    });
+    return isErrorPage;
+  }, "Could not load error page", 1000);
+
   yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
     content.document.getElementById("exceptionDialogButton").click();
   });
@@ -1165,6 +1065,7 @@ function getCertExceptionDialog(aLocation) {
       }
     }
   }
+  return undefined;
 }
 
 function setupRemoteClientsFixture(fixture) {

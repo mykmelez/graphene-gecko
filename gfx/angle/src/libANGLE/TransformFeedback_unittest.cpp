@@ -14,11 +14,17 @@
 #include "tests/angle_unittests_utils.h"
 
 using ::testing::_;
+using ::testing::get;
 using ::testing::Return;
 using ::testing::SetArgumentPointee;
 
 namespace
 {
+
+ACTION(CreateMockTransformFeedbackImpl)
+{
+    return new rx::MockTransformFeedbackImpl(arg0);
+}
 
 class TransformFeedbackTest : public testing::Test
 {
@@ -27,17 +33,18 @@ class TransformFeedbackTest : public testing::Test
 
     void SetUp() override
     {
-        mImpl = new rx::MockTransformFeedbackImpl;
-        EXPECT_CALL(mMockFactory, createTransformFeedback())
-            .WillOnce(Return(mImpl))
+        EXPECT_CALL(mMockFactory, createTransformFeedback(_))
+            .WillOnce(CreateMockTransformFeedbackImpl())
             .RetiresOnSaturation();
 
         // Set a reasonable number of tf attributes
         mCaps.maxTransformFeedbackSeparateAttributes = 8;
 
-        EXPECT_CALL(*mImpl, destructor());
         mFeedback = new gl::TransformFeedback(&mMockFactory, 1, mCaps);
         mFeedback->addRef();
+
+        mImpl = rx::GetImplAs<rx::MockTransformFeedbackImpl>(mFeedback);
+        EXPECT_CALL(*mImpl, destructor());
     }
 
     void TearDown() override
@@ -94,8 +101,15 @@ TEST_F(TransformFeedbackTest, SideEffectsOfPauseAndResume)
 TEST_F(TransformFeedbackTest, BufferBinding)
 {
     rx::MockBufferImpl *bufferImpl = new rx::MockBufferImpl;
-    gl::Buffer *buffer = new gl::Buffer(bufferImpl, 1);
     EXPECT_CALL(*bufferImpl, destructor()).Times(1).RetiresOnSaturation();
+
+    rx::MockGLFactory mockGLFactory;
+    EXPECT_CALL(mockGLFactory, createBuffer(_))
+        .Times(1)
+        .WillOnce(Return(bufferImpl))
+        .RetiresOnSaturation();
+
+    gl::Buffer *buffer = new gl::Buffer(&mockGLFactory, 1);
 
     static const size_t bindIndex = 0;
 

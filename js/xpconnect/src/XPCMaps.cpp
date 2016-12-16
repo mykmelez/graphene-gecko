@@ -34,56 +34,16 @@ MatchIIDPtrKey(const PLDHashEntryHdr* entry, const void* key)
 }
 
 static PLDHashNumber
-HashNativeKey(const void* key)
+HashNativeKey(const void* data)
 {
-    XPCNativeSetKey* Key = (XPCNativeSetKey*) key;
-
-    PLDHashNumber h = 0;
-
-    XPCNativeSet*       Set;
-    XPCNativeInterface* Addition;
-    uint16_t            Position;
-
-    if (Key->IsAKey()) {
-        Set      = Key->GetBaseSet();
-        Addition = Key->GetAddition();
-        Position = Key->GetPosition();
-    } else {
-        Set      = (XPCNativeSet*) Key;
-        Addition = nullptr;
-        Position = 0;
-    }
-
-    if (!Set) {
-        MOZ_ASSERT(Addition, "bad key");
-        // This would be an XOR like below.
-        // But "0 ^ x == x". So it does not matter.
-        h = (js::HashNumber) NS_PTR_TO_INT32(Addition) >> 2;
-    } else {
-        XPCNativeInterface** Current = Set->GetInterfaceArray();
-        uint16_t count = Set->GetInterfaceCount();
-        if (Addition) {
-            count++;
-            for (uint16_t i = 0; i < count; i++) {
-                if (i == Position)
-                    h ^= (js::HashNumber) NS_PTR_TO_INT32(Addition) >> 2;
-                else
-                    h ^= (js::HashNumber) NS_PTR_TO_INT32(*(Current++)) >> 2;
-            }
-        } else {
-            for (uint16_t i = 0; i < count; i++)
-                h ^= (js::HashNumber) NS_PTR_TO_INT32(*(Current++)) >> 2;
-        }
-    }
-
-    return h;
+    return static_cast<const XPCNativeSetKey*>(data)->Hash();
 }
 
 /***************************************************************************/
 // implement JSObject2WrappedJSMap...
 
 void
-JSObject2WrappedJSMap::UpdateWeakPointersAfterGC(XPCJSRuntime* runtime)
+JSObject2WrappedJSMap::UpdateWeakPointersAfterGC(XPCJSContext* context)
 {
     // Check all wrappers and update their JSObject pointer if it has been
     // moved. Release any wrappers whose weakly held JSObject has died.
@@ -116,7 +76,7 @@ JSObject2WrappedJSMap::UpdateWeakPointersAfterGC(XPCJSRuntime* runtime)
         }
 
         // Remove or update the JSObject key in the table if necessary.
-        JSObject* obj = e.front().key();
+        JSObject* obj = e.front().key().unbarrieredGet();
         JS_UpdateWeakPointerAfterGCUnbarriered(&obj);
         if (!obj)
             e.removeFront();
@@ -242,6 +202,33 @@ IID2NativeInterfaceMap::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) 
 // implement ClassInfo2NativeSetMap...
 
 // static
+bool ClassInfo2NativeSetMap::Entry::Match(const PLDHashEntryHdr* aEntry,
+                                          const void* aKey)
+{
+    return static_cast<const Entry*>(aEntry)->key == aKey;
+}
+
+// static
+void ClassInfo2NativeSetMap::Entry::Clear(PLDHashTable* aTable,
+                                          PLDHashEntryHdr* aEntry)
+{
+    auto entry = static_cast<Entry*>(aEntry);
+    NS_RELEASE(entry->value);
+
+    entry->key = nullptr;
+    entry->value = nullptr;
+}
+
+const PLDHashTableOps ClassInfo2NativeSetMap::Entry::sOps =
+{
+    PLDHashTable::HashVoidPtrKeyStub,
+    Match,
+    PLDHashTable::MoveEntryStub,
+    Clear,
+    nullptr
+};
+
+// static
 ClassInfo2NativeSetMap*
 ClassInfo2NativeSetMap::newMap(int length)
 {
@@ -249,7 +236,7 @@ ClassInfo2NativeSetMap::newMap(int length)
 }
 
 ClassInfo2NativeSetMap::ClassInfo2NativeSetMap(int length)
-  : mTable(PLDHashTable::StubOps(), sizeof(Entry), length)
+  : mTable(&ClassInfo2NativeSetMap::Entry::sOps, sizeof(Entry), length)
 {
 }
 
@@ -294,30 +281,7 @@ ClassInfo2WrappedNativeProtoMap::SizeOfIncludingThis(mozilla::MallocSizeOf mallo
 bool
 NativeSetMap::Entry::Match(const PLDHashEntryHdr* entry, const void* key)
 {
-    XPCNativeSetKey* Key = (XPCNativeSetKey*) key;
-
-    // See the comment in the XPCNativeSetKey declaration in xpcprivate.h.
-    if (!Key->IsAKey()) {
-        XPCNativeSet* Set1 = (XPCNativeSet*) key;
-        XPCNativeSet* Set2 = ((Entry*)entry)->key_value;
-
-        if (Set1 == Set2)
-            return true;
-
-        uint16_t count = Set1->GetInterfaceCount();
-        if (count != Set2->GetInterfaceCount())
-            return false;
-
-        XPCNativeInterface** Current1 = Set1->GetInterfaceArray();
-        XPCNativeInterface** Current2 = Set2->GetInterfaceArray();
-        for (uint16_t i = 0; i < count; i++) {
-            if (*(Current1++) != *(Current2++))
-                return false;
-        }
-
-        return true;
-    }
-
+    auto Key = static_cast<const XPCNativeSetKey*>(key);
     XPCNativeSet*       SetInTable = ((Entry*)entry)->key_value;
     XPCNativeSet*       Set        = Key->GetBaseSet();
     XPCNativeInterface* Addition   = Key->GetAddition();
@@ -341,24 +305,17 @@ NativeSetMap::Entry::Match(const PLDHashEntryHdr* entry, const void* key)
     if (!Addition && Set == SetInTable)
         return true;
 
-    uint16_t count = Set->GetInterfaceCount() + (Addition ? 1 : 0);
-    if (count != SetInTable->GetInterfaceCount())
+    uint16_t count = Set->GetInterfaceCount();
+    if (count + (Addition ? 1 : 0) != SetInTable->GetInterfaceCount())
         return false;
 
-    uint16_t Position = Key->GetPosition();
     XPCNativeInterface** CurrentInTable = SetInTable->GetInterfaceArray();
     XPCNativeInterface** Current = Set->GetInterfaceArray();
     for (uint16_t i = 0; i < count; i++) {
-        if (Addition && i == Position) {
-            if (Addition != *(CurrentInTable++))
-                return false;
-        } else {
-            if (*(Current++) != *(CurrentInTable++))
-                return false;
-        }
+        if (*(Current++) != *(CurrentInTable++))
+            return false;
     }
-
-    return true;
+    return !Addition || Addition == *(CurrentInTable++);
 }
 
 const struct PLDHashTableOps NativeSetMap::Entry::sOps =
@@ -503,12 +460,13 @@ XPCNativeScriptableSharedMap::GetNewOrUsed(uint32_t flags,
     NS_PRECONDITION(name,"bad param");
     NS_PRECONDITION(si,"bad param");
 
-    XPCNativeScriptableShared key(flags, name, /* populate = */ false);
-    auto entry = static_cast<Entry*>(mTable.Add(&key, fallible));
+    RefPtr<XPCNativeScriptableShared> key =
+        new XPCNativeScriptableShared(flags, name, /* populate = */ false);
+    auto entry = static_cast<Entry*>(mTable.Add(key, fallible));
     if (!entry)
         return false;
 
-    XPCNativeScriptableShared* shared = entry->key;
+    RefPtr<XPCNativeScriptableShared> shared = entry->key;
 
     // XXX: this XPCNativeScriptableShared is heap-allocated, which means the
     // js::Class it contains is also heap-allocated. This causes problems for
@@ -520,11 +478,11 @@ XPCNativeScriptableSharedMap::GetNewOrUsed(uint32_t flags,
     // StatsCellCallback() should be reinstated.
     //
     if (!shared) {
-        entry->key = shared =
-            new XPCNativeScriptableShared(flags, key.TransferNameOwnership(),
-                                          /* populate = */ true);
+        shared = new XPCNativeScriptableShared(flags, key->TransferNameOwnership(),
+                                               /* populate = */ true);
+        entry->key = shared;
     }
-    si->SetScriptableShared(shared);
+    si->SetScriptableShared(shared.forget());
     return true;
 }
 

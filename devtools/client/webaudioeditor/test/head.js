@@ -16,6 +16,7 @@ var Promise = require("promise");
 var Services = require("Services");
 var { WebAudioFront } = require("devtools/shared/fronts/webaudio");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+var flags = require("devtools/shared/flags");
 var audioNodes = require("devtools/server/actors/utils/audionodes.json");
 var mm = null;
 
@@ -42,10 +43,10 @@ waitForExplicitFinish();
 
 var gToolEnabled = Services.prefs.getBoolPref("devtools.webaudioeditor.enabled");
 
-DevToolsUtils.testing = true;
+flags.testing = true;
 
 registerCleanupFunction(() => {
-  DevToolsUtils.testing = false;
+  flags.testing = false;
   info("finish() was called, cleaning up...");
   Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
   Services.prefs.setBoolPref("devtools.webaudioeditor.enabled", gToolEnabled);
@@ -72,11 +73,10 @@ function addTab(aUrl, aWindow) {
   let tab = targetBrowser.selectedTab = targetBrowser.addTab(aUrl);
   let linkedBrowser = tab.linkedBrowser;
 
-  linkedBrowser.addEventListener("load", function onLoad() {
-    linkedBrowser.removeEventListener("load", onLoad, true);
+  BrowserTestUtils.browserLoaded(linkedBrowser).then(function () {
     info("Tab added and finished loading: " + aUrl);
     deferred.resolve(tab);
-  }, true);
+  });
 
   return deferred.promise;
 }

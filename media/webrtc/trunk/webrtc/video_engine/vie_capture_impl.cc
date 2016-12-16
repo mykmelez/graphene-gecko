@@ -69,11 +69,12 @@ int ViECaptureImpl::GetCaptureDevice(unsigned int list_number,
                                      char* device_nameUTF8,
                                      unsigned int device_nameUTF8Length,
                                      char* unique_idUTF8,
-                                     unsigned int unique_idUTF8Length) {
+                                     unsigned int unique_idUTF8Length,
+                                     pid_t* pid) {
   return shared_data_->input_manager()->GetDeviceName(
       list_number,
       device_nameUTF8, device_nameUTF8Length,
-      unique_idUTF8, unique_idUTF8Length);
+      unique_idUTF8, unique_idUTF8Length, pid);
 }
 
 int ViECaptureImpl::AllocateCaptureDevice(
@@ -373,6 +374,14 @@ int ViECaptureImpl::RegisterObserver(const int capture_id,
   return 0;
 }
 
+int ViECaptureImpl::RegisterInputObserver(ViEInputObserver* observer) {
+  if (shared_data_->input_manager()->RegisterObserver(observer) != 0) {
+    shared_data_->SetLastError(kViECaptureDeviceUnknownError);
+    return -1;
+  }
+  return 0;
+}
+
 int ViECaptureImpl::DeregisterObserver(const int capture_id) {
   ViEInputManagerScoped is(*(shared_data_->input_manager()));
   ViECapturer* vie_capture = is.Capture(capture_id);
@@ -386,6 +395,14 @@ int ViECaptureImpl::DeregisterObserver(const int capture_id) {
   }
 
   if (vie_capture->DeRegisterObserver() != 0) {
+    shared_data_->SetLastError(kViECaptureDeviceUnknownError);
+    return -1;
+  }
+  return 0;
+}
+
+int ViECaptureImpl::DeregisterInputObserver() {
+  if (shared_data_->input_manager()->DeRegisterObserver() != 0) {
     shared_data_->SetLastError(kViECaptureDeviceUnknownError);
     return -1;
   }

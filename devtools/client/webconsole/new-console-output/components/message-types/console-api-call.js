@@ -12,49 +12,123 @@ const {
   DOM: dom,
   PropTypes
 } = require("devtools/client/shared/vendor/react");
-const GripMessageBody = createFactory(require("devtools/client/webconsole/new-console-output/components/grip-message-body").GripMessageBody);
-const MessageRepeat = createFactory(require("devtools/client/webconsole/new-console-output/components/message-repeat").MessageRepeat);
-const MessageIcon = createFactory(require("devtools/client/webconsole/new-console-output/components/message-icon").MessageIcon);
+const GripMessageBody = createFactory(require("devtools/client/webconsole/new-console-output/components/grip-message-body"));
+const ConsoleTable = createFactory(require("devtools/client/webconsole/new-console-output/components/console-table"));
+const {isGroupType, l10n} = require("devtools/client/webconsole/new-console-output/utils/messages");
+
+const Message = createFactory(require("devtools/client/webconsole/new-console-output/components/message"));
 
 ConsoleApiCall.displayName = "ConsoleApiCall";
 
 ConsoleApiCall.propTypes = {
   message: PropTypes.object.isRequired,
+  open: PropTypes.bool,
+  serviceContainer: PropTypes.object.isRequired,
+  indent: PropTypes.number.isRequired,
+};
+
+ConsoleApiCall.defaultProps = {
+  open: false,
+  indent: 0,
 };
 
 function ConsoleApiCall(props) {
-  const { message } = props;
+  const {
+    dispatch,
+    message,
+    open,
+    tableData,
+    serviceContainer,
+    indent,
+  } = props;
+  const {
+    id: messageId,
+    source,
+    type,
+    level,
+    repeat,
+    stacktrace,
+    frame,
+    timeStamp,
+    parameters,
+    messageText,
+    userProvidedStyles,
+  } = message;
 
-  const messageBody = message.parameters ?
-    message.parameters.map((grip) => GripMessageBody({grip})) :
-    message.messageText;
+  let messageBody;
+  if (type === "trace") {
+    messageBody = dom.span({className: "cm-variable"}, "console.trace()");
+  } else if (type === "assert") {
+    let reps = formatReps(parameters);
+    messageBody = dom.span({ className: "cm-variable" }, "Assertion failed: ", reps);
+  } else if (type === "table") {
+    // TODO: Chrome does not output anything, see if we want to keep this
+    messageBody = dom.span({className: "cm-variable"}, "console.table()");
+  } else if (parameters) {
+    messageBody = formatReps(parameters, userProvidedStyles, serviceContainer);
+  } else {
+    messageBody = messageText;
+  }
 
-  const icon = MessageIcon({severity: message.severity});
-  const repeat = MessageRepeat({repeat: message.repeat});
+  let attachment = null;
+  if (type === "table") {
+    attachment = ConsoleTable({
+      dispatch,
+      id: message.id,
+      serviceContainer,
+      parameters: message.parameters,
+      tableData
+    });
+  }
 
-  // @TODO Use of "is" is a temporary hack to get the category and severity
-  // attributes to be applied. There are targeted in webconsole's CSS rules,
-  // so if we remove this hack, we have to modify the CSS rules accordingly.
-  return dom.div({
-    class: "message cm-s-mozilla",
-    is: "fdt-message",
-    category: message.category,
-    severity: message.severity
-  },
-    // @TODO add timestamp
-    // @TODO add indent if necessary
-    icon,
-    dom.span({className: "message-body-wrapper"},
-      dom.span({},
-        dom.span({className: "message-flex-body"},
-          dom.span({className: "message-body devtools-monospace"},
-            messageBody
-          ),
-          repeat
-        )
-      )
-    )
+  let collapseTitle = null;
+  if (isGroupType(type)) {
+    collapseTitle = l10n.getStr("groupToggle");
+  }
+
+  const collapsible = isGroupType(type)
+    || (type === "error" && Array.isArray(stacktrace));
+  const topLevelClasses = ["cm-s-mozilla"];
+
+  return Message({
+    messageId,
+    open,
+    collapsible,
+    collapseTitle,
+    source,
+    type,
+    level,
+    topLevelClasses,
+    messageBody,
+    repeat,
+    frame,
+    stacktrace,
+    attachment,
+    serviceContainer,
+    dispatch,
+    indent,
+    timeStamp,
+  });
+}
+
+function formatReps(parameters, userProvidedStyles, serviceContainer) {
+  return (
+    parameters
+      // Get all the grips.
+      .map((grip, key) => GripMessageBody({
+        grip,
+        key,
+        userProvidedStyle: userProvidedStyles ? userProvidedStyles[key] : null,
+        serviceContainer
+      }))
+      // Interleave spaces.
+      .reduce((arr, v, i) => {
+        return i + 1 < parameters.length
+          ? arr.concat(v, dom.span({}, " "))
+          : arr.concat(v);
+      }, [])
   );
 }
 
-module.exports.ConsoleApiCall = ConsoleApiCall;
+module.exports = ConsoleApiCall;
+

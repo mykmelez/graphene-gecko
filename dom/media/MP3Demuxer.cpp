@@ -17,11 +17,11 @@
 #include "prenv.h"
 
 #ifdef PR_LOGGING
-mozilla::LazyLogModule gMP3DemuxerLog("MP3Demuxer");
+extern mozilla::LazyLogModule gMediaDemuxerLog;
 #define MP3LOG(msg, ...) \
-  MOZ_LOG(gMP3DemuxerLog, LogLevel::Debug, ("MP3Demuxer " msg, ##__VA_ARGS__))
+  MOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, ("MP3Demuxer " msg, ##__VA_ARGS__))
 #define MP3LOGV(msg, ...) \
-  MOZ_LOG(gMP3DemuxerLog, LogLevel::Verbose, ("MP3Demuxer " msg, ##__VA_ARGS__))
+  MOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, ("MP3Demuxer " msg, ##__VA_ARGS__))
 #else
 #define MP3LOG(msg, ...)
 #define MP3LOGV(msg, ...)
@@ -55,7 +55,7 @@ MP3Demuxer::Init() {
     MP3LOG("MP3Demuxer::Init() failure: waiting for data");
 
     return InitPromise::CreateAndReject(
-      DemuxerFailureReason::DEMUXER_ERROR, __func__);
+      NS_ERROR_DOM_MEDIA_METADATA_ERR, __func__);
   }
 
   MP3LOG("MP3Demuxer::Init() successful");
@@ -185,7 +185,7 @@ MP3TrackDemuxer::GetInfo() const {
 }
 
 RefPtr<MP3TrackDemuxer::SeekPromise>
-MP3TrackDemuxer::Seek(TimeUnit aTime) {
+MP3TrackDemuxer::Seek(const TimeUnit& aTime) {
   // Efficiently seek to the position.
   FastSeek(aTime);
   // Correct seek position by scanning the next frames.
@@ -276,7 +276,7 @@ MP3TrackDemuxer::GetSamples(int32_t aNumSamples) {
 
   if (!aNumSamples) {
     return SamplesPromise::CreateAndReject(
-        DemuxerFailureReason::DEMUXER_ERROR, __func__);
+        NS_ERROR_DOM_MEDIA_DEMUXER_ERR, __func__);
   }
 
   RefPtr<SamplesHolder> frames = new SamplesHolder();
@@ -300,7 +300,7 @@ MP3TrackDemuxer::GetSamples(int32_t aNumSamples) {
 
   if (frames->mSamples.IsEmpty()) {
     return SamplesPromise::CreateAndReject(
-        DemuxerFailureReason::END_OF_STREAM, __func__);
+        NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
   }
   return SamplesPromise::CreateAndResolve(frames, __func__);
 }
@@ -314,10 +314,10 @@ MP3TrackDemuxer::Reset() {
 }
 
 RefPtr<MP3TrackDemuxer::SkipAccessPointPromise>
-MP3TrackDemuxer::SkipToNextRandomAccessPoint(TimeUnit aTimeThreshold) {
+MP3TrackDemuxer::SkipToNextRandomAccessPoint(const TimeUnit& aTimeThreshold) {
   // Will not be called for audio-only resources.
   return SkipAccessPointPromise::CreateAndReject(
-    SkipFailureHolder(DemuxerFailureReason::DEMUXER_ERROR, 0), __func__);
+    SkipFailureHolder(NS_ERROR_DOM_MEDIA_DEMUXER_ERR, 0), __func__);
 }
 
 int64_t
@@ -369,7 +369,7 @@ MP3TrackDemuxer::Duration() const {
 
   int64_t numFrames = 0;
   const auto numAudioFrames = mParser.VBRInfo().NumAudioFrames();
-  if (mParser.VBRInfo().IsValid()) {
+  if (mParser.VBRInfo().IsValid() && numAudioFrames.valueOr(0) + 1 > 1) {
     // VBR headers don't include the VBR header frame.
     numFrames = numAudioFrames.value() + 1;
   } else {
@@ -493,7 +493,6 @@ MP3TrackDemuxer::FindNextFrame() {
     // If we've found neither an MPEG frame header nor an ID3v2 tag,
     // the reader shouldn't have any bytes remaining.
     MOZ_ASSERT(foundFrame || bytesToSkip || !reader.Remaining());
-    reader.DiscardRemaining();
 
     if (foundFrame && mParser.FirstFrame().Length() &&
         !VerifyFrameConsistency(mParser.FirstFrame(), mParser.CurrentFrame())) {
@@ -582,10 +581,8 @@ MP3TrackDemuxer::GetNextFrame(const MediaByteRange& aRange) {
 
   if (mNumParsedFrames == 1) {
     // First frame parsed, let's read VBR info if available.
-    // TODO: read info that helps with seeking (bug 1163667).
     ByteReader reader(frame->Data(), frame->Size());
     mParser.ParseVBRHeader(&reader);
-    reader.DiscardRemaining();
     mFirstFrameOffset = frame->mOffset;
   }
 
@@ -603,7 +600,7 @@ MP3TrackDemuxer::OffsetFromFrameIndex(int64_t aFrameIndex) const {
   int64_t offset = 0;
   const auto& vbr = mParser.VBRInfo();
 
-  if (vbr.IsValid()) {
+  if (vbr.IsComplete()) {
     offset = mFirstFrameOffset + aFrameIndex * vbr.NumBytes().value() /
              vbr.NumAudioFrames().value();
   } else if (AverageFrameLength() > 0) {
@@ -619,7 +616,7 @@ MP3TrackDemuxer::FrameIndexFromOffset(int64_t aOffset) const {
   int64_t frameIndex = 0;
   const auto& vbr = mParser.VBRInfo();
 
-  if (vbr.IsValid()) {
+  if (vbr.IsComplete()) {
     frameIndex = static_cast<float>(aOffset - mFirstFrameOffset) /
                  vbr.NumBytes().value() * vbr.NumAudioFrames().value();
     frameIndex = std::min<int64_t>(vbr.NumAudioFrames().value(), frameIndex);
@@ -695,7 +692,7 @@ MP3TrackDemuxer::AverageFrameLength() const {
     return static_cast<double>(mTotalFrameLen) / mNumParsedFrames;
   }
   const auto& vbr = mParser.VBRInfo();
-  if (vbr.IsValid() && vbr.NumAudioFrames().value() + 1) {
+  if (vbr.IsComplete() && vbr.NumAudioFrames().value() + 1) {
     return static_cast<double>(vbr.NumBytes().value()) /
            (vbr.NumAudioFrames().value() + 1);
   }
@@ -1036,7 +1033,12 @@ FrameParser::VBRHeader::IsTOCPresent() const {
 
 bool
 FrameParser::VBRHeader::IsValid() const {
-  return mType != NONE &&
+  return mType != NONE;
+}
+
+bool
+FrameParser::VBRHeader::IsComplete() const {
+  return IsValid() &&
          mNumAudioFrames.valueOr(0) > 0 &&
          mNumBytes.valueOr(0) > 0 &&
          // We don't care about the scale for any computations here.

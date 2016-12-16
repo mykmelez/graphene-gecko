@@ -1,13 +1,14 @@
 altgraph.pth:python/altgraph
 marionette_driver.pth:testing/marionette/client
-browsermobproxy.pth:testing/marionette/harness/marionette/runner/mixins/browsermob-proxy-py
+marionette_harness.pth:testing/marionette/harness
+browsermobproxy.pth:testing/marionette/harness/marionette_harness/runner/mixins/browsermob-proxy-py
 wptserve.pth:testing/web-platform/tests/tools/wptserve
-marionette.pth:testing/marionette/harness
 blessings.pth:python/blessings
 configobj.pth:python/configobj
 jsmin.pth:python/jsmin
 mach.pth:python/mach
 mozbuild.pth:python/mozbuild
+mozversioncontrol.pth:python/mozversioncontrol
 mozlint.pth:python/mozlint
 pymake.pth:build/pymake
 optional:setup.py:python/psutil:build_ext:--inplace
@@ -16,6 +17,8 @@ which.pth:python/which
 ply.pth:other-licenses/ply/
 macholib.pth:python/macholib
 mock.pth:python/mock-1.0.0
+py.pth:python/py
+pytest.pth:python/pytest
 mozilla.pth:build
 mozilla.pth:config
 mozilla.pth:xpcom/typelib/xpt/tools
@@ -36,3 +39,4 @@ futures.pth:python/futures
 ecc.pth:python/PyECC
 xpcshell.pth:testing/xpcshell
 pyyaml.pth:python/pyyaml/lib
+pytoml.pth:python/pytoml

@@ -14,6 +14,7 @@
 #include "ImageContainer.h"
 #include "AbstractMediaDecoder.h"
 #include "gfx2DGlue.h"
+#include "VideoFrameContainer.h"
 
 namespace mozilla {
 
@@ -140,9 +141,8 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
         int64_t durationUs;
         mPlugin->GetDuration(mPlugin, &durationUs);
         durationUs = std::max<int64_t>(durationUs - mLastVideoFrame->mTime, 0);
-        RefPtr<VideoData> data = VideoData::ShallowCopyUpdateDuration(mLastVideoFrame,
-                                                                        durationUs);
-        mVideoQueue.Push(data);
+        mLastVideoFrame->UpdateDuration(durationUs);
+        mVideoQueue.Push(mLastVideoFrame);
         mLastVideoFrame = nullptr;
       }
       return false;
@@ -155,8 +155,8 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
       // when a frame is a keyframe.
 #if 0
       if (!frame.mKeyFrame) {
-        ++a.mParsed;
-        ++a.mDropped;
+        ++a.mStats.mParsedFrames;
+        ++a.mStats.mDroppedFrames;
         continue;
       }
 #endif
@@ -185,7 +185,6 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
       }
 
       v = VideoData::CreateFromImage(mInfo.mVideo,
-                                     mDecoder->GetImageContainer(),
                                      pos,
                                      frame.mTimeUs,
                                      1, // We don't know the duration yet.
@@ -230,23 +229,23 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
       }
 
       // This is the approximate byte position in the stream.
-      v = VideoData::Create(mInfo.mVideo,
-                            mDecoder->GetImageContainer(),
-                            pos,
-                            frame.mTimeUs,
-                            1, // We don't know the duration yet.
-                            b,
-                            frame.mKeyFrame,
-                            -1,
-                            picture);
+      v = VideoData::CreateAndCopyData(mInfo.mVideo,
+                                       mDecoder->GetImageContainer(),
+                                       pos,
+                                       frame.mTimeUs,
+                                       1, // We don't know the duration yet.
+                                       b,
+                                       frame.mKeyFrame,
+                                       -1,
+                                       picture);
     }
 
     if (!v) {
       return false;
     }
-    a.mParsed++;
-    a.mDecoded++;
-    NS_ASSERTION(a.mDecoded <= a.mParsed, "Expect to decode fewer frames than parsed in AndroidMedia...");
+    a.mStats.mParsedFrames++;
+    a.mStats.mDecodedFrames++;
+    NS_ASSERTION(a.mStats.mDecodedFrames <= a.mStats.mParsedFrames, "Expect to decode fewer frames than parsed in AndroidMedia...");
 
     // Since MPAPI doesn't give us the end time of frames, we keep one frame
     // buffered in AndroidMediaReader and push it into the queue as soon
@@ -261,7 +260,7 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
     // timestamp of the previous frame. We can then return the previously
     // decoded frame, and it will have a valid timestamp.
     int64_t duration = v->mTime - mLastVideoFrame->mTime;
-    mLastVideoFrame = VideoData::ShallowCopyUpdateDuration(mLastVideoFrame, duration);
+    mLastVideoFrame->UpdateDuration(duration);
 
     // We have the start time of the next frame, so we can push the previous
     // frame into the queue, except if the end time is below the threshold,
@@ -314,7 +313,7 @@ bool AndroidMediaReader::DecodeAudioData()
 }
 
 RefPtr<MediaDecoderReader::SeekPromise>
-AndroidMediaReader::Seek(SeekTarget aTarget, int64_t aEndTime)
+AndroidMediaReader::Seek(const SeekTarget& aTarget, int64_t aEndTime)
 {
   MOZ_ASSERT(OnTaskQueue());
 

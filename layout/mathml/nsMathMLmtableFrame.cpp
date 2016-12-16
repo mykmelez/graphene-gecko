@@ -190,7 +190,7 @@ ApplyBorderToStyle(const nsMathMLmtdFrame* aFrame,
   aFrame->GetColIndex(columnIndex);
 
   nscoord borderWidth =
-    aFrame->PresContext()->GetBorderWidthTable()[NS_STYLE_BORDER_WIDTH_THIN];
+    nsPresContext::GetBorderWidthForKeyword(NS_STYLE_BORDER_WIDTH_THIN);
 
   nsTArray<int8_t>* rowLinesList =
     FindCellProperty(aFrame, RowLinesProperty());
@@ -204,13 +204,13 @@ ApplyBorderToStyle(const nsMathMLmtdFrame* aFrame,
     // values, we simply repeat the last value.
     int32_t listLength = rowLinesList->Length();
     if (rowIndex < listLength) {
-      aStyleBorder.SetBorderStyle(NS_SIDE_TOP,
+      aStyleBorder.SetBorderStyle(eSideTop,
                     rowLinesList->ElementAt(rowIndex - 1));
     } else {
-      aStyleBorder.SetBorderStyle(NS_SIDE_TOP,
+      aStyleBorder.SetBorderStyle(eSideTop,
                     rowLinesList->ElementAt(listLength - 1));
     }
-    aStyleBorder.SetBorderWidth(NS_SIDE_TOP, borderWidth);
+    aStyleBorder.SetBorderWidth(eSideTop, borderWidth);
   }
 
   // We don't place a column line on the left of the first column.
@@ -219,13 +219,13 @@ ApplyBorderToStyle(const nsMathMLmtdFrame* aFrame,
     // values, we simply repeat the last value.
     int32_t listLength = columnLinesList->Length();
     if (columnIndex < listLength) {
-      aStyleBorder.SetBorderStyle(NS_SIDE_LEFT,
+      aStyleBorder.SetBorderStyle(eSideLeft,
                     columnLinesList->ElementAt(columnIndex - 1));
     } else {
-      aStyleBorder.SetBorderStyle(NS_SIDE_LEFT,
+      aStyleBorder.SetBorderStyle(eSideLeft,
                     columnLinesList->ElementAt(listLength - 1));
     }
-    aStyleBorder.SetBorderWidth(NS_SIDE_LEFT, borderWidth);
+    aStyleBorder.SetBorderWidth(eSideLeft, borderWidth);
   }
 }
 
@@ -301,7 +301,7 @@ public:
     nsStyleBorder styleBorder = *mFrame->StyleBorder();
     nsMathMLmtdFrame* frame = static_cast<nsMathMLmtdFrame*>(mFrame);
     ApplyBorderToStyle(frame, styleBorder);
-    nsRect bounds = CalculateBounds(styleBorder);
+    nsRect bounds = CalculateBounds(styleBorder).GetBounds();
     nsMargin overflow = ComputeBorderOverflow(frame, styleBorder);
     bounds.Inflate(overflow);
     return bounds;
@@ -335,8 +335,9 @@ public:
 };
 
 #ifdef DEBUG
-#define DEBUG_VERIFY_THAT_FRAME_IS(_frame, _expected) \
-  NS_ASSERTION(NS_STYLE_DISPLAY_##_expected == _frame->StyleDisplay()->mDisplay, "internal error");
+#define DEBUG_VERIFY_THAT_FRAME_IS(_frame, _expected)                              \
+  MOZ_ASSERT(mozilla::StyleDisplay::_expected == _frame->StyleDisplay()->mDisplay, \
+             "internal error");
 #else
 #define DEBUG_VERIFY_THAT_FRAME_IS(_frame, _expected)
 #endif
@@ -588,7 +589,7 @@ MapAllAttributesIntoCSS(nsMathMLmtableFrame* aTableFrame)
     return;
 
   for (nsIFrame* rowFrame : rgFrame->PrincipalChildList()) {
-    DEBUG_VERIFY_THAT_FRAME_IS(rowFrame, TABLE_ROW);
+    DEBUG_VERIFY_THAT_FRAME_IS(rowFrame, TableRow);
     if (rowFrame->GetType() == nsGkAtoms::tableRowFrame) {
       // Map row rowalign.
       ParseFrameAttribute(rowFrame, nsGkAtoms::rowalign_, false);
@@ -596,7 +597,7 @@ MapAllAttributesIntoCSS(nsMathMLmtableFrame* aTableFrame)
       ParseFrameAttribute(rowFrame, nsGkAtoms::columnalign_, true);
 
       for (nsIFrame* cellFrame : rowFrame->PrincipalChildList()) {
-        DEBUG_VERIFY_THAT_FRAME_IS(cellFrame, TABLE_CELL);
+        DEBUG_VERIFY_THAT_FRAME_IS(cellFrame, TableCell);
         if (IS_TABLE_CELL(cellFrame->GetType())) {
           // Map cell rowalign.
           ParseFrameAttribute(cellFrame, nsGkAtoms::rowalign_, false);
@@ -807,7 +808,7 @@ nsMathMLmtableWrapperFrame::GetRowFrameAt(int32_t aRowIndex)
       return nullptr;
     for (nsIFrame* rowFrame : rgFrame->PrincipalChildList()) {
       if (aRowIndex == 0) {
-        DEBUG_VERIFY_THAT_FRAME_IS(rowFrame, TABLE_ROW);
+        DEBUG_VERIFY_THAT_FRAME_IS(rowFrame, TableRow);
         if (rowFrame->GetType() != nsGkAtoms::tableRowFrame)
           return nullptr;
 

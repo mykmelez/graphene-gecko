@@ -99,7 +99,7 @@ function ensure_results_internal(uris, searchTerm)
     do_check_eq(controller.searchStatus,
                 Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH);
     do_check_eq(controller.matchCount, uris.length);
-    for (var i=0; i<controller.matchCount; i++) {
+    for (var i = 0; i < controller.matchCount; i++) {
       do_check_eq(controller.getValueAt(i), uris[i].spec);
     }
 
@@ -118,7 +118,7 @@ try {
                 getService(Ci.nsITaggingService);
   var bmksvc = Cc["@mozilla.org/browser/nav-bookmarks-service;1"].
                 getService(Ci.nsINavBookmarksService);
-} catch(ex) {
+} catch (ex) {
   do_throw("Could not get history service\n");
 }
 

@@ -22,6 +22,7 @@
 #include "RubyUtils.h"
 
 using namespace mozilla;
+using namespace mozilla::gfx;
 
 //----------------------------------------------------------------------
 
@@ -315,6 +316,8 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
     return;
   }
 
+  mDescendantLeadings.Reset();
+
   MoveOverflowToChildList();
   // Ask text containers to drain overflows
   AutoRubyTextContainerArray textContainers(this);
@@ -395,8 +398,9 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
   // will return 0. However, in this case, the actual width of the
   // container could be non-zero because of non-empty ruby annotations.
   // XXX When bug 765861 gets fixed, this warning should be upgraded.
-  NS_WARN_IF_FALSE(NS_INLINE_IS_BREAK(aStatus) ||
-                   isize == lineSpanSize || mFrames.IsEmpty(), "bad isize");
+  NS_WARNING_ASSERTION(
+    NS_INLINE_IS_BREAK(aStatus) || isize == lineSpanSize || mFrames.IsEmpty(),
+    "bad isize");
 
   // If there exists any span, the columns must either be completely
   // reflowed, or be not reflowed at all.
@@ -765,11 +769,10 @@ nsRubyBaseContainerFrame::PullOneColumn(nsLineLayout* aLineLayout,
     // We are not pulling an intra-level whitespace, which means all
     // elements we are going to pull can have non-whitespace content,
     // which may contain float which we need to reparent.
-    nsBlockFrame* oldFloatCB = nullptr;
-    for (nsIFrame* frame : aColumn) {
-      oldFloatCB = nsLayoutUtils::GetFloatContainingBlock(frame);
-      break;
-    }
+    MOZ_ASSERT(aColumn.begin() != aColumn.end(),
+               "Ruby column shouldn't be empty");
+    nsBlockFrame* oldFloatCB =
+      nsLayoutUtils::GetFloatContainingBlock(*aColumn.begin());
 #ifdef DEBUG
     MOZ_ASSERT(oldFloatCB, "Must have found a float containing block");
     for (nsIFrame* frame : aColumn) {

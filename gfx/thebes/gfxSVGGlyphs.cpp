@@ -4,6 +4,7 @@
 
 #include "gfxSVGGlyphs.h"
 
+#include "mozilla/SVGContextPaint.h"
 #include "nsError.h"
 #include "nsIDOMDocument.h"
 #include "nsString.h"
@@ -30,6 +31,7 @@
 #include "nsSMILAnimationController.h"
 #include "gfxContext.h"
 #include "harfbuzz/hb.h"
+#include "mozilla/dom/ImageTracker.h"
 
 #define SVG_CONTENT_TYPE NS_LITERAL_CSTRING("image/svg+xml")
 #define UTF8_CHARSET NS_LITERAL_CSTRING("utf-8")
@@ -37,8 +39,6 @@
 using namespace mozilla;
 
 typedef mozilla::dom::Element Element;
-
-mozilla::gfx::UserDataKey gfxTextContextPaint::sUserDataKey;
 
 /* static */ const Color SimpleTextContextPaint::sZero = Color();
 
@@ -171,7 +171,7 @@ gfxSVGGlyphsDocument::SetupPresentation()
     if (controller) {
       controller->Resume(nsSMILTimeContainer::PAUSE_IMAGE);
     }
-    mDocument->SetImagesNeedAnimating(true);
+    mDocument->ImageTracker()->SetAnimatingState(true);
 
     mViewer = viewer;
     mPresShell = presShell;
@@ -214,14 +214,16 @@ gfxSVGGlyphsDocument::FindGlyphElements(Element *aElem)
  */
 bool
 gfxSVGGlyphs::RenderGlyph(gfxContext *aContext, uint32_t aGlyphId,
-                          gfxTextContextPaint *aContextPaint)
+                          SVGContextPaint* aContextPaint)
 {
     gfxContextAutoSaveRestore aContextRestorer(aContext);
 
     Element *glyph = mGlyphIdMap.Get(aGlyphId);
     NS_ASSERTION(glyph, "No glyph element. Should check with HasSVGGlyph() first!");
 
-    return nsSVGUtils::PaintSVGGlyph(glyph, aContext, aContextPaint);
+    AutoSetRestoreSVGContextPaint autoSetRestore(aContextPaint, glyph->OwnerDoc());
+
+    return nsSVGUtils::PaintSVGGlyph(glyph, aContext);
 }
 
 bool
@@ -458,16 +460,4 @@ gfxSVGGlyphsDocument::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) c
            + mGlyphIdMap.ShallowSizeOfExcludingThis(aMallocSizeOf)
            + mSVGGlyphsDocumentURI.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 
-}
-
-void
-gfxTextContextPaint::InitStrokeGeometry(gfxContext *aContext,
-                                        float devUnitsPerSVGUnit)
-{
-    mStrokeWidth = aContext->CurrentLineWidth() / devUnitsPerSVGUnit;
-    aContext->CurrentDash(mDashes, &mDashOffset);
-    for (uint32_t i = 0; i < mDashes.Length(); i++) {
-        mDashes[i] /= devUnitsPerSVGUnit;
-    }
-    mDashOffset /= devUnitsPerSVGUnit;
 }

@@ -46,13 +46,14 @@ SeekTask::Resolve(const char* aCallSite)
 }
 
 void
-SeekTask::RejectIfExist(const char* aCallSite)
+SeekTask::RejectIfExist(const MediaResult& aError, const char* aCallSite)
 {
   AssertOwnerThread();
 
   SeekTaskRejectValue val;
   val.mIsAudioQueueFinished = mIsAudioQueueFinished;
   val.mIsVideoQueueFinished = mIsVideoQueueFinished;
+  val.mError = aError;
 
   mSeekTaskPromise.RejectIfExists(val, aCallSite);
 }
@@ -68,13 +69,6 @@ SeekTask::OwnerThread() const
 {
   AssertOwnerThread();
   return mOwnerThread;
-}
-
-const SeekTarget&
-SeekTask::GetSeekTarget()
-{
-  AssertOwnerThread();
-  return mTarget;
 }
 
 } // namespace mozilla

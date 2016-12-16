@@ -56,6 +56,9 @@ public:
 
   virtual void ClearCachedResources() override
   {
+    if (mBufferProvider) {
+      mBufferProvider->ClearCachedResources();
+    }
     if (mCanvasClient) {
       mCanvasClient->Clear();
     }
@@ -63,6 +66,9 @@ public:
 
   virtual void HandleMemoryPressure() override
   {
+    if (mBufferProvider) {
+      mBufferProvider->ClearCachedResources();
+    }
     if (mCanvasClient) {
       mCanvasClient->HandleMemoryPressure();
     }
@@ -78,6 +84,9 @@ public:
 
   virtual void Disconnect() override
   {
+    if (mBufferProvider) {
+      mBufferProvider->ClearCachedResources();
+    }
     mCanvasClient = nullptr;
     ClientLayer::Disconnect();
   }
@@ -90,6 +99,9 @@ public:
   const TextureFlags& Flags() const { return mFlags; }
 
 protected:
+
+  bool UpdateTarget(gfx::DrawTarget* aDestTarget = nullptr);
+
   ClientLayerManager* ClientManager()
   {
     return static_cast<ClientLayerManager*>(mManager);

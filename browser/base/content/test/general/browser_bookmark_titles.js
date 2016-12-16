@@ -29,7 +29,7 @@ add_task(function* () {
         let [uri, title] = tests[i];
 
         let promiseLoaded = promisePageLoaded(browser);
-        content.location = uri;
+        BrowserTestUtils.loadURI(browser, uri);
         yield promiseLoaded;
         yield checkBookmark(uri, title);
     }
@@ -42,7 +42,7 @@ add_task(function* () {
     BrowserOffline.toggleOfflineStatus();
     let proxy = Services.prefs.getIntPref('network.proxy.type');
     Services.prefs.setIntPref('network.proxy.type', 0);
-    registerCleanupFunction(function () {
+    registerCleanupFunction(function() {
         BrowserOffline.toggleOfflineStatus();
         Services.prefs.setIntPref('network.proxy.type', proxy);
     });
@@ -53,12 +53,14 @@ add_task(function* () {
     let [uri, title] = tests[0];
 
     let promiseLoaded = promisePageLoaded(browser);
-    content.location = uri;
+    BrowserTestUtils.loadURI(browser, uri);
     yield promiseLoaded;
 
     // The offline mode test is only good if the page failed to load.
-    is(content.document.documentURI.substring(0, 14), 'about:neterror',
-        "Offline mode successfully simulated network outage.");
+    yield ContentTask.spawn(browser, null, function() {
+      is(content.document.documentURI.substring(0, 14), 'about:neterror',
+          "Offline mode successfully simulated network outage.");
+    });
     yield checkBookmark(uri, title);
 
     gBrowser.removeCurrentTab();

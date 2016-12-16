@@ -8,7 +8,6 @@
 #include "nsAutoPtr.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Atomics.h"
-#include "mozilla/SharedThreadPool.h"
 
 #include "MediaConduitInterface.h"
 #include "MediaEngineWrapper.h"
@@ -148,7 +147,7 @@ public:
   void SelectBitrates(unsigned short width,
                       unsigned short height,
                       unsigned int cap,
-                      mozilla::Atomic<int32_t, mozilla::Relaxed>& aLastFramerateTenths,
+                      int32_t aLastFramerateTenths,
                       unsigned int& out_min,
                       unsigned int& out_start,
                       unsigned int& out_max);
@@ -214,6 +213,10 @@ public:
   virtual MediaConduitErrorCode SetExternalRecvCodec(VideoCodecConfig* config,
                                                      VideoDecoder* decoder) override;
 
+  /**
+  * Enables use of Rtp Stream Id, and sets the extension ID.
+  */
+  virtual MediaConduitErrorCode EnableRTPStreamIdExtension(bool enabled, uint8_t id) override;
 
   /**
    * Webrtc transport implementation to send and receive RTP packet.
@@ -398,8 +401,12 @@ private:
   uint64_t mVideoLatencyAvg;
   uint32_t mMinBitrate;
   uint32_t mStartBitrate;
-  uint32_t mMaxBitrate;
+  uint32_t mPrefMaxBitrate;
+  uint32_t mNegotiatedMaxBitrate;
   uint32_t mMinBitrateEstimate;
+
+  bool mRtpStreamIdEnabled;
+  uint8_t mRtpStreamIdExtId;
 
   static const unsigned int sAlphaNum = 7;
   static const unsigned int sAlphaDen = 8;

@@ -60,7 +60,7 @@ writeInstallRDFToDir({
     maxVersion: "1"
   }],
   name: "Unpacked, Enabled",
-}, profileDir, null, "extraFile.js");
+}, profileDir, undefined, "extraFile.js");
 
 
 // Unpacked, disabled
@@ -75,7 +75,7 @@ writeInstallRDFToDir({
     maxVersion: "1"
   }],
   name: "Unpacked, disabled",
-}, profileDir, null, "extraFile.js");
+}, profileDir, undefined, "extraFile.js");
 
 // Keep track of the last time stamp we've used, so that we can keep moving
 // it forward (if we touch two different files in the same add-on with the same
@@ -106,7 +106,7 @@ function getXS() {
 
 add_task(function* detect_touches() {
   startupManager();
-  let [pe, pd, ue, ud] = yield promiseAddonsByIDs([
+  let [/* pe */, pd, /* ue */, ud] = yield promiseAddonsByIDs([
          "packed-enabled@tests.mozilla.org",
          "packed-disabled@tests.mozilla.org",
          "unpacked-enabled@tests.mozilla.org",
@@ -181,7 +181,7 @@ add_task(function* detect_touches() {
  * extensions.xpiState preference.
  */
 add_task(function* uninstall_bootstrap() {
-  let [pe, pd, ue, ud] = yield promiseAddonsByIDs([
+  let [pe, /* pd, ue, ud */] = yield promiseAddonsByIDs([
          "packed-enabled@tests.mozilla.org",
          "packed-disabled@tests.mozilla.org",
          "unpacked-enabled@tests.mozilla.org",

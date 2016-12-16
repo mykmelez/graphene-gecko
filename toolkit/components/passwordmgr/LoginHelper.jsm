@@ -16,16 +16,14 @@ this.EXPORTED_SYMBOLS = [
   "LoginHelper",
 ];
 
-////////////////////////////////////////////////////////////////////////////////
-//// Globals
+// Globals
 
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-////////////////////////////////////////////////////////////////////////////////
-//// LoginHelper
+// LoginHelper
 
 /**
  * Contains functions shared by different Login Manager components.
@@ -35,7 +33,10 @@ this.LoginHelper = {
    * Warning: these only update if a logger was created.
    */
   debug: Services.prefs.getBoolPref("signon.debug"),
+  formlessCaptureEnabled: Services.prefs.getBoolPref("signon.formlessCapture.enabled"),
   schemeUpgrades: Services.prefs.getBoolPref("signon.schemeUpgrades"),
+  insecureAutofill: Services.prefs.getBoolPref("signon.autofillForms.http"),
+  showInsecureFieldWarning: Services.prefs.getBoolPref("security.insecure_field_warning.contextual.enabled"),
 
   createLogger(aLogPrefix) {
     let getMaxLogLevel = () => {
@@ -53,8 +54,14 @@ this.LoginHelper = {
     // Watch for pref changes and update this.debug and the maxLogLevel for created loggers
     Services.prefs.addObserver("signon.", () => {
       this.debug = Services.prefs.getBoolPref("signon.debug");
+      this.formlessCaptureEnabled = Services.prefs.getBoolPref("signon.formlessCapture.enabled");
       this.schemeUpgrades = Services.prefs.getBoolPref("signon.schemeUpgrades");
+      this.insecureAutofill = Services.prefs.getBoolPref("signon.autofillForms.http");
       logger.maxLogLevel = getMaxLogLevel();
+    }, false);
+
+    Services.prefs.addObserver("security.insecure_field_warning.", () => {
+      this.showInsecureFieldWarning = Services.prefs.getBoolPref("security.insecure_field_warning.contextual.enabled");
     }, false);
 
     return logger;
@@ -87,8 +94,7 @@ this.LoginHelper = {
    * @throws String with English message in case validation failed.
    */
   checkLoginValues(aLogin) {
-    function badCharacterPresent(l, c)
-    {
+    function badCharacterPresent(l, c) {
       return ((l.formSubmitURL && l.formSubmitURL.indexOf(c) != -1) ||
               (l.httpRealm     && l.httpRealm.indexOf(c)     != -1) ||
                                   l.hostname.indexOf(c)      != -1  ||
@@ -145,7 +151,7 @@ this.LoginHelper = {
     let propertyBag = Cc["@mozilla.org/hash-property-bag;1"]
                       .createInstance(Ci.nsIWritablePropertyBag);
     if (aProperties) {
-      for (let [name, value] of Iterator(aProperties)) {
+      for (let [name, value] of Object.entries(aProperties)) {
         propertyBag.setProperty(name, value);
       }
     }
@@ -391,7 +397,7 @@ this.LoginHelper = {
     const KEY_DELIMITER = ":";
 
     if (!preferredOrigin && resolveBy.includes("scheme")) {
-      throw new Error("dedupeLogins: `preferredOrigin` is required in order to "+
+      throw new Error("dedupeLogins: `preferredOrigin` is required in order to " +
                       "prefer schemes which match it.");
     }
 
@@ -580,7 +586,7 @@ this.LoginHelper = {
         // Bug 1187190: Password changes should be propagated depending on timestamps.
         // this an old login or a just an update, so make sure not to add it
         foundMatchingLogin = true;
-        if(login.password != existingLogin.password &
+        if (login.password != existingLogin.password &
            login.timePasswordChanged > existingLogin.timePasswordChanged) {
           // if a login with the same username and different password already exists and it's older
           // than the current one, that login needs to be updated using the current one details
@@ -690,6 +696,26 @@ this.LoginHelper = {
     let hasMP = slot.status != Ci.nsIPKCS11Slot.SLOT_UNINITIALIZED &&
                 slot.status != Ci.nsIPKCS11Slot.SLOT_READY;
     return hasMP;
+  },
+
+  /**
+   * Send a notification when stored data is changed.
+   */
+  notifyStorageChanged(changeType, data) {
+    let dataObject = data;
+    // Can't pass a raw JS string or array though notifyObservers(). :-(
+    if (Array.isArray(data)) {
+      dataObject = Cc["@mozilla.org/array;1"].
+                   createInstance(Ci.nsIMutableArray);
+      for (let i = 0; i < data.length; i++) {
+        dataObject.appendElement(data[i], false);
+      }
+    } else if (typeof(data) == "string") {
+      dataObject = Cc["@mozilla.org/supports-string;1"].
+                   createInstance(Ci.nsISupportsString);
+      dataObject.data = data;
+    }
+    Services.obs.notifyObservers(dataObject, "passwordmgr-storage-changed", changeType);
   }
 };
 

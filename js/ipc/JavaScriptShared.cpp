@@ -33,10 +33,12 @@ IdToObjectMap::init()
 }
 
 void
-IdToObjectMap::trace(JSTracer* trc)
+IdToObjectMap::trace(JSTracer* trc, uint64_t minimimId)
 {
-    for (Table::Range r(table_.all()); !r.empty(); r.popFront())
-        JS::TraceEdge(trc, &r.front().value(), "ipc-object");
+    for (Table::Range r(table_.all()); !r.empty(); r.popFront()) {
+        if (r.front().key().serialNumber() >= minimimId)
+            JS::TraceEdge(trc, &r.front().value(), "ipc-object");
+    }
 }
 
 void
@@ -57,6 +59,15 @@ IdToObjectMap::find(ObjectId id)
     if (!p)
         return nullptr;
     return p->value();
+}
+
+JSObject*
+IdToObjectMap::findPreserveColor(ObjectId id)
+{
+    Table::Ptr p = table_.lookup(id);
+    if (!p)
+        return nullptr;
+    return p->value().unbarrieredGet();
 }
 
 bool
@@ -82,6 +93,17 @@ IdToObjectMap::empty() const
 {
     return table_.empty();
 }
+
+#ifdef DEBUG
+bool
+IdToObjectMap::has(const ObjectId& id, const JSObject* obj) const
+{
+    auto p = table_.lookup(id);
+    if (!p)
+        return false;
+    return p->value() == obj;
+}
+#endif
 
 bool
 ObjectToIdMap::init()
@@ -132,10 +154,10 @@ bool JavaScriptShared::sLoggingInitialized;
 bool JavaScriptShared::sLoggingEnabled;
 bool JavaScriptShared::sStackLoggingEnabled;
 
-JavaScriptShared::JavaScriptShared(JSRuntime* rt)
-  : rt_(rt),
-    refcount_(1),
-    nextSerialNumber_(1)
+JavaScriptShared::JavaScriptShared()
+  : refcount_(1),
+    nextSerialNumber_(1),
+    nextCPOWNumber_(1)
 {
     if (!sLoggingInitialized) {
         sLoggingInitialized = true;
@@ -417,12 +439,12 @@ JavaScriptShared::toSymbolVariant(JSContext* cx, JS::Symbol* symArg, SymbolVaria
         return true;
     }
 
-    JS_ReportError(cx, "unique symbol can't be used with CPOW");
+    JS_ReportErrorASCII(cx, "unique symbol can't be used with CPOW");
     return false;
 }
 
 JS::Symbol*
-JavaScriptShared::fromSymbolVariant(JSContext* cx, SymbolVariant symVar)
+JavaScriptShared::fromSymbolVariant(JSContext* cx, const SymbolVariant& symVar)
 {
     switch (symVar.type()) {
       case SymbolVariant::TWellKnownSymbol: {
@@ -483,7 +505,7 @@ JavaScriptShared::findObjectById(JSContext* cx, const ObjectId& objId)
 {
     RootedObject obj(cx, objects_.find(objId));
     if (!obj) {
-        JS_ReportError(cx, "operation not possible on dead CPOW");
+        JS_ReportErrorASCII(cx, "operation not possible on dead CPOW");
         return nullptr;
     }
 
@@ -552,7 +574,7 @@ JavaScriptShared::fromDescriptor(JSContext* cx, Handle<PropertyDescriptor> desc,
 bool
 UnknownPropertyStub(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp)
 {
-    JS_ReportError(cx, "getter could not be wrapped via CPOWs");
+    JS_ReportErrorASCII(cx, "getter could not be wrapped via CPOWs");
     return false;
 }
 
@@ -560,7 +582,7 @@ bool
 UnknownStrictPropertyStub(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp,
                           ObjectOpResult& result)
 {
-    JS_ReportError(cx, "setter could not be wrapped via CPOWs");
+    JS_ReportErrorASCII(cx, "setter could not be wrapped via CPOWs");
     return false;
 }
 
@@ -617,7 +639,7 @@ JavaScriptShared::toObjectOrNullVariant(JSContext* cx, JSObject* obj, ObjectOrNu
 }
 
 JSObject*
-JavaScriptShared::fromObjectOrNullVariant(JSContext* cx, ObjectOrNullVariant objVar)
+JavaScriptShared::fromObjectOrNullVariant(JSContext* cx, const ObjectOrNullVariant& objVar)
 {
     if (objVar.type() == ObjectOrNullVariant::TNullVariant)
         return nullptr;

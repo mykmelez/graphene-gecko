@@ -4,10 +4,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "WinCompositorWidget.h"
+#include "gfxPrefs.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/layers/Compositor.h"
 #include "mozilla/widget/PlatformWidgetTypes.h"
 #include "nsWindow.h"
 #include "VsyncDispatcher.h"
+
+#include <ddraw.h>
 
 namespace mozilla {
 namespace widget {
@@ -23,6 +28,12 @@ WinCompositorWidget::WinCompositorWidget(const CompositorWidgetInitData& aInitDa
    mLockedBackBufferData(nullptr)
 {
   MOZ_ASSERT(mWnd && ::IsWindow(mWnd));
+
+  // mNotDeferEndRemoteDrawing is set on the main thread during init,
+  // but is only accessed after on the compositor thread.
+  mNotDeferEndRemoteDrawing = gfxPrefs::LayersCompositionFrameRate() == 0 ||
+                              gfxPlatform::IsInLayoutAsapMode() ||
+                              gfxPlatform::ForceSoftwareVsync();
 }
 
 void
@@ -33,7 +44,7 @@ WinCompositorWidget::OnDestroyWindow()
 }
 
 bool
-WinCompositorWidget::PreRender(layers::LayerManagerComposite* aManager)
+WinCompositorWidget::PreRender(WidgetRenderingContext* aContext)
 {
   // This can block waiting for WM_SETTEXT to finish
   // Using PreRender is unnecessarily pessimistic because
@@ -44,7 +55,7 @@ WinCompositorWidget::PreRender(layers::LayerManagerComposite* aManager)
 }
 
 void
-WinCompositorWidget::PostRender(layers::LayerManagerComposite* aManager)
+WinCompositorWidget::PostRender(WidgetRenderingContext* aContext)
 {
   mPresentLock.Leave();
 }
@@ -112,6 +123,36 @@ WinCompositorWidget::EndRemoteDrawing()
   mCompositeDC = nullptr;
 }
 
+bool
+WinCompositorWidget::NeedsToDeferEndRemoteDrawing()
+{
+  if(mNotDeferEndRemoteDrawing) {
+    return false;
+  }
+
+  IDirectDraw7* ddraw = DeviceManagerDx::Get()->GetDirectDraw();
+  if (!ddraw) {
+    return false;
+  }
+
+  DWORD scanLine = 0;
+  int height = ::GetSystemMetrics(SM_CYSCREEN);
+  HRESULT ret = ddraw->GetScanLine(&scanLine);
+  if (ret == DDERR_VERTICALBLANKINPROGRESS) {
+    scanLine = 0;
+  } else if (ret != DD_OK) {
+    return false;
+  }
+
+  // Check if there is a risk of tearing with GDI.
+  if (static_cast<int>(scanLine) > height / 2) {
+    // No need to defer.
+    return false;
+  }
+
+  return true;
+}
+
 already_AddRefed<gfx::DrawTarget>
 WinCompositorWidget::GetBackBufferDrawTarget(gfx::DrawTarget* aScreenTarget,
                                              const LayoutDeviceIntRect& aRect,
@@ -158,6 +199,15 @@ WinCompositorWidget::EndBackBufferDrawing()
   return CompositorWidget::EndBackBufferDrawing();
 }
 
+bool
+WinCompositorWidget::InitCompositor(layers::Compositor* aCompositor)
+{
+  if (aCompositor->GetBackendType() == layers::LayersBackend::LAYERS_BASIC) {
+    DeviceManagerDx::Get()->InitializeDirectDraw();
+  }
+  return true;
+}
+
 uintptr_t
 WinCompositorWidget::GetWidgetKey()
 {
@@ -181,9 +231,11 @@ WinCompositorWidget::EnsureTransparentSurface()
 {
   MOZ_ASSERT(mTransparencyMode == eTransparencyTransparent);
 
-  if (!mTransparentSurface) {
-    LayoutDeviceIntSize size = GetClientSize();
-    CreateTransparentSurface(IntSize(size.width, size.height));
+  IntSize size = GetClientSize().ToUnknownSize();
+  if (!mTransparentSurface || mTransparentSurface->GetSize() != size) {
+    mTransparentSurface = nullptr;
+    mMemoryDC = nullptr;
+    CreateTransparentSurface(size);
   }
 
   RefPtr<gfxASurface> surface = mTransparentSurface;
@@ -222,27 +274,15 @@ WinCompositorWidget::ClearTransparentWindow()
     return;
   }
 
+  EnsureTransparentSurface();
+
   IntSize size = mTransparentSurface->GetSize();
-  RefPtr<DrawTarget> drawTarget = gfxPlatform::GetPlatform()->
-    CreateDrawTargetForSurface(mTransparentSurface, size);
-  drawTarget->ClearRect(Rect(0, 0, size.width, size.height));
-  RedrawTransparentWindow();
-}
-
-void
-WinCompositorWidget::ResizeTransparentWindow(const gfx::IntSize& aSize)
-{
-  MOZ_ASSERT(mTransparencyMode == eTransparencyTransparent);
-
-  if (mTransparentSurface && mTransparentSurface->GetSize() == aSize) {
-    return;
+  if (!size.IsEmpty()) {
+    RefPtr<DrawTarget> drawTarget =
+      gfxPlatform::CreateDrawTargetForSurface(mTransparentSurface, size);
+    drawTarget->ClearRect(Rect(0, 0, size.width, size.height));
+    RedrawTransparentWindow();
   }
-
-  // Destroy the old surface.
-  mTransparentSurface = nullptr;
-  mMemoryDC = nullptr;
-
-  CreateTransparentSurface(aSize);
 }
 
 bool

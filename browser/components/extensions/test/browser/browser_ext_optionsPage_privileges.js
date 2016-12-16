@@ -17,22 +17,25 @@ add_task(function* test_tab_options_privileges() {
     browser.runtime.openOptionsPage();
   }
 
-  function optionsScript() {
-    browser.tabs.query({url: "http://example.com/"}).then(tabs => {
-      browser.test.assertEq("http://example.com/", tabs[0].url, "Got the expect tab");
-      return browser.tabs.getCurrent();
-    }).then(tab => {
+  async function optionsScript() {
+    try {
+      let [tab] = await browser.tabs.query({url: "http://example.com/"});
+      browser.test.assertEq("http://example.com/", tab.url, "Got the expect tab");
+
+      tab = await browser.tabs.getCurrent();
       browser.runtime.sendMessage({msgName: "removeTabId", tabId: tab.id});
-    }).catch(error => {
+    } catch (error) {
       browser.test.log(`Error: ${error} :: ${error.stack}`);
       browser.test.notifyFail("options-ui-privileges");
-    });
+    }
   }
 
+  const ID = "options_privileges@tests.mozilla.org";
   let extension = ExtensionTestUtils.loadExtension({
-    useAddonManager: true,
+    useAddonManager: "temporary",
 
     manifest: {
+      applications: {gecko: {id: ID}},
       "permissions": ["tabs"],
       "options_ui": {
         "page": "options.html",

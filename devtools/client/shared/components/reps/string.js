@@ -10,8 +10,10 @@
 define(function (require, exports, module) {
   // Dependencies
   const React = require("devtools/client/shared/vendor/react");
-  const { createFactories, cropMultipleLines } = require("./rep-utils");
-  const { ObjectBox } = createFactories(require("./object-box"));
+  const { cropString } = require("./rep-utils");
+
+  // Shortcuts
+  const { span } = React.DOM;
 
   /**
    * Renders a string. String value is enclosed within quotes.
@@ -19,24 +21,38 @@ define(function (require, exports, module) {
   const StringRep = React.createClass({
     displayName: "StringRep",
 
+    propTypes: {
+      useQuotes: React.PropTypes.bool,
+      style: React.PropTypes.object,
+    },
+
+    getDefaultProps: function () {
+      return {
+        useQuotes: true,
+      };
+    },
+
     render: function () {
       let text = this.props.object;
       let member = this.props.member;
+      let style = this.props.style;
+
+      let config = {className: "objectBox objectBox-string"};
+      if (style) {
+        config.style = style;
+      }
+
       if (member && member.open) {
-        return (
-          ObjectBox({className: "string"},
-            "\"" + text + "\""
-          )
-        );
+        return span(config, "\"" + text + "\"");
       }
 
       let croppedString = this.props.cropLimit ?
-        cropMultipleLines(text, this.props.cropLimit) : cropMultipleLines(text);
+        cropString(text, this.props.cropLimit) : cropString(text);
 
-      return (
-        ObjectBox({className: "string"}, "\"" + croppedString + "\""
-        )
-      );
+      let formattedString = this.props.useQuotes ?
+        "\"" + croppedString + "\"" : croppedString;
+
+      return span(config, formattedString);
     },
   });
 

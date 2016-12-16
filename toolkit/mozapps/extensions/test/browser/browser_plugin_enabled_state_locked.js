@@ -6,7 +6,6 @@
 // when the preference is unlocked / locked
 var {classes: Cc, interfaces: Ci} = Components;
 const gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
-const gIsOSX = ("nsILocalFileMac" in Ci);
 const gIsLinux = ("@mozilla.org/gnome-gconf-service;1" in Cc) ||
   ("@mozilla.org/gio-service;1" in Cc);
 
@@ -17,11 +16,10 @@ var gPluginElement;
 function getTestPluginPref() {
   let prefix = "plugin.state.";
   if (gIsWindows)
-    return prefix + "nptest";
-  else if (gIsLinux)
-    return prefix + "libnptest";
-  else
-    return prefix + "test";
+    return `${prefix}nptest`;
+  if (gIsLinux)
+    return `${prefix}libnptest`;
+  return `${prefix}test`;
 }
 
 registerCleanupFunction(() => {

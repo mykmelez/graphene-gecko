@@ -10,6 +10,7 @@
 
 #include "nsDataHashtable.h"
 
+#include "nsITimer.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/TimeStamp.h"
 #include "nsIMemoryReporter.h"
@@ -97,11 +98,13 @@ public:
  * object too.
  */
 class MediaStreamGraphImpl : public MediaStreamGraph,
-                             public nsIMemoryReporter
+                             public nsIMemoryReporter,
+                             public nsITimerCallback
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIMEMORYREPORTER
+  NS_DECL_NSITIMERCALLBACK
 
   /**
    * Use aGraphDriverRequested with SYSTEM_THREAD_DRIVER or AUDIO_THREAD_DRIVER
@@ -202,24 +205,8 @@ public:
                        nsISupports* aData,
                        const nsTArray<AudioNodeSizes>& aAudioStreamSizes);
 
-  // The following methods run on the graph thread (or possibly the main thread if
-  // mLifecycleState > LIFECYCLE_RUNNING)
-  void AssertOnGraphThreadOrNotRunning() const
-  {
-    // either we're on the right thread (and calling CurrentDriver() is safe),
-    // or we're going to assert anyways, so don't cross-check CurrentDriver
-#ifdef DEBUG
-    // if all the safety checks fail, assert we own the monitor
-    if (!mDriver->OnThread()) {
-      if (!(mDetectedNotRunning &&
-            mLifecycleState > LIFECYCLE_RUNNING &&
-            NS_IsMainThread())) {
-        mMonitor.AssertCurrentThreadOwns();
-      }
-    }
-#endif
-  }
-
+  // The following methods run on the graph thread (or possibly the main thread
+  // if mLifecycleState > LIFECYCLE_RUNNING)
   void CollectSizesForMemoryReport(
          already_AddRefed<nsIHandleReportCallback> aHandleReport,
          already_AddRefed<nsISupports> aHandlerData);
@@ -412,10 +399,6 @@ public:
    */
   StreamTime PlayAudio(MediaStream* aStream);
   /**
-   * Set the correct current video frame for stream aStream.
-   */
-  void PlayVideo(MediaStream* aStream);
-  /**
    * No more data will be forthcoming for aStream. The stream will end
    * at the current buffer end point. The StreamTracks's tracks must be
    * explicitly set to finished by the caller.
@@ -526,6 +509,8 @@ public:
   void EnsureNextIteration()
   {
     mNeedAnotherIteration = true; // atomic
+    // Note: GraphDriver must ensure that there's no race on setting
+    // mNeedAnotherIteration and mGraphDriverAsleep -- see WaitForNextIteration()
     if (mGraphDriverAsleep) { // atomic
       MonitorAutoLock mon(mMonitor);
       CurrentDriver()->WakeUp(); // Might not be the same driver; might have woken already
@@ -825,6 +810,9 @@ public:
 #endif
 
   dom::AudioChannel AudioChannel() const { return mAudioChannel; }
+
+  // used to limit graph shutdown time
+  nsCOMPtr<nsITimer> mShutdownTimer;
 
 private:
   virtual ~MediaStreamGraphImpl();

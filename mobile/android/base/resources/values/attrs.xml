@@ -34,9 +34,6 @@
         <!-- Styles for dynamic panel grid views -->
         <attr name="panelIconViewStyle" format="reference" />
 
-        <!-- Style for the TabsGridLayout -->
-        <attr name="tabGridLayoutViewStyle" format="reference" />
-
         <!-- Default style for the TopSitesGridView -->
         <attr name="topSitesGridViewStyle" format="reference" />
 
@@ -91,14 +88,6 @@
 
     <declare-styleable name="TabCounter">
         <attr name="android:layout"/>
-    </declare-styleable>
-
-    <declare-styleable name="TextSelectionHandle">
-        <attr name="handleType">
-            <flag name="start" value="0x01" />
-            <flag name="middle" value="0x02" />
-            <flag name="end" value="0x03" />
-        </attr>
     </declare-styleable>
 
     <declare-styleable name="PrivateBrowsing">
@@ -173,6 +162,7 @@
     <declare-styleable name="FaviconView">
         <attr name="dominantBorderEnabled" format="boolean" />
         <attr name="overrideScaleType" format="boolean" />
+        <attr name="enableRoundCorners" format="boolean"/>
     </declare-styleable>
 
     <declare-styleable name="OverlayDialogButton">

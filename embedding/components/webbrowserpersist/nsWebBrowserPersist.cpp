@@ -29,7 +29,6 @@
 #include "nsUnicharUtils.h"
 #include "nsIStringEnumerator.h"
 #include "nsCRT.h"
-#include "nsSupportsArray.h"
 #include "nsContentCID.h"
 #include "nsStreamUtils.h"
 
@@ -171,7 +170,7 @@ private:
     nsCOMPtr<nsIURI> mFile;
     nsCOMPtr<nsIFile> mDataPath;
 
-    virtual ~OnWalk() { }
+    virtual ~OnWalk() = default;
 };
 
 NS_IMPL_ISUPPORTS(nsWebBrowserPersist::OnWalk,
@@ -196,7 +195,7 @@ private:
     nsCOMPtr<nsIURI> mFile;
     nsCOMPtr<nsIFile> mLocalFile;
 
-    virtual ~OnWrite() { }
+    virtual ~OnWrite() = default;
 };
 
 NS_IMPL_ISUPPORTS(nsWebBrowserPersist::OnWrite,
@@ -222,7 +221,7 @@ private:
     nsTArray<nsCString> mMapTo;
     nsCString mTargetBase;
 
-    virtual ~FlatURIMap() { }
+    virtual ~FlatURIMap() = default;
 };
 
 NS_IMPL_ISUPPORTS(nsWebBrowserPersist::FlatURIMap, nsIWebBrowserPersistURIMap)
@@ -273,6 +272,7 @@ const char *kWebBrowserPersistStringBundle =
     "chrome://global/locale/nsWebBrowserPersist.properties";
 
 nsWebBrowserPersist::nsWebBrowserPersist() :
+    mCurrentDataPathIsRelative(false),
     mCurrentThingsToPersist(0),
     mFirstAndOnlyUse(true),
     mSavingDocument(false),
@@ -1006,7 +1006,8 @@ nsWebBrowserPersist::OnDataAvailable(
             if ((-1 == channelContentLength) ||
                 ((channelContentLength - (aOffset + aLength)) == 0))
             {
-                NS_WARN_IF_FALSE(channelContentLength != -1,
+                NS_WARNING_ASSERTION(
+                    channelContentLength != -1,
                     "nsWebBrowserPersist::OnDataAvailable() no content length "
                     "header, pushing what we have");
                 // we're done with this pass; see if we need to do upload
@@ -1164,6 +1165,7 @@ nsresult nsWebBrowserPersist::SendErrorStatusChange(
     nsCOMPtr<nsIFile> file;
     GetLocalFileFromURI(aURI, getter_AddRefs(file));
     nsAutoString path;
+    nsresult rv;
     if (file)
     {
         file->GetPath(path);
@@ -1171,7 +1173,8 @@ nsresult nsWebBrowserPersist::SendErrorStatusChange(
     else
     {
         nsAutoCString fileurl;
-        aURI->GetSpec(fileurl);
+        rv = aURI->GetSpec(fileurl);
+        NS_ENSURE_SUCCESS(rv, rv);
         AppendUTF8toUTF16(fileurl, path);
     }
 
@@ -1211,7 +1214,6 @@ nsresult nsWebBrowserPersist::SendErrorStatusChange(
         break;
     }
     // Get properties file bundle and extract status string.
-    nsresult rv;
     nsCOMPtr<nsIStringBundleService> s = do_GetService(NS_STRINGBUNDLE_CONTRACTID, &rv);
     NS_ENSURE_TRUE(NS_SUCCEEDED(rv) && s, NS_ERROR_FAILURE);
 
@@ -1527,7 +1529,6 @@ nsWebBrowserPersist::GetExtensionForContentType(const char16_t *aContentType, ch
         NS_ENSURE_TRUE(mMIMEService, NS_ERROR_FAILURE);
     }
 
-    nsCOMPtr<nsIMIMEInfo> mimeInfo;
     nsAutoCString contentType;
     contentType.AssignWithConversion(aContentType);
     nsAutoCString ext;
@@ -1672,7 +1673,7 @@ nsresult nsWebBrowserPersist::SaveDocumentInternal(
         // filenames of saved URIs are known, the documents can be fixed up and
         // saved
 
-        DocData *docData = new DocData;
+        auto *docData = new DocData;
         docData->mBaseURI = mCurrentBaseURI;
         docData->mCharset = mCurrentCharset;
         docData->mDocument = aDocument;
@@ -1686,7 +1687,7 @@ nsresult nsWebBrowserPersist::SaveDocumentInternal(
     }
     else
     {
-        DocData *docData = new DocData;
+        auto *docData = new DocData;
         docData->mBaseURI = mCurrentBaseURI;
         docData->mCharset = mCurrentCharset;
         docData->mDocument = aDocument;
@@ -1767,7 +1768,7 @@ nsWebBrowserPersist::FinishSaveDocumentInternal(nsIURI* aFile,
             }
             if (mPersistFlags & PERSIST_FLAGS_CLEANUP_ON_FAILURE) {
                 // Add to list of things to delete later if all goes wrong
-                CleanupData *cleanupData = new CleanupData;
+                auto *cleanupData = new CleanupData;
                 cleanupData->mFile = aDataPath;
                 cleanupData->mIsDirectory = true;
                 mCleanupList.AppendElement(cleanupData);
@@ -2012,7 +2013,7 @@ nsWebBrowserPersist::CalculateUniqueFilename(nsIURI *aURI)
         nsAutoCString tmpPath;
         nsAutoCString tmpBase;
         uint32_t duplicateCounter = 1;
-        while (1)
+        while (true)
         {
             // Make a file name,
             // Foo become foo_001, foo_002, etc.
@@ -2307,7 +2308,7 @@ nsWebBrowserPersist::MakeOutputStreamFromFile(
     if (mPersistFlags & PERSIST_FLAGS_CLEANUP_ON_FAILURE)
     {
         // Add to cleanup list in event of failure
-        CleanupData *cleanupData = new CleanupData;
+        auto *cleanupData = new CleanupData;
         if (!cleanupData) {
           NS_RELEASE(*aOutputStream);
           return NS_ERROR_OUT_OF_MEMORY;

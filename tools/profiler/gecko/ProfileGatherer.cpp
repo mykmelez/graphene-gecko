@@ -1,11 +1,15 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
+
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ProfileGatherer.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
+#include "nsIProfileSaveEvent.h"
 #include "GeckoSampler.h"
+#include "nsLocalFile.h"
+#include "nsIFileStreams.h"
 
 using mozilla::dom::AutoJSAPI;
 using mozilla::dom::Promise;
@@ -42,7 +46,7 @@ ProfileGatherer::GatheredOOPProfile()
     return;
   }
 
-  if (NS_WARN_IF(!mPromise)) {
+  if (NS_WARN_IF(!mPromise && !mFile)) {
     // If we're not holding on to a Promise, then someone is
     // calling us erroneously.
     return;
@@ -84,15 +88,56 @@ ProfileGatherer::Start(double aSinceTime,
 
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
-    nsresult rv = os->AddObserver(this, "profiler-subprocess", false);
-    NS_WARN_IF(NS_FAILED(rv));
+    DebugOnly<nsresult> rv =
+      os->AddObserver(this, "profiler-subprocess", false);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "AddObserver failed");
     rv = os->NotifyObservers(this, "profiler-subprocess-gather", nullptr);
-    NS_WARN_IF(NS_FAILED(rv));
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NotifyObservers failed");
   }
 
   if (!mPendingProfiles) {
     Finish();
   }
+}
+
+void
+ProfileGatherer::Start(double aSinceTime,
+                       nsIFile* aFile)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (mGathering) {
+    return;
+  }
+
+  mSinceTime = aSinceTime;
+  mFile = aFile;
+  mGathering = true;
+  mPendingProfiles = 0;
+
+  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+  if (os) {
+    DebugOnly<nsresult> rv =
+      os->AddObserver(this, "profiler-subprocess", false);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "AddObserver failed");
+    rv = os->NotifyObservers(this, "profiler-subprocess-gather", nullptr);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NotifyObservers failed");
+  }
+
+  if (!mPendingProfiles) {
+    Finish();
+  }
+}
+
+void
+ProfileGatherer::Start(double aSinceTime,
+                       const nsACString& aFileName)
+{
+  nsCOMPtr<nsIFile> file = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
+  nsresult rv = file->InitWithNativePath(aFileName);
+  if (NS_FAILED(rv)) {
+    MOZ_CRASH();
+  }
+  Start(aSinceTime, file);
 }
 
 void
@@ -108,10 +153,21 @@ ProfileGatherer::Finish()
 
   UniquePtr<char[]> buf = mTicker->ToJSON(mSinceTime);
 
+  if (mFile) {
+    nsCOMPtr<nsIFileOutputStream> of =
+      do_CreateInstance("@mozilla.org/network/file-output-stream;1");
+    of->Init(mFile, -1, -1, 0);
+    uint32_t sz;
+    of->Write(buf.get(), strlen(buf.get()), &sz);
+    of->Close();
+    Reset();
+    return;
+  }
+
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
-    nsresult rv = os->RemoveObserver(this, "profiler-subprocess");
-    NS_WARN_IF(NS_FAILED(rv));
+    DebugOnly<nsresult> rv = os->RemoveObserver(this, "profiler-subprocess");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "RemoveObserver failed");
   }
 
   AutoJSAPI jsapi;
@@ -152,6 +208,7 @@ ProfileGatherer::Reset()
 {
   mSinceTime = 0;
   mPromise = nullptr;
+  mFile = nullptr;
   mPendingProfiles = 0;
   mGathering = false;
 }
@@ -164,6 +221,8 @@ ProfileGatherer::Cancel()
   if (mPromise) {
     mPromise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
   }
+  mPromise = nullptr;
+  mFile = nullptr;
 
   // Clear out the GeckoSampler reference, since it's being destroyed.
   mTicker = nullptr;

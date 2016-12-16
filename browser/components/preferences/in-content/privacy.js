@@ -3,6 +3,12 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
+Components.utils.import("resource://gre/modules/PluralForm.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "ContextualIdentityService",
+                                  "resource://gre/modules/ContextualIdentityService.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
+                                  "resource://gre/modules/PluralForm.jsm");
 
 var gPrivacyPane = {
 
@@ -20,7 +26,7 @@ var gPrivacyPane = {
    * Show the Tracking Protection UI depending on the
    * privacy.trackingprotection.ui.enabled pref, and linkify its Learn More link
    */
-  _initTrackingProtection: function () {
+  _initTrackingProtection: function() {
     if (!Services.prefs.getBoolPref("privacy.trackingprotection.ui.enabled")) {
       return;
     }
@@ -39,7 +45,7 @@ var gPrivacyPane = {
    * Linkify the Learn More link of the Private Browsing Mode Tracking
    * Protection UI.
    */
-  _initTrackingProtectionPBM: function () {
+  _initTrackingProtectionPBM: function() {
     let link = document.getElementById("trackingProtectionPBMLearnMore");
     let url = Services.urlFormatter.formatURLPref("app.support.baseURL") + "tracking-protection-pbm";
     link.setAttribute("href", url);
@@ -48,7 +54,7 @@ var gPrivacyPane = {
   /**
    * Initialize autocomplete to ensure prefs are in sync.
    */
-  _initAutocomplete: function () {
+  _initAutocomplete: function() {
     Components.classes["@mozilla.org/autocomplete/search;1?name=unifiedcomplete"]
               .getService(Components.interfaces.mozIPlacesAutoComplete);
   },
@@ -56,7 +62,7 @@ var gPrivacyPane = {
   /**
    * Show the Containers UI depending on the privacy.userContext.ui.enabled pref.
    */
-  _initBrowserContainers: function () {
+  _initBrowserContainers: function() {
     if (!Services.prefs.getBoolPref("privacy.userContext.ui.enabled")) {
       return;
     }
@@ -65,13 +71,52 @@ var gPrivacyPane = {
     link.href = Services.urlFormatter.formatURLPref("app.support.baseURL") + "containers";
 
     document.getElementById("browserContainersbox").hidden = false;
+
+    document.getElementById("browserContainersCheckbox").checked =
+      Services.prefs.getBoolPref("privacy.userContext.enabled");
+  },
+
+  _checkBrowserContainers: function(event) {
+    let checkbox = document.getElementById("browserContainersCheckbox");
+    if (checkbox.checked) {
+      Services.prefs.setBoolPref("privacy.userContext.enabled", true);
+      return;
+    }
+
+    let count = ContextualIdentityService.countContainerTabs();
+    if (count == 0) {
+      Services.prefs.setBoolPref("privacy.userContext.enabled", false);
+      return;
+    }
+
+    let bundlePreferences = document.getElementById("bundlePreferences");
+
+    let title = bundlePreferences.getString("disableContainersAlertTitle");
+    let message = PluralForm.get(count, bundlePreferences.getString("disableContainersMsg"))
+                            .replace("#S", count)
+    let okButton = PluralForm.get(count, bundlePreferences.getString("disableContainersOkButton"))
+                             .replace("#S", count)
+    let cancelButton = bundlePreferences.getString("disableContainersButton2");
+
+    let buttonFlags = (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_0) +
+                      (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_1);
+
+    let rv = Services.prompt.confirmEx(window, title, message, buttonFlags,
+                                       okButton, cancelButton, null, null, {});
+    if (rv == 0) {
+      ContextualIdentityService.closeContainerTabs();
+      Services.prefs.setBoolPref("privacy.userContext.enabled", false);
+      return;
+    }
+
+    checkbox.checked = true;
   },
 
   /**
    * Sets up the UI for the number of days of history to keep, and updates the
    * label of the "Clear Now..." button.
    */
-  init: function ()
+  init: function()
   {
     function setEventListener(aId, aEventType, aCallback)
     {
@@ -93,25 +138,25 @@ var gPrivacyPane = {
                      gPrivacyPane._updateSanitizeSettingsButton);
     setEventListener("browser.privatebrowsing.autostart", "change",
                      gPrivacyPane.updatePrivacyMicroControls);
-    setEventListener("historyMode", "command", function () {
+    setEventListener("historyMode", "command", function() {
       gPrivacyPane.updateHistoryModePane();
       gPrivacyPane.updateHistoryModePrefs();
       gPrivacyPane.updatePrivacyMicroControls();
       gPrivacyPane.updateAutostart();
     });
-    setEventListener("historyRememberClear", "click", function () {
+    setEventListener("historyRememberClear", "click", function() {
       gPrivacyPane.clearPrivateDataNow(false);
       return false;
     });
-    setEventListener("historyRememberCookies", "click", function () {
+    setEventListener("historyRememberCookies", "click", function() {
       gPrivacyPane.showCookies();
       return false;
     });
-    setEventListener("historyDontRememberClear", "click", function () {
+    setEventListener("historyDontRememberClear", "click", function() {
       gPrivacyPane.clearPrivateDataNow(true);
       return false;
     });
-    setEventListener("doNotTrackSettings", "click", function () {
+    setEventListener("doNotTrackSettings", "click", function() {
       gPrivacyPane.showDoNotTrackSettings();
       return false;
     });
@@ -131,6 +176,10 @@ var gPrivacyPane = {
                      gPrivacyPane.showBlockLists);
     setEventListener("changeBlockListPBM", "command",
                      gPrivacyPane.showBlockLists);
+    setEventListener("browserContainersCheckbox", "command",
+                     gPrivacyPane._checkBrowserContainers);
+    setEventListener("browserContainersSettings", "command",
+                     gPrivacyPane.showContainerSettings);
   },
 
   // TRACKING PROTECTION MODE
@@ -144,9 +193,13 @@ var gPrivacyPane = {
     let radiogroup = document.getElementById("trackingProtectionRadioGroup");
 
     // Global enable takes precedence over enabled in Private Browsing.
-    radiogroup.value = enabledPref.value ? "always" :
-                       pbmPref.value ? "private" :
-                       "never";
+    if (enabledPref.value) {
+      radiogroup.value = "always";
+    } else if (pbmPref.value) {
+      radiogroup.value = "private";
+    } else {
+      radiogroup.value = "never";
+    }
   },
 
   /**
@@ -310,7 +363,7 @@ var gPrivacyPane = {
     if (document.getElementById("historyMode").value == "custom") {
       let disabled = this._autoStartPrivateBrowsing =
         document.getElementById("privateBrowsingAutoStart").checked;
-      this.dependentControls.forEach(function (aElement) {
+      this.dependentControls.forEach(function(aElement) {
         let control = document.getElementById(aElement);
         let preferenceId = control.getAttribute("preference");
         if (!preferenceId) {
@@ -388,18 +441,11 @@ var gPrivacyPane = {
       let buttonIndex = confirmRestartPrompt(autoStart.checked, 1,
                                              true, false);
       if (buttonIndex == CONFIRM_RESTART_PROMPT_RESTART_NOW) {
-        const Cc = Components.classes, Ci = Components.interfaces;
-        let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
-                           .createInstance(Ci.nsISupportsPRBool);
-        Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
-                                     "restart");
-        if (!cancelQuit.data) {
-          pref.value = autoStart.hasAttribute('checked');
-          let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
-                             .getService(Ci.nsIAppStartup);
-          appStartup.quit(Ci.nsIAppStartup.eAttemptQuit |  Ci.nsIAppStartup.eRestart);
-          return;
-        }
+        pref.value = autoStart.hasAttribute('checked');
+        let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
+                           .getService(Ci.nsIAppStartup);
+        appStartup.quit(Ci.nsIAppStartup.eAttemptQuit |  Ci.nsIAppStartup.eRestart);
+        return;
       }
 
       this._shouldPromptForRestart = false;
@@ -432,9 +478,16 @@ var gPrivacyPane = {
   },
 
   /**
+   * Displays container panel for customising and adding containers.
+   */
+  showContainerSettings() {
+    gotoPref("containers");
+  },
+
+  /**
    * Displays the available block lists for tracking protection.
    */
-  showBlockLists: function ()
+  showBlockLists: function()
   {
     var bundlePreferences = document.getElementById("bundlePreferences");
     let brandName = document.getElementById("bundleBrand")
@@ -489,7 +542,7 @@ var gPrivacyPane = {
    * enables/disables the rest of the cookie UI accordingly, returning true
    * if cookies are enabled.
    */
-  readAcceptCookies: function ()
+  readAcceptCookies: function()
   {
     var pref = document.getElementById("network.cookie.cookieBehavior");
     var acceptThirdPartyLabel = document.getElementById("acceptThirdPartyLabel");
@@ -510,7 +563,7 @@ var gPrivacyPane = {
    * Enables/disables the "keep until" label and menulist in response to the
    * "accept cookies" checkbox being checked or unchecked.
    */
-  writeAcceptCookies: function ()
+  writeAcceptCookies: function()
   {
     var accept = document.getElementById("acceptCookies");
     var acceptThirdPartyMenu = document.getElementById("acceptThirdPartyMenu");
@@ -525,7 +578,7 @@ var gPrivacyPane = {
   /**
    * Converts between network.cookie.cookieBehavior and the third-party cookie UI
    */
-  readAcceptThirdPartyCookies: function ()
+  readAcceptThirdPartyCookies: function()
   {
     var pref = document.getElementById("network.cookie.cookieBehavior");
     switch (pref.value)
@@ -543,7 +596,7 @@ var gPrivacyPane = {
     }
   },
 
-  writeAcceptThirdPartyCookies: function ()
+  writeAcceptThirdPartyCookies: function()
   {
     var accept = document.getElementById("acceptThirdPartyMenu").selectedItem;
     switch (accept.value)
@@ -562,7 +615,7 @@ var gPrivacyPane = {
   /**
    * Displays fine-grained, per-site preferences for cookies.
    */
-  showCookieExceptions: function ()
+  showCookieExceptions: function()
   {
     var bundlePreferences = document.getElementById("bundlePreferences");
     var params = { blockVisible   : true,
@@ -579,7 +632,7 @@ var gPrivacyPane = {
   /**
    * Displays all the user's cookies in a dialog.
    */
-  showCookies: function (aCategory)
+  showCookies: function(aCategory)
   {
     gSubDialog.open("chrome://browser/content/preferences/cookies.xul");
   },
@@ -597,7 +650,7 @@ var gPrivacyPane = {
   /**
    * Displays the Clear Private Data settings dialog.
    */
-  showClearPrivateDataSettings: function ()
+  showClearPrivateDataSettings: function()
   {
     gSubDialog.open("chrome://browser/content/preferences/sanitize.xul", "resizable=no");
   },
@@ -607,33 +660,53 @@ var gPrivacyPane = {
    * Displays a dialog from which individual parts of private data may be
    * cleared.
    */
-  clearPrivateDataNow: function (aClearEverything)
-  {
+  clearPrivateDataNow: function(aClearEverything) {
     var ts = document.getElementById("privacy.sanitize.timeSpan");
     var timeSpanOrig = ts.value;
-    if (aClearEverything)
+
+    if (aClearEverything) {
       ts.value = 0;
+    }
 
-    const Cc = Components.classes, Ci = Components.interfaces;
-    var glue = Cc["@mozilla.org/browser/browserglue;1"]
-                 .getService(Ci.nsIBrowserGlue);
-    glue.sanitize(window);
+    gSubDialog.open("chrome://browser/content/sanitize.xul", "resizable=no", null, () => {
+      // reset the timeSpan pref
+      if (aClearEverything) {
+        ts.value = timeSpanOrig;
+      }
 
-    // reset the timeSpan pref
-    if (aClearEverything)
-      ts.value = timeSpanOrig;
-    Services.obs.notifyObservers(null, "clear-private-data", null);
+      Services.obs.notifyObservers(null, "clear-private-data", null);
+    });
   },
 
   /**
    * Enables or disables the "Settings..." button depending
    * on the privacy.sanitize.sanitizeOnShutdown preference value
    */
-  _updateSanitizeSettingsButton: function () {
+  _updateSanitizeSettingsButton: function() {
     var settingsButton = document.getElementById("clearDataSettings");
     var sanitizeOnShutdownPref = document.getElementById("privacy.sanitize.sanitizeOnShutdown");
 
     settingsButton.disabled = !sanitizeOnShutdownPref.value;
+   },
+
+  // CONTAINERS
+
+  /*
+   * preferences:
+   *
+   * privacy.userContext.enabled
+   * - true if containers is enabled
+   */
+
+   /**
+    * Enables/disables the Settings button used to configure containers
+    */
+   readBrowserContainersCheckbox: function()
+   {
+     var pref = document.getElementById("privacy.userContext.enabled");
+     var settings = document.getElementById("browserContainersSettings");
+
+     settings.disabled = !pref.value;
    }
 
 };

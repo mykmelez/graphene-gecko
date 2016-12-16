@@ -6,8 +6,10 @@
 
 UNIFIED_SOURCES += [
     'gfxSurfaceRefCountTest.cpp',
+    'PolygonTestUtils.cpp',
     'TestArena.cpp',
     'TestArrayView.cpp',
+    'TestBSPTree.cpp',
     'TestBufferRotation.cpp',
     'TestColorNames.cpp',
     'TestCompositor.cpp',
@@ -16,6 +18,7 @@ UNIFIED_SOURCES += [
     'TestJobScheduler.cpp',
     'TestLayers.cpp',
     'TestMoz2D.cpp',
+    'TestPolygon.cpp',
     'TestQcms.cpp',
     'TestRect.cpp',
     'TestRegion.cpp',

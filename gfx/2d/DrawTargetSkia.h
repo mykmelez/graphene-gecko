@@ -7,6 +7,7 @@
 #define _MOZILLA_GFX_SOURCESURFACESKIA_H
 
 #include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkSurface.h"
 
 #include "2D.h"
 #include "HelpersSkia.h"
@@ -104,6 +105,7 @@ public:
                                         const Matrix4x4& aMatrix) override;
   virtual void PushClip(const Path *aPath) override;
   virtual void PushClipRect(const Rect& aRect) override;
+  virtual void PushDeviceSpaceClipRects(const IntRect* aRects, uint32_t aCount) override;
   virtual void PopClip() override;
   virtual void PushLayer(bool aOpaque, Float aOpacity,
                          SourceSurface* aMask,
@@ -116,6 +118,7 @@ public:
                                                             int32_t aStride,
                                                             SurfaceFormat aFormat) const override;
   virtual already_AddRefed<SourceSurface> OptimizeSourceSurface(SourceSurface *aSurface) const override;
+  virtual already_AddRefed<SourceSurface> OptimizeSourceSurfaceForUnknownAlpha(SourceSurface *aSurface) const override;
   virtual already_AddRefed<SourceSurface>
     CreateSourceSurfaceFromNativeSurface(const NativeSurface &aSurface) const override;
   virtual already_AddRefed<DrawTarget>
@@ -128,7 +131,8 @@ public:
   virtual void DetachAllSnapshots() override { MarkChanged(); }
 
   bool Init(const IntSize &aSize, SurfaceFormat aFormat);
-  void Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat, bool aUninitialized = false);
+  bool Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat, bool aUninitialized = false);
+  bool Init(SkCanvas* aCanvas);
 
 #ifdef USE_SKIA_GPU
   bool InitWithGrContext(GrContext* aGrContext,
@@ -141,6 +145,8 @@ public:
                       SurfaceFormat aFormat) override {
     return InitWithGrContext(aGrContext, aSize, aFormat, false);
   }
+
+  already_AddRefed<SourceSurface> OptimizeGPUSourceSurface(SourceSurface *aSurface) const;
 #endif
 
   // Skia assumes that texture sizes fit in 16-bit signed integers.
@@ -186,11 +192,12 @@ private:
   std::vector<PushedLayer> mPushedLayers;
 
 #ifdef USE_SKIA_GPU
-  RefPtrSkia<GrContext> mGrContext;
+  sk_sp<GrContext> mGrContext;
 #endif
 
   IntSize mSize;
-  RefPtrSkia<SkCanvas> mCanvas;
+  sk_sp<SkSurface> mSurface;
+  sk_sp<SkCanvas> mCanvas;
   SourceSurfaceSkia* mSnapshot;
 
 #ifdef MOZ_WIDGET_COCOA

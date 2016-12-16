@@ -5,7 +5,7 @@
 
 /* rendering object for css3 multi-column layout */
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsColumnSetFrame.h"
 #include "nsCSSRendering.h"
 #include "nsDisplayList.h"
@@ -83,7 +83,7 @@ nsColumnSetFrame::PaintColumnRule(nsRenderingContext* aCtx,
     return;
 
   nscolor ruleColor =
-    GetVisitedDependentColor(eCSSProperty__moz_column_rule_color);
+    GetVisitedDependentColor(eCSSProperty_column_rule_color);
 
   // In order to re-use a large amount of code, we treat the column rule as a border.
   // We create a new border style object and fill in all the details of the column rule as
@@ -93,15 +93,15 @@ nsColumnSetFrame::PaintColumnRule(nsRenderingContext* aCtx,
   nsStyleBorder border(presContext);
   Sides skipSides;
   if (isVertical) {
-    border.SetBorderWidth(NS_SIDE_TOP, ruleWidth);
-    border.SetBorderStyle(NS_SIDE_TOP, ruleStyle);
-    border.SetBorderColor(NS_SIDE_TOP, ruleColor);
+    border.SetBorderWidth(eSideTop, ruleWidth);
+    border.SetBorderStyle(eSideTop, ruleStyle);
+    border.mBorderTopColor = StyleComplexColor::FromColor(ruleColor);
     skipSides |= mozilla::eSideBitsLeftRight;
     skipSides |= mozilla::eSideBitsBottom;
   } else {
-    border.SetBorderWidth(NS_SIDE_LEFT, ruleWidth);
-    border.SetBorderStyle(NS_SIDE_LEFT, ruleStyle);
-    border.SetBorderColor(NS_SIDE_LEFT, ruleColor);
+    border.SetBorderWidth(eSideLeft, ruleWidth);
+    border.SetBorderStyle(eSideLeft, ruleStyle);
+    border.mBorderLeftColor = StyleComplexColor::FromColor(ruleColor);
     skipSides |= mozilla::eSideBitsTopBottom;
     skipSides |= mozilla::eSideBitsRight;
   }

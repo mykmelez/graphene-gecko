@@ -11,7 +11,7 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Scoped.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "ScopedGLHelpers.h"
 #include "WebGLContext.h"
 #include "WebGLContextUtils.h"
@@ -127,7 +127,7 @@ WebGLTexture::WrapObject(JSContext* cx, JS::Handle<JSObject*> givenProto) {
 }
 
 WebGLTexture::WebGLTexture(WebGLContext* webgl, GLuint tex)
-    : WebGLContextBoundObject(webgl)
+    : WebGLRefCountedObject(webgl)
     , mGLName(tex)
     , mTarget(LOCAL_GL_NONE)
     , mFaceCount(0)
@@ -338,18 +338,7 @@ WebGLTexture::IsComplete(uint32_t texUnit, const char** const out_reason) const
         auto formatUsage = baseImageInfo.mFormat;
         auto format = formatUsage->format;
 
-        // "* The effective internal format specified for the texture arrays is a sized
-        //    internal color format that is not texture-filterable, and either the
-        //    magnification filter is not NEAREST or the minification filter is neither
-        //    NEAREST nor NEAREST_MIPMAP_NEAREST."
-        // Since all (GLES3) unsized color formats are filterable just like their sized
-        // equivalents, we don't have to care whether its sized or not.
-        if (format->IsColorFormat() && !formatUsage->isFilterable) {
-            *out_reason = "Because minification or magnification filtering is not NEAREST"
-                          " or NEAREST_MIPMAP_NEAREST, and the texture's format is a"
-                          " color format, its format must be \"texture-filterable\".";
-            return false;
-        }
+        bool isFilterable = formatUsage->isFilterable;
 
         // "* The effective internal format specified for the texture arrays is a sized
         //    internal depth or depth and stencil format, the value of
@@ -360,16 +349,21 @@ WebGLTexture::IsComplete(uint32_t texUnit, const char** const out_reason) const
         //      3.0.1:
         //      "* Clarify that a texture is incomplete if it has a depth component, no
         //         shadow comparison, and linear filtering (also Bug 9481)."
-        // As of OES_packed_depth_stencil rev #3, the sample code explicitly samples from
-        // a DEPTH_STENCIL_OES texture with a min-filter of LINEAR. Therefore we relax
-        // this restriction if WEBGL_depth_texture is enabled.
-        if (!mContext->IsExtensionEnabled(WebGLExtensionID::WEBGL_depth_texture)) {
-            if (format->d && mTexCompareMode != LOCAL_GL_NONE) {
-                *out_reason = "A depth or depth-stencil format with TEXTURE_COMPARE_MODE"
-                              " of NONE must have minification or magnification filtering"
-                              " of NEAREST or NEAREST_MIPMAP_NEAREST.";
-                return false;
-            }
+        if (format->d && mTexCompareMode != LOCAL_GL_NONE) {
+            isFilterable = true;
+        }
+
+        // "* The effective internal format specified for the texture arrays is a sized
+        //    internal color format that is not texture-filterable, and either the
+        //    magnification filter is not NEAREST or the minification filter is neither
+        //    NEAREST nor NEAREST_MIPMAP_NEAREST."
+        // Since all (GLES3) unsized color formats are filterable just like their sized
+        // equivalents, we don't have to care whether its sized or not.
+        if (!isFilterable) {
+            *out_reason = "Because minification or magnification filtering is not NEAREST"
+                          " or NEAREST_MIPMAP_NEAREST, and the texture's format must be"
+                          " \"texture-filterable\".";
+            return false;
         }
     }
 
@@ -589,6 +583,160 @@ WebGLTexture::EnsureImageDataInitialized(const char* funcName, TexImageTarget ta
     return InitializeImageData(funcName, target, level);
 }
 
+static void
+ZeroANGLEDepthTexture(WebGLContext* webgl, GLuint tex,
+                      const webgl::FormatUsageInfo* usage, uint32_t width,
+                      uint32_t height)
+{
+    const auto& format = usage->format;
+    GLenum attachPoint = 0;
+    GLbitfield clearBits = 0;
+
+    if (format->d) {
+        attachPoint = LOCAL_GL_DEPTH_ATTACHMENT;
+        clearBits |= LOCAL_GL_DEPTH_BUFFER_BIT;
+    }
+
+    if (format->s) {
+        attachPoint = (format->d ? LOCAL_GL_DEPTH_STENCIL_ATTACHMENT
+                                 : LOCAL_GL_STENCIL_ATTACHMENT);
+        clearBits |= LOCAL_GL_STENCIL_BUFFER_BIT;
+    }
+
+    MOZ_RELEASE_ASSERT(attachPoint && clearBits, "GFX: No bits cleared.");
+
+    ////
+    const auto& gl = webgl->gl;
+    MOZ_ASSERT(gl->IsCurrent());
+
+    gl::ScopedFramebuffer scopedFB(gl);
+    const gl::ScopedBindFramebuffer scopedBindFB(gl, scopedFB.FB());
+
+    gl->fFramebufferTexture2D(LOCAL_GL_FRAMEBUFFER, attachPoint, LOCAL_GL_TEXTURE_2D,
+                              tex, 0);
+
+    const auto& status = gl->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
+    MOZ_RELEASE_ASSERT(status == LOCAL_GL_FRAMEBUFFER_COMPLETE);
+
+    ////
+
+    const bool fakeNoAlpha = false;
+    webgl->ForceClearFramebufferWithDefaultValues(clearBits, fakeNoAlpha);
+}
+
+static bool
+ZeroTextureData(WebGLContext* webgl, const char* funcName, GLuint tex,
+                TexImageTarget target, uint32_t level,
+                const webgl::FormatUsageInfo* usage, uint32_t width, uint32_t height,
+                uint32_t depth)
+{
+    // This has two usecases:
+    // 1. Lazy zeroing of uninitialized textures:
+    //    a. Before draw, when FakeBlack isn't viable. (TexStorage + Draw*)
+    //    b. Before partial upload. (TexStorage + TexSubImage)
+    // 2. Zero subrects from out-of-bounds blits. (CopyTex(Sub)Image)
+
+    // We have no sympathy for any of these cases.
+
+    // "Doctor, it hurts when I do this!" "Well don't do that!"
+    webgl->GenerateWarning("%s: This operation requires zeroing texture data. This is"
+                           " slow.",
+                           funcName);
+
+    gl::GLContext* gl = webgl->GL();
+    gl->MakeCurrent();
+
+    GLenum scopeBindTarget;
+    switch (target.get()) {
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+        scopeBindTarget = LOCAL_GL_TEXTURE_CUBE_MAP;
+        break;
+    default:
+        scopeBindTarget = target.get();
+        break;
+    }
+    const gl::ScopedBindTexture scopeBindTexture(gl, tex, scopeBindTarget);
+    auto compression = usage->format->compression;
+    if (compression) {
+        auto sizedFormat = usage->format->sizedFormat;
+        MOZ_RELEASE_ASSERT(sizedFormat, "GFX: texture sized format not set");
+
+        const auto fnSizeInBlocks = [](CheckedUint32 pixels, uint8_t pixelsPerBlock) {
+            return RoundUpToMultipleOf(pixels, pixelsPerBlock) / pixelsPerBlock;
+        };
+
+        const auto widthBlocks = fnSizeInBlocks(width, compression->blockWidth);
+        const auto heightBlocks = fnSizeInBlocks(height, compression->blockHeight);
+
+        CheckedUint32 checkedByteCount = compression->bytesPerBlock;
+        checkedByteCount *= widthBlocks;
+        checkedByteCount *= heightBlocks;
+        checkedByteCount *= depth;
+
+        if (!checkedByteCount.isValid())
+            return false;
+
+        const size_t byteCount = checkedByteCount.value();
+
+        UniqueBuffer zeros = calloc(1, byteCount);
+        if (!zeros)
+            return false;
+
+        ScopedUnpackReset scopedReset(webgl);
+        gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1); // Don't bother with striding it
+                                                        // well.
+
+        const auto error = DoCompressedTexSubImage(gl, target.get(), level, 0, 0, 0,
+                                                   width, height, depth, sizedFormat,
+                                                   byteCount, zeros.get());
+        return !error;
+    }
+
+    const auto driverUnpackInfo = usage->idealUnpack;
+    MOZ_RELEASE_ASSERT(driverUnpackInfo, "GFX: ideal unpack info not set.");
+
+    if (webgl->IsExtensionEnabled(WebGLExtensionID::WEBGL_depth_texture) &&
+        gl->IsANGLE() &&
+        usage->format->d)
+    {
+        // ANGLE_depth_texture does not allow uploads, so we have to clear.
+        // (Restriction because of D3D9)
+        MOZ_ASSERT(target == LOCAL_GL_TEXTURE_2D);
+        MOZ_ASSERT(level == 0);
+        ZeroANGLEDepthTexture(webgl, tex, usage, width, height);
+        return true;
+    }
+
+    const webgl::PackingInfo packing = driverUnpackInfo->ToPacking();
+
+    const auto bytesPerPixel = webgl::BytesPerPixel(packing);
+
+    CheckedUint32 checkedByteCount = bytesPerPixel;
+    checkedByteCount *= width;
+    checkedByteCount *= height;
+    checkedByteCount *= depth;
+
+    if (!checkedByteCount.isValid())
+        return false;
+
+    const size_t byteCount = checkedByteCount.value();
+
+    UniqueBuffer zeros = calloc(1, byteCount);
+    if (!zeros)
+        return false;
+
+    ScopedUnpackReset scopedReset(webgl);
+    gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1); // Don't bother with striding it well.
+    const auto error = DoTexSubImage(gl, target, level, 0, 0, 0, width, height, depth,
+                                     packing, zeros.get());
+    return !error;
+}
+
 bool
 WebGLTexture::InitializeImageData(const char* funcName, TexImageTarget target,
                                   uint32_t level)
@@ -597,14 +745,13 @@ WebGLTexture::InitializeImageData(const char* funcName, TexImageTarget target,
     MOZ_ASSERT(imageInfo.IsDefined());
     MOZ_ASSERT(!imageInfo.IsDataInitialized());
 
-    const bool respecifyTexture = false;
     const auto& usage = imageInfo.mFormat;
     const auto& width = imageInfo.mWidth;
     const auto& height = imageInfo.mHeight;
     const auto& depth = imageInfo.mDepth;
 
-    if (!ZeroTextureData(mContext, funcName, respecifyTexture, mGLName, target, level,
-                         usage, 0, 0, 0, width, height, depth))
+    if (!ZeroTextureData(mContext, funcName, mGLName, target, level, usage, width, height,
+                         depth))
     {
         return false;
     }
@@ -671,9 +818,10 @@ WebGLTexture::PopulateMipChain(uint32_t firstLevel, uint32_t lastLevel)
 bool
 WebGLTexture::BindTexture(TexTarget texTarget)
 {
-    // silently ignore a deleted texture
-    if (IsDeleted())
+    if (IsDeleted()) {
+        mContext->ErrorInvalidOperation("bindTexture: Cannot bind a deleted object.");
         return false;
+    }
 
     const bool isFirstBinding = !HasEverBeenBound();
     if (!isFirstBinding && mTarget != texTarget) {
@@ -809,21 +957,36 @@ WebGLTexture::GetTexParameter(TexTarget texTarget, GLenum pname)
 
     switch (pname) {
     case LOCAL_GL_TEXTURE_MIN_FILTER:
+        return JS::NumberValue(uint32_t(mMinFilter.get()));
+
     case LOCAL_GL_TEXTURE_MAG_FILTER:
+        return JS::NumberValue(uint32_t(mMagFilter.get()));
+
     case LOCAL_GL_TEXTURE_WRAP_S:
+        return JS::NumberValue(uint32_t(mWrapS.get()));
+
     case LOCAL_GL_TEXTURE_WRAP_T:
+        return JS::NumberValue(uint32_t(mWrapT.get()));
+
     case LOCAL_GL_TEXTURE_BASE_LEVEL:
-    case LOCAL_GL_TEXTURE_COMPARE_FUNC:
+        return JS::NumberValue(mBaseMipmapLevel);
+
     case LOCAL_GL_TEXTURE_COMPARE_MODE:
-    case LOCAL_GL_TEXTURE_IMMUTABLE_LEVELS:
+        return JS::NumberValue(uint32_t(mTexCompareMode));
+
     case LOCAL_GL_TEXTURE_MAX_LEVEL:
+        return JS::NumberValue(mMaxMipmapLevel);
+
+    case LOCAL_GL_TEXTURE_IMMUTABLE_FORMAT:
+        return JS::BooleanValue(mImmutable);
+
+    case LOCAL_GL_TEXTURE_IMMUTABLE_LEVELS:
+        return JS::NumberValue(uint32_t(mImmutableLevelCount));
+
+    case LOCAL_GL_TEXTURE_COMPARE_FUNC:
     case LOCAL_GL_TEXTURE_WRAP_R:
         mContext->gl->fGetTexParameteriv(texTarget.get(), pname, &i);
         return JS::NumberValue(uint32_t(i));
-
-    case LOCAL_GL_TEXTURE_IMMUTABLE_FORMAT:
-        mContext->gl->fGetTexParameteriv(texTarget.get(), pname, &i);
-        return JS::BooleanValue(bool(i));
 
     case LOCAL_GL_TEXTURE_MAX_ANISOTROPY_EXT:
     case LOCAL_GL_TEXTURE_MAX_LOD:
@@ -1005,11 +1168,13 @@ WebGLTexture::TexParameter(TexTarget texTarget, GLenum pname, GLint* maybeIntPar
     case LOCAL_GL_TEXTURE_BASE_LEVEL:
         mBaseMipmapLevel = intParam;
         ClampLevelBaseAndMax();
+        intParam = mBaseMipmapLevel;
         break;
 
     case LOCAL_GL_TEXTURE_MAX_LEVEL:
         mMaxMipmapLevel = intParam;
         ClampLevelBaseAndMax();
+        intParam = mMaxMipmapLevel;
         break;
 
     case LOCAL_GL_TEXTURE_MIN_FILTER:

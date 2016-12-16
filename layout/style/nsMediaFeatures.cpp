@@ -19,9 +19,10 @@
 #include "nsDeviceContext.h"
 #include "nsIBaseWindow.h"
 #include "nsIDocument.h"
+#include "nsIWidget.h"
 #include "nsContentUtils.h"
-#include "mozilla/StyleSheetHandle.h"
-#include "mozilla/StyleSheetHandleInlines.h"
+#include "mozilla/StyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 
 using namespace mozilla;
 
@@ -677,22 +678,6 @@ nsMediaFeatures::features[] = {
     GetSystemMetric
   },
   {
-    &nsGkAtoms::_moz_images_in_menus,
-    nsMediaFeature::eMinMaxNotAllowed,
-    nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
-    { &nsGkAtoms::images_in_menus },
-    GetSystemMetric
-  },
-  {
-    &nsGkAtoms::_moz_images_in_buttons,
-    nsMediaFeature::eMinMaxNotAllowed,
-    nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
-    { &nsGkAtoms::images_in_buttons },
-    GetSystemMetric
-  },
-  {
     &nsGkAtoms::_moz_overlay_scrollbars,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
@@ -714,14 +699,6 @@ nsMediaFeatures::features[] = {
     nsMediaFeature::eBoolInteger,
     nsMediaFeature::eNoRequirements,
     { &nsGkAtoms::mac_graphite_theme },
-    GetSystemMetric
-  },
-  {
-    &nsGkAtoms::_moz_mac_lion_theme,
-    nsMediaFeature::eMinMaxNotAllowed,
-    nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
-    { &nsGkAtoms::mac_lion_theme },
     GetSystemMetric
   },
   {

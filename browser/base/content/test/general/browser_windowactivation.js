@@ -115,7 +115,7 @@ function sendGetBackgroundRequest(ifChanged)
 
 function runOtherWindowTests() {
   otherWindow = window.open("data:text/html,<body>Hi</body>", "", "chrome");
-  waitForFocus(function () {
+  waitForFocus(function() {
     sendGetBackgroundRequest(true);
   }, otherWindow);
 }
@@ -140,7 +140,7 @@ function childFunction()
     ifChanged = message.data.ifChanged;
   });
 
-  content.addEventListener("focus", function () {
+  content.addEventListener("focus", function() {
     sendAsyncMessage("Test:FocusReceived", { });
   }, false);
 
@@ -150,20 +150,20 @@ function childFunction()
       sendAsyncMessage("Test:ActivateEvent", { ok: !windowGotActivate });
       windowGotActivate = false;
     });
-  
+
   addEventListener("deactivate", function() {
       sendAsyncMessage("Test:DeactivateEvent", { ok: !windowGotDeactivate });
       windowGotDeactivate = false;
     });
   content.addEventListener("activate", function() {
-      windowGotActivate = true;;
+      windowGotActivate = true;
     });
-  
+
   content.addEventListener("deactivate", function() {
       windowGotDeactivate = true;
     });
 
-  content.setInterval(function () {
+  content.setInterval(function() {
     if (!expectingResponse) {
       return;
     }

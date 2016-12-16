@@ -17,7 +17,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/TextComposition.h"
 #include "mozilla/TextEvents.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "PuppetWidget.h"
 #include "nsContentUtils.h"
 #include "nsIWidgetListener.h"
@@ -79,13 +79,12 @@ PuppetWidget::PuppetWidget(TabChild* aTabChild)
   : mTabChild(aTabChild)
   , mMemoryPressureObserver(nullptr)
   , mDPI(-1)
+  , mRounding(-1)
   , mDefaultScale(-1)
   , mCursorHotspotX(0)
   , mCursorHotspotY(0)
   , mNativeKeyCommandsValid(false)
 {
-  MOZ_COUNT_CTOR(PuppetWidget);
-
   mSingleLineCommands.SetCapacity(4);
   mMultiLineCommands.SetCapacity(4);
   mRichTextCommands.SetCapacity(4);
@@ -96,16 +95,14 @@ PuppetWidget::PuppetWidget(TabChild* aTabChild)
 
 PuppetWidget::~PuppetWidget()
 {
-  MOZ_COUNT_DTOR(PuppetWidget);
-
   Destroy();
 }
 
-NS_IMETHODIMP
-PuppetWidget::Create(nsIWidget* aParent,
-                     nsNativeWidget aNativeParent,
-                     const LayoutDeviceIntRect& aRect,
-                     nsWidgetInitData* aInitData)
+void
+PuppetWidget::InfallibleCreate(nsIWidget* aParent,
+                               nsNativeWidget aNativeParent,
+                               const LayoutDeviceIntRect& aRect,
+                               nsWidgetInitData* aInitData)
 {
   MOZ_ASSERT(!aNativeParent, "got a non-Puppet native parent");
 
@@ -133,7 +130,15 @@ PuppetWidget::Create(nsIWidget* aParent,
     mMemoryPressureObserver = new MemoryPressureObserver(this);
     obs->AddObserver(mMemoryPressureObserver, "memory-pressure", false);
   }
+}
 
+nsresult
+PuppetWidget::Create(nsIWidget* aParent,
+                     nsNativeWidget aNativeParent,
+                     const LayoutDeviceIntRect& aRect,
+                     nsWidgetInitData* aInitData)
+{
+  InfallibleCreate(aParent, aNativeParent, aRect, aInitData);
   return NS_OK;
 }
 
@@ -162,11 +167,11 @@ PuppetWidget::CreateChild(const LayoutDeviceIntRect& aRect,
           widget.forget() : nullptr);
 }
 
-NS_IMETHODIMP
+void
 PuppetWidget::Destroy()
 {
   if (mOnDestroyCalled) {
-    return NS_OK;
+    return;
   }
   mOnDestroyCalled = true;
 
@@ -183,7 +188,6 @@ PuppetWidget::Destroy()
   }
   mLayerManager = nullptr;
   mTabChild = nullptr;
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -251,8 +255,7 @@ PuppetWidget::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
     NS_ASSERTION(w->GetParent() == this,
                  "Configured widget is not a child");
     w->SetWindowClipRegion(configuration.mClipRegion, true);
-    LayoutDeviceIntRect bounds;
-    w->GetBounds(bounds);
+    LayoutDeviceIntRect bounds = w->GetBounds();
     if (bounds.Size() != configuration.mBounds.Size()) {
       w->Resize(configuration.mBounds.x, configuration.mBounds.y,
                 configuration.mBounds.width, configuration.mBounds.height,
@@ -319,7 +322,8 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
              "Unexpected event dispatch!");
 
   AutoCacheNativeKeyCommands autoCache(this);
-  if (event->mFlags.mIsSynthesizedForTests && !mNativeKeyCommandsValid) {
+  if ((event->mFlags.mIsSynthesizedForTests ||
+       event->mFlags.mIsSuppressedOrDelayed) && !mNativeKeyCommandsValid) {
     WidgetKeyboardEvent* keyEvent = event->AsKeyboardEvent();
     if (keyEvent) {
       mTabChild->RequestNativeKeyBindings(&autoCache, keyEvent);
@@ -529,6 +533,16 @@ PuppetWidget::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
 #ifdef MOZ_WIDGET_GONK
   return false;
 #else // #ifdef MOZ_WIDGET_GONK
+  AutoCacheNativeKeyCommands autoCache(this);
+  if (!aEvent.mWidget && !mNativeKeyCommandsValid) {
+    MOZ_ASSERT(!aEvent.mFlags.mIsSynthesizedForTests);
+    // Abort if untrusted to avoid leaking system settings
+    if (NS_WARN_IF(!aEvent.IsTrusted())) {
+      return false;
+    }
+    mTabChild->RequestNativeKeyBindings(&autoCache, &aEvent);
+  }
+
   MOZ_ASSERT(mNativeKeyCommandsValid);
 
   const nsTArray<mozilla::CommandInt>* commands = nullptr;
@@ -567,7 +581,17 @@ PuppetWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
     mLayerManager = new ClientLayerManager(this);
   }
   ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder();
-  if (!lf->HasShadowManager() && aShadowManager) {
+  if (lf && !lf->HasShadowManager() && aShadowManager) {
+    lf->SetShadowManager(aShadowManager);
+  }
+  return mLayerManager;
+}
+
+LayerManager*
+PuppetWidget::RecreateLayerManager(PLayerTransactionChild* aShadowManager)
+{
+  mLayerManager = new ClientLayerManager(this);
+  if (ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder()) {
     lf->SetShadowManager(aShadowManager);
   }
   return mLayerManager;
@@ -661,13 +685,12 @@ PuppetWidget::StartPluginIME(const mozilla::WidgetKeyboardEvent& aKeyboardEvent,
   return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 PuppetWidget::SetPluginFocused(bool& aFocused)
 {
-  if (!mTabChild || !mTabChild->SendSetPluginFocused(aFocused)) {
-    return NS_ERROR_FAILURE;
+  if (mTabChild) {
+    mTabChild->SendSetPluginFocused(aFocused);
   }
-  return NS_OK;
 }
 
 void
@@ -1057,7 +1080,7 @@ PuppetWidget::Paint()
       if (mTabChild) {
         mTabChild->NotifyPainted();
       }
-    } else {
+    } else if (mozilla::layers::LayersBackend::LAYERS_BASIC == mLayerManager->GetBackendType()) {
       RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(mDrawTarget);
       if (!ctx) {
         gfxDevCrash(LogReason::InvalidContext) << "PuppetWidget context problem " << gfx::hexa(mDrawTarget);
@@ -1098,6 +1121,14 @@ PuppetWidget::PaintTask::Run()
     mWidget->Paint();
   }
   return NS_OK;
+}
+
+void
+PuppetWidget::PaintNowIfNeeded()
+{
+  if (IsVisible() && mPaintTask.IsPending()) {
+    Paint();
+  }
 }
 
 NS_IMPL_ISUPPORTS(PuppetWidget::MemoryPressureObserver, nsIObserver)
@@ -1173,6 +1204,20 @@ PuppetWidget::GetDefaultScaleInternal()
   return mDefaultScale;
 }
 
+int32_t
+PuppetWidget::RoundsWidgetCoordinatesTo()
+{
+  if (mRounding < 0) {
+    if (mTabChild) {
+      mTabChild->GetWidgetRounding(&mRounding);
+    } else {
+      mRounding = 1;
+    }
+  }
+
+  return mRounding;
+}
+
 void*
 PuppetWidget::GetNativeData(uint32_t aDataType)
 {
@@ -1241,11 +1286,10 @@ PuppetWidget::GetWindowPosition()
   return nsIntPoint(winX, winY) + GetOwningTabChild()->GetClientOffset().ToUnknownPoint();
 }
 
-NS_METHOD
-PuppetWidget::GetScreenBounds(LayoutDeviceIntRect& aRect) {
-  aRect.MoveTo(WidgetToScreenOffset());
-  aRect.SizeTo(mBounds.Size());
-  return NS_OK;
+LayoutDeviceIntRect
+PuppetWidget::GetScreenBounds()
+{
+  return LayoutDeviceIntRect(WidgetToScreenOffset(), mBounds.Size());
 }
 
 uint32_t PuppetWidget::GetMaxTouchPoints() const

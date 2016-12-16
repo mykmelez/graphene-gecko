@@ -9,6 +9,7 @@
 
 #include "gfxTypes.h"
 #include "gfxFontEntry.h"
+#include "gfxFontVariations.h"
 #include "nsString.h"
 #include "gfxPoint.h"
 #include "gfxPattern.h"
@@ -46,7 +47,7 @@ class gfxGlyphExtents;
 class gfxShapedText;
 class gfxShapedWord;
 class gfxSkipChars;
-class gfxTextContextPaint;
+class gfxMathTable;
 
 #define FONT_MAX_SIZE                  2000.0
 
@@ -67,6 +68,7 @@ class gfxTextContextPaint;
 struct gfxTextRunDrawCallbacks;
 
 namespace mozilla {
+class SVGContextPaint;
 namespace gfx {
 class GlyphRenderingOptions;
 } // namespace gfx
@@ -80,7 +82,6 @@ struct gfxFontStyle {
                  bool aPrinterFont,
                  bool aWeightSynthesis, bool aStyleSynthesis,
                  const nsString& aLanguageOverride);
-    gfxFontStyle(const gfxFontStyle& aStyle);
 
     // the language (may be an internal langGroup code rather than an actual
     // language code) specified in the document or element's lang property,
@@ -103,6 +104,9 @@ struct gfxFontStyle {
 
     // -- object used to look these up once the font is matched
     RefPtr<gfxFontFeatureValueSet> featureValueLookup;
+
+    // opentype variation settings
+    nsTArray<gfxFontVariation> variationSettings;
 
     // The logical size of the font, in pixels
     gfxFloat size;
@@ -135,6 +139,15 @@ struct gfxFontStyle {
     // constants; see gfxFontConstants.h).
     int8_t stretch;
 
+    // The style of font (normal, italic, oblique)
+    uint8_t style;
+
+    // caps variant (small-caps, petite-caps, etc.)
+    uint8_t variantCaps;
+
+    // sub/superscript variant
+    uint8_t variantSubSuper;
+
     // Say that this font is a system font and therefore does not
     // require certain fixup that we do for fonts from untrusted
     // sources.
@@ -145,9 +158,6 @@ struct gfxFontStyle {
 
     // Used to imitate -webkit-font-smoothing: antialiased
     bool useGrayscaleAntialiasing : 1;
-
-    // The style of font (normal, italic, oblique)
-    uint8_t style : 2;
 
     // Whether synthetic styles are allowed
     bool allowSyntheticWeight : 1;
@@ -160,12 +170,6 @@ struct gfxFontStyle {
     // whether the |language| field comes from explicit lang tagging in the
     // document, or was inferred from charset/system locale
     bool explicitLanguage : 1;
-
-    // caps variant (small-caps, petite-caps, etc.)
-    uint8_t variantCaps;
-
-    // sub/superscript variant
-    uint8_t variantSubSuper;
 
     // Return the final adjusted font size for the given aspect ratio.
     // Not meant to be called when sizeAdjust = -1.0.
@@ -192,6 +196,8 @@ struct gfxFontStyle {
             (*reinterpret_cast<const uint64_t*>(&size) ==
              *reinterpret_cast<const uint64_t*>(&other.size)) &&
             (style == other.style) &&
+            (weight == other.weight) &&
+            (stretch == other.stretch) &&
             (variantCaps == other.variantCaps) &&
             (variantSubSuper == other.variantSubSuper) &&
             (allowSyntheticWeight == other.allowSyntheticWeight) &&
@@ -200,20 +206,16 @@ struct gfxFontStyle {
             (printerFont == other.printerFont) &&
             (useGrayscaleAntialiasing == other.useGrayscaleAntialiasing) &&
             (explicitLanguage == other.explicitLanguage) &&
-            (weight == other.weight) &&
-            (stretch == other.stretch) &&
             (language == other.language) &&
             (baselineOffset == other.baselineOffset) &&
             (*reinterpret_cast<const uint32_t*>(&sizeAdjust) ==
              *reinterpret_cast<const uint32_t*>(&other.sizeAdjust)) &&
             (featureSettings == other.featureSettings) &&
-            (languageOverride == other.languageOverride) &&
             (alternateValues == other.alternateValues) &&
-            (featureValueLookup == other.featureValueLookup);
+            (featureValueLookup == other.featureValueLookup) &&
+            (variationSettings == other.variationSettings) &&
+            (languageOverride == other.languageOverride);
     }
-
-    static void ParseFontFeatureSettings(const nsString& aFeatureString,
-                                         nsTArray<gfxFontFeature>& aFeatures);
 
     static uint32_t ParseFontLanguageOverride(const nsString& aLangTag);
 };
@@ -303,7 +305,7 @@ public:
     already_AddRefed<gfxFont>
     Lookup(const gfxFontEntry* aFontEntry,
            const gfxFontStyle* aStyle,
-           const gfxCharacterMap* aUnicodeRangeMap = nullptr);
+           const gfxCharacterMap* aUnicodeRangeMap);
 
     // We created a new font (presumably because Lookup returned null);
     // put it in the cache. The font's refcount should be nonzero. It is
@@ -568,8 +570,6 @@ public:
 
         // Set if the textrun should use the OpenType 'math' script.
         TEXT_USE_MATH_SCRIPT = 0x80000000,
-
-        TEXT_UNUSED_FLAGS = 0x10000000
     };
 
     /**
@@ -1337,6 +1337,7 @@ class gfxFont {
 protected:
     typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::unicode::Script Script;
+    typedef mozilla::SVGContextPaint SVGContextPaint;
 
 public:
     nsrefcnt AddRef(void) {
@@ -1434,7 +1435,7 @@ public:
         return nullptr;
     }
 
-    virtual gfxFloat GetAdjustedSize() const {
+    gfxFloat GetAdjustedSize() const {
         return mAdjustedSize > 0.0
                  ? mAdjustedSize
                  : (mStyle.sizeAdjust == 0.0 ? 0.0 : mStyle.size);
@@ -1513,6 +1514,7 @@ public:
 
     // Font metrics
     struct Metrics {
+        gfxFloat capHeight;
         gfxFloat xHeight;
         gfxFloat strikeoutSize;
         gfxFloat strikeoutOffset;
@@ -1844,22 +1846,13 @@ public:
         delete sDefaultFeatures;
     }
 
-    // Get a font dimension from the MATH table, scaled to appUnits;
-    // may only be called if mFontEntry->TryGetMathTable has succeeded
-    // (i.e. the font is known to be a valid OpenType math font).
-    nscoord GetMathConstant(gfxFontEntry::MathConstant aConstant,
-                            uint32_t aAppUnitsPerDevPixel)
-    {
-        return NSToCoordRound(mFontEntry->GetMathConstant(aConstant) *
-                              GetAdjustedSize() * aAppUnitsPerDevPixel);
-    }
-
-    // Get a dimensionless math constant (e.g. a percentage);
-    // may only be called if mFontEntry->TryGetMathTable has succeeded
-    // (i.e. the font is known to be a valid OpenType math font).
-    float GetMathConstant(gfxFontEntry::MathConstant aConstant)
-    {
-        return mFontEntry->GetMathConstant(aConstant);
+    // Call TryGetMathTable() to try and load the Open Type MATH table.
+    // If (and ONLY if) TryGetMathTable() has returned true, the MathTable()
+    // method may be called to access the gfxMathTable data.
+    bool          TryGetMathTable();
+    gfxMathTable* MathTable() {
+        MOZ_RELEASE_ASSERT(mMathTable, "A successful call to TryGetMathTable() must be performed before calling this function");
+        return mMathTable.get();
     }
 
     // return a cloned font resized and offset to simulate sub/superscript glyphs
@@ -2096,6 +2089,8 @@ protected:
     bool                       mKerningSet;     // kerning explicitly set?
     bool                       mKerningEnabled; // if set, on or off?
 
+    bool                       mMathInitialized; // TryGetMathTable() called?
+
     nsExpirationState          mExpirationState;
     gfxFontStyle               mStyle;
     nsTArray<mozilla::UniquePtr<gfxGlyphExtents>> mGlyphExtentsArray;
@@ -2131,6 +2126,9 @@ protected:
     // For vertical metrics, created on demand.
     mozilla::UniquePtr<const Metrics> mVerticalMetrics;
 
+    // Table used for MathML layout.
+    mozilla::UniquePtr<gfxMathTable> mMathTable;
+
     // Helper for subclasses that want to initialize standard metrics from the
     // tables of sfnt (TrueType/OpenType) fonts.
     // This will use mFUnitsConvFactor if it is already set, else compute it
@@ -2150,9 +2148,9 @@ protected:
     void SanitizeMetrics(Metrics *aMetrics, bool aIsBadUnderlineFont);
 
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint,
-                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint) const;
+                        uint32_t aGlyphId, SVGContextPaint* aContextPaint) const;
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint,
-                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint,
+                        uint32_t aGlyphId, SVGContextPaint* aContextPaint,
                         gfxTextRunDrawCallbacks *aCallbacks,
                         bool& aEmittedGlyphs) const;
 
@@ -2186,7 +2184,7 @@ struct TextRunDrawParams {
     gfxContext              *context;
     gfxFont::Spacing        *spacing;
     gfxTextRunDrawCallbacks *callbacks;
-    gfxTextContextPaint     *runContextPaint;
+    mozilla::SVGContextPaint *runContextPaint;
     mozilla::gfx::Color      fontSmoothingBGColor;
     gfxFloat                 direction;
     double                   devPerApp;
@@ -2203,7 +2201,7 @@ struct TextRunDrawParams {
 struct FontDrawParams {
     RefPtr<mozilla::gfx::ScaledFont>            scaledFont;
     RefPtr<mozilla::gfx::GlyphRenderingOptions> renderingOptions;
-    gfxTextContextPaint      *contextPaint;
+    mozilla::SVGContextPaint *contextPaint;
     mozilla::gfx::Matrix     *passedInvMatrix;
     mozilla::gfx::Matrix      matInv;
     double                    synBoldOnePixelOffset;

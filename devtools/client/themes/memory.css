@@ -212,8 +212,8 @@ html, body, #app, #memory-tool {
   min-width: 1.3em;
 }
 
-.theme-light .snapshot-list-item.selected .delete {
-  filter: invert(100%);
+.snapshot-list-item.selected .delete::before {
+  filter: invert(1);
 }
 
 .snapshot-list-item .delete::before {
@@ -395,6 +395,10 @@ html, body, #app, #memory-tool {
   padding-inline-end: 5px;
 }
 
+.children-pointer:dir(rtl) {
+  transform: scaleX(-1);
+}
+
 /**
  * Heap tree view columns
  */
@@ -436,7 +440,8 @@ html, body, #app, #memory-tool {
    * These subcolumns may have specific widths or need to flex.
    */
   display: flex;
-  text-align: end;
+  /* Make sure units/decimals/... are always vertically aligned to right in both LTR and RTL locales */
+  text-align: right;
   border-inline-end: var(--cell-border-color) 1px solid;
 }
 
@@ -486,7 +491,11 @@ html, body, #app, #memory-tool {
 }
 
 .heap-tree-number {
-  padding-inline-start: 3px;
+  padding: 0 3px;
+  flex: 1;
+  color: var(--theme-content-color3);
+  /* Make sure number doesn't appear backwards on RTL locales */
+  direction: ltr;
 }
 
 .heap-tree-percent {
@@ -497,11 +506,6 @@ html, body, #app, #memory-tool {
 .heap-tree-number,
 .heap-tree-percent {
   font-family: var(--monospace-font-family);
-}
-
-.heap-tree-number {
-  flex: 1;
-  color: var(--theme-content-color3);
 }
 
 .heap-tree-percent {
@@ -591,45 +595,43 @@ html, body, #app, #memory-tool {
  * Dagre-D3 graphs
  */
 
+svg {
+  --arrow-color: var(--theme-splitter-color);
+  --text-color: var(--theme-body-color-alt);
+}
+
+.theme-dark svg {
+  --arrow-color: var(--theme-body-color-alt);
+}
+
+svg #arrowhead {
+  /* !important is needed to override inline style */
+  fill: var(--arrow-color) !important;
+}
+
 .edgePath path {
   stroke-width: 1px;
   fill: none;
-}
-
-.theme-dark .edgePath path {
-  stroke: var(--theme-body-color-alt);
-}
-.theme-light .edgePath path {
-  stroke: var(--theme-splitter-color);
+  stroke: var(--arrow-color);
 }
 
 g.edgeLabel rect {
   fill: var(--theme-body-background);
 }
+
 g.edgeLabel tspan {
-  fill: var(--theme-body-color-alt);
+  fill: var(--text-color);
 }
 
 .nodes rect {
   stroke-width: 1px;
-}
-
-.nodes rect {
-  stroke: var(--theme-tab-toolbar-background);
-}
-.theme-light rect {
-  fill: var(--theme-tab-toolbar-background);
-}
-.theme-dark rect {
+  stroke: var(--theme-splitter-color);
   fill: var(--theme-toolbar-background);
 }
 
 text {
-  font-weight: 300;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serf;
-  font-size: 14px;
-}
-
-text {
-  fill: var(--theme-body-color-alt);
+  font-size: 1.25em;
+  fill: var(--text-color);
+  /* Make sure text stays inside its container in RTL locales */
+  direction: ltr;
 }

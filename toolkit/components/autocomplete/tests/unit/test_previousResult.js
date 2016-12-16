@@ -125,7 +125,7 @@ AutoCompleteResult.prototype = {
     return this.getValueAt(aIndex);
   },
 
-  removeValueAt: function (aRowIndex, aRemoveFromDb) {},
+  removeValueAt: function(aRowIndex, aRemoveFromDb) {},
 
   // nsISupports implementation
   QueryInterface: function(iid) {
@@ -243,7 +243,6 @@ function run_test() {
   var input = new AutoCompleteInput([search1.name,
                                      search2.name]);
   var numSearchesStarted = 0;
-  var previousResult = null;
 
   input.onSearchBegin = function() {
     numSearchesStarted++;
@@ -262,10 +261,8 @@ function run_test() {
       controller.startSearch("test");
       return;
     }
-    else {
-      do_check_neq(search1._previousResult, null);
-      do_check_neq(search2._previousResult, null);
-    }
+    do_check_neq(search1._previousResult, null);
+    do_check_neq(search2._previousResult, null);
 
     // Unregister searches
     unregisterAutoCompleteSearch(search1);
@@ -281,4 +278,3 @@ function run_test() {
 
   controller.startSearch("test");
 }
-

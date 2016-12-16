@@ -152,7 +152,7 @@ function startTest() {
   bs.moveItem(id, bs.unfiledBookmarksFolder, 0);
 
   // Remove all added bookmarks.
-  addedBookmarks.forEach(function (aItem) {
+  addedBookmarks.forEach(function(aItem) {
     // If we remove an item after its containing folder has been removed,
     // this will throw, but we can ignore that.
     try {
@@ -218,8 +218,7 @@ var bookmarksObserver = {
     // Check that item has been removed.
     for (var i = 0; i < views.length; i++) {
       var node = null;
-      var index = null;
-      [node, index] = searchItemInView(aItemId, views[i]);
+      [node, ] = searchItemInView(aItemId, views[i]);
       is(node, null, "Places node not found in " + views[i]);
     }
   },
@@ -266,15 +265,14 @@ var bookmarksObserver = {
           return cellText == PlacesUIUtils.getBestTitle(tree.view.nodeForTreeIndex(aElementOrTreeIndex), true);
         return cellText == aNewValue;
       }
-      else {
-        if (!aNewValue && aElementOrTreeIndex.localName != "toolbarbutton")
-          return aElementOrTreeIndex.getAttribute("label") == PlacesUIUtils.getBestTitle(aElementOrTreeIndex._placesNode);
-        return aElementOrTreeIndex.getAttribute("label") == aNewValue;
+      if (!aNewValue && aElementOrTreeIndex.localName != "toolbarbutton") {
+        return aElementOrTreeIndex.getAttribute("label") == PlacesUIUtils.getBestTitle(aElementOrTreeIndex._placesNode);
       }
+      return aElementOrTreeIndex.getAttribute("label") == aNewValue;
     };
 
     for (var i = 0; i < views.length; i++) {
-      var [node, index, valid] = searchItemInView(aItemId, views[i], validator);
+      var [node, , valid] = searchItemInView(aItemId, views[i], validator);
       isnot(node, null, "Found changed Places node in " + views[i]);
       is(node.title, aNewValue, "Node has correct title: " + aNewValue);
       ok(valid, "Node element has correct label: " + aNewValue);
@@ -314,7 +312,7 @@ function searchItemInView(aItemId, aView, aValidator) {
  * @returns [node, index] or [null, null] if not found.
  */
 function getNodeForToolbarItem(aItemId, aValidator) {
-  var toolbar = document.getElementById("PlacesToolbarItems");
+  var placesToolbarItems = document.getElementById("PlacesToolbarItems");
 
   function findNode(aContainer) {
     var children = aContainer.childNodes;
@@ -346,7 +344,7 @@ function getNodeForToolbarItem(aItemId, aValidator) {
     return [null, null];
   }
 
-  return findNode(toolbar);
+  return findNode(placesToolbarItems);
 }
 
 /**
@@ -468,13 +466,10 @@ function getViewsForFolder(aFolderId) {
   switch (rootId) {
     case PlacesUtils.toolbarFolderId:
       return ["toolbar", "sidebar"]
-      break;
     case PlacesUtils.bookmarksMenuFolderId:
       return ["menu", "sidebar"]
-      break;
     case PlacesUtils.unfiledBookmarksFolderId:
       return ["sidebar"]
-      break;
   }
   return new Array();
 }

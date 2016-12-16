@@ -12,7 +12,6 @@ define(function (require, exports, module) {
 
   // Reps
   const { createFactories, isGrip } = require("./rep-utils");
-  const { ObjectLink } = createFactories(require("./object-link"));
   const { StringRep } = require("./string");
 
   // Shortcuts
@@ -34,14 +33,15 @@ define(function (require, exports, module) {
     },
 
     render: function () {
-      let grip = this.props.object;
-      let value = grip.preview.value;
+      let object = this.props.object;
+      let value = object.preview.value;
+      let objectLink = this.props.objectLink || span;
 
       return (
-        ObjectLink({className: "Attr"},
+        objectLink({className: "objectLink-Attr", object},
           span({},
             span({className: "attrTitle"},
-              this.getTitle(grip)
+              this.getTitle(object)
             ),
             span({className: "attrEqual"},
               "="

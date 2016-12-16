@@ -86,7 +86,7 @@ TooltipTextProvider.prototype = {
             titleText += "\n" + andXMoreStr;
           }
         }
-      } catch(e) {}
+      } catch (e) {}
     }
 
     // Check texts against null so that title="" can be used to undefine a
@@ -128,7 +128,7 @@ TooltipTextProvider.prototype = {
       tipElement = tipElement.parentNode;
     }
 
-    return [titleText, XLinkTitleText, SVGTitleText, XULtooltiptextText].some(function (t) {
+    return [titleText, XLinkTitleText, SVGTitleText, XULtooltiptextText].some(function(t) {
       if (t && /\S/.test(t)) {
         // Make CRLF and CR render one line break each.
         textOut.value = t.replace(/\r\n?/g, '\n');

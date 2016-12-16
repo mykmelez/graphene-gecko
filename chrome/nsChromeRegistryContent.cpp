@@ -75,7 +75,6 @@ nsChromeRegistryContent::RegisterPackage(const ChromePackage& aPackage)
       return;
   }
   if (aPackage.skinBaseURI.spec.Length()) {
-    nsCOMPtr<nsIURI> skinBaseURI;
     nsresult rv = NS_NewURI(getter_AddRefs(skin),
                             aPackage.skinBaseURI.spec,
                             aPackage.skinBaseURI.charset.get(),
@@ -223,6 +222,7 @@ nsChromeRegistryContent::IsLocaleRTL(const nsACString& aPackage,
 
 NS_IMETHODIMP
 nsChromeRegistryContent::GetSelectedLocale(const nsACString& aPackage,
+                                           bool aAsBCP47,
                                            nsACString& aLocale)
 {
   if (aPackage != nsDependentCString("global")) {
@@ -230,6 +230,9 @@ nsChromeRegistryContent::GetSelectedLocale(const nsACString& aPackage,
     return NS_ERROR_NOT_AVAILABLE;
   }
   aLocale = mLocale;
+  if (aAsBCP47) {
+    SanitizeForBCP47(aLocale);
+  }
   return NS_OK;
 }
   

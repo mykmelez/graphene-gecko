@@ -51,6 +51,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "History",
                                   "resource://gre/modules/History.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesSyncUtils",
+                                  "resource://gre/modules/PlacesSyncUtils.jsm");
 
 // The minimum amount of transactions before starting a batch. Usually we do
 // do incremental updates, a batch will cause views to completely
@@ -104,7 +106,7 @@ function notify(observers, notification, args) {
  * @param keyword
  *        The keyword to notify, or empty string if a keyword was removed.
  */
-function* notifyKeywordChange(url, keyword) {
+function* notifyKeywordChange(url, keyword, source) {
   // Notify bookmarks about the removal.
   let bookmarks = [];
   yield PlacesUtils.bookmarks.fetch({ url }, b => bookmarks.push(b));
@@ -122,7 +124,7 @@ function* notifyKeywordChange(url, keyword) {
                                          bookmark.type,
                                          bookmark.parentId,
                                          bookmark.guid, bookmark.parentGuid,
-                                         ""
+                                         "", source
                                        ]);
   }
   gIgnoreKeywordNotifications = false;
@@ -211,6 +213,98 @@ function serializeNode(aNode, aIsLivemark) {
   return JSON.stringify(data);
 }
 
+// Imposed to limit database size.
+const DB_URL_LENGTH_MAX = 65536;
+const DB_TITLE_LENGTH_MAX = 4096;
+
+/**
+ * List of bookmark object validators, one per each known property.
+ * Validators must throw if the property value is invalid and return a fixed up
+ * version of the value, if needed.
+ */
+const BOOKMARK_VALIDATORS = Object.freeze({
+  guid: simpleValidateFunc(v => PlacesUtils.isValidGuid(v)),
+  parentGuid: simpleValidateFunc(v => typeof(v) == "string" &&
+                                      /^[a-zA-Z0-9\-_]{12}$/.test(v)),
+  index: simpleValidateFunc(v => Number.isInteger(v) &&
+                                 v >= PlacesUtils.bookmarks.DEFAULT_INDEX),
+  dateAdded: simpleValidateFunc(v => v.constructor.name == "Date"),
+  lastModified: simpleValidateFunc(v => v.constructor.name == "Date"),
+  type: simpleValidateFunc(v => Number.isInteger(v) &&
+                                [ PlacesUtils.bookmarks.TYPE_BOOKMARK
+                                , PlacesUtils.bookmarks.TYPE_FOLDER
+                                , PlacesUtils.bookmarks.TYPE_SEPARATOR ].includes(v)),
+  title: v => {
+    simpleValidateFunc(val => val === null || typeof(val) == "string").call(this, v);
+    if (!v)
+      return null;
+    return v.slice(0, DB_TITLE_LENGTH_MAX);
+  },
+  url: v => {
+    simpleValidateFunc(val => (typeof(val) == "string" && val.length <= DB_URL_LENGTH_MAX) ||
+                              (val instanceof Ci.nsIURI && val.spec.length <= DB_URL_LENGTH_MAX) ||
+                              (val instanceof URL && val.href.length <= DB_URL_LENGTH_MAX)
+                      ).call(this, v);
+    if (typeof(v) === "string")
+      return new URL(v);
+    if (v instanceof Ci.nsIURI)
+      return new URL(v.spec);
+    return v;
+  },
+  source: simpleValidateFunc(v => Number.isInteger(v) &&
+                                  Object.values(PlacesUtils.bookmarks.SOURCES).includes(v)),
+});
+
+// Sync bookmark records can contain additional properties.
+const SYNC_BOOKMARK_VALIDATORS = Object.freeze({
+  // Sync uses Places GUIDs for all records except roots.
+  syncId: simpleValidateFunc(v => typeof v == "string" && (
+                                  (PlacesSyncUtils.bookmarks.ROOTS.includes(v) ||
+                                   PlacesUtils.isValidGuid(v)))),
+  parentSyncId: v => SYNC_BOOKMARK_VALIDATORS.syncId(v),
+  // Sync uses kinds instead of types, which distinguish between livemarks,
+  // queries, and smart bookmarks.
+  kind: simpleValidateFunc(v => typeof v == "string" &&
+                                Object.values(PlacesSyncUtils.bookmarks.KINDS).includes(v)),
+  query: simpleValidateFunc(v => v === null || (typeof v == "string" && v)),
+  folder: simpleValidateFunc(v => typeof v == "string" && v &&
+                                  v.length <= Ci.nsITaggingService.MAX_TAG_LENGTH),
+  tags: v => {
+    if (v === null) {
+      return [];
+    }
+    if (!Array.isArray(v)) {
+      throw new Error("Invalid tag array");
+    }
+    for (let tag of v) {
+      if (typeof tag != "string" || !tag ||
+          tag.length > Ci.nsITaggingService.MAX_TAG_LENGTH) {
+        throw new Error(`Invalid tag: ${tag}`);
+      }
+    }
+    return v;
+  },
+  keyword: simpleValidateFunc(v => v === null || typeof v == "string"),
+  description: simpleValidateFunc(v => v === null || typeof v == "string"),
+  loadInSidebar: simpleValidateFunc(v => v === true || v === false),
+  feed: v => v === null ? v : BOOKMARK_VALIDATORS.url(v),
+  site: v => v === null ? v : BOOKMARK_VALIDATORS.url(v),
+  title: BOOKMARK_VALIDATORS.title,
+  url: BOOKMARK_VALIDATORS.url,
+});
+
+// Sync change records are passed between `PlacesSyncUtils` and the Sync
+// bookmarks engine, and are used to update an item's sync status and change
+// counter at the end of a sync.
+const SYNC_CHANGE_RECORD_VALIDATORS = Object.freeze({
+  modified: simpleValidateFunc(v => typeof v == "number" && v >= 0),
+  counter: simpleValidateFunc(v => typeof v == "number" && v >= 0),
+  status: simpleValidateFunc(v => typeof v == "number" &&
+                                  Object.values(PlacesUtils.bookmarks.SYNC_STATUS).includes(v)),
+  tombstone: simpleValidateFunc(v => v === true || v === false),
+  synced: simpleValidateFunc(v => v === true || v === false),
+});
+
 this.PlacesUtils = {
   // Place entries that are containers, e.g. bookmark folders or queries.
   TYPE_X_MOZ_PLACE_CONTAINER: "text/x-moz-place-container",
@@ -233,6 +327,7 @@ this.PlacesUtils = {
   POST_DATA_ANNO: "bookmarkProperties/POSTData",
   READ_ONLY_ANNO: "placesInternal/READ_ONLY",
   CHARSET_ANNO: "URIProperties/characterSet",
+  MOBILE_ROOT_ANNO: "mobile/bookmarksRoot",
 
   TOPIC_SHUTDOWN: "places-shutdown",
   TOPIC_INIT_COMPLETE: "places-init-complete",
@@ -267,7 +362,8 @@ this.PlacesUtils = {
    * @return (Boolean)
    */
   isValidGuid(guid) {
-    return (/^[a-zA-Z0-9\-_]{12}$/.test(guid));
+    return typeof guid == "string" && guid &&
+           (/^[a-zA-Z0-9\-_]{12}$/.test(guid));
   },
 
   /**
@@ -324,6 +420,28 @@ this.PlacesUtils = {
 
   getString: function PU_getString(key) {
     return bundle.GetStringFromName(key);
+  },
+
+  /**
+   * Makes a moz-action URI for the given action and set of parameters.
+   *
+   * @param   type
+   *          The action type.
+   * @param   params
+   *          A JS object of action params.
+   * @returns A moz-action URI as a string.
+   */
+  mozActionURI(type, params) {
+    let encodedParams = {};
+    for (let key in params) {
+      // Strip null or undefined.
+      // Regardless, don't encode them or they would be converted to a string.
+      if (params[key] === null || params[key] === undefined) {
+        continue;
+      }
+      encodedParams[key] = encodeURIComponent(params[key]);
+    }
+    return "moz-action:" + type + "," + JSON.stringify(encodedParams);
   },
 
   /**
@@ -391,6 +509,76 @@ this.PlacesUtils = {
     }
   },
 
+  /**
+   * Checks validity of an object, filling up default values for optional
+   * properties.
+   *
+   * @param validators (object)
+   *        An object containing input validators. Keys should be field names;
+   *        values should be validation functions.
+   * @param props (object)
+   *        The object to validate.
+   * @param behavior (object) [optional]
+   *        Object defining special behavior for some of the properties.
+   *        The following behaviors may be optionally set:
+   *         - requiredIf: if the provided condition is satisfied, then this
+   *                       property is required.
+   *         - validIf: if the provided condition is not satisfied, then this
+   *                    property is invalid.
+   *         - defaultValue: an undefined property should default to this value.
+   *
+   * @return a validated and normalized item.
+   * @throws if the object contains invalid data.
+   * @note any unknown properties are pass-through.
+   */
+  validateItemProperties(validators, props, behavior = {}) {
+    if (!props)
+      throw new Error("Input should be a valid object");
+    // Make a shallow copy of `props` to avoid mutating the original object
+    // when filling in defaults.
+    let input = Object.assign({}, props);
+    let normalizedInput = {};
+    let required = new Set();
+    for (let prop in behavior) {
+      if (behavior[prop].hasOwnProperty("required") && behavior[prop].required) {
+        required.add(prop);
+      }
+      if (behavior[prop].hasOwnProperty("requiredIf") && behavior[prop].requiredIf(input)) {
+        required.add(prop);
+      }
+      if (behavior[prop].hasOwnProperty("validIf") && input[prop] !== undefined &&
+          !behavior[prop].validIf(input)) {
+        throw new Error(`Invalid value for property '${prop}': ${input[prop]}`);
+      }
+      if (behavior[prop].hasOwnProperty("defaultValue") && input[prop] === undefined) {
+        input[prop] = behavior[prop].defaultValue;
+      }
+    }
+
+    for (let prop in input) {
+      if (required.has(prop)) {
+        required.delete(prop);
+      } else if (input[prop] === undefined) {
+        // Skip undefined properties that are not required.
+        continue;
+      }
+      if (validators.hasOwnProperty(prop)) {
+        try {
+          normalizedInput[prop] = validators[prop](input[prop], input);
+        } catch (ex) {
+          throw new Error(`Invalid value for property '${prop}': ${input[prop]}`);
+        }
+      }
+    }
+    if (required.size > 0)
+      throw new Error(`The following properties were expected: ${[...required].join(", ")}`);
+    return normalizedInput;
+  },
+
+  BOOKMARK_VALIDATORS,
+  SYNC_BOOKMARK_VALIDATORS,
+  SYNC_CHANGE_RECORD_VALIDATORS,
+
   QueryInterface: XPCOMUtils.generateQI([
     Ci.nsIObserver
   , Ci.nsITransactionListener
@@ -406,8 +594,7 @@ this.PlacesUtils = {
     this._shutdownFunctions.push(aFunc);
   },
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// nsIObserver
+  // nsIObserver
   observe: function PU_observe(aSubject, aTopic, aData)
   {
     switch (aTopic) {
@@ -440,8 +627,7 @@ this.PlacesUtils = {
   onPageAnnotationRemoved: function() {},
 
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// nsITransactionListener
+  // nsITransactionListener
 
   didDo: function PU_didDo(aManager, aTransaction, aDoResult)
   {
@@ -737,7 +923,7 @@ this.PlacesUtils = {
   unwrapNodes: function PU_unwrapNodes(blob, type) {
     // We split on "\n"  because the transferable system converts "\r\n" to "\n"
     var nodes = [];
-    switch(type) {
+    switch (type) {
       case this.TYPE_X_MOZ_PLACE:
       case this.TYPE_X_MOZ_PLACE_SEPARATOR:
       case this.TYPE_X_MOZ_PLACE_CONTAINER:
@@ -750,11 +936,11 @@ this.PlacesUtils = {
         // but drag and drop of files from the shell has parts.length = 1
         if (parts.length != 1 && parts.length % 2)
           break;
-        for (let i = 0; i < parts.length; i=i+2) {
+        for (let i = 0; i < parts.length; i = i + 2) {
           let uriString = parts[i];
           let titleString = "";
-          if (parts.length > i+1)
-            titleString = parts[i+1];
+          if (parts.length > i + 1)
+            titleString = parts[i + 1];
           else {
             // for drag and drop of files, try to use the leafName as title
             try {
@@ -766,7 +952,7 @@ this.PlacesUtils = {
           // note:  this._uri() will throw if uriString is not a valid URI
           if (this._uri(uriString)) {
             nodes.push({ uri: uriString,
-                         title: titleString ? titleString : uriString ,
+                         title: titleString ? titleString : uriString,
                          type: this.TYPE_X_MOZ_URL });
           }
         }
@@ -903,19 +1089,19 @@ this.PlacesUtils = {
    *        name, flags, expires.
    *        If the value for an annotation is not set it will be removed.
    */
-  setAnnotationsForItem: function PU_setAnnotationsForItem(aItemId, aAnnos) {
+  setAnnotationsForItem: function PU_setAnnotationsForItem(aItemId, aAnnos, aSource) {
     var annosvc = this.annotations;
 
     aAnnos.forEach(function(anno) {
       if (anno.value === undefined || anno.value === null) {
-        annosvc.removeItemAnnotation(aItemId, anno.name);
+        annosvc.removeItemAnnotation(aItemId, anno.name, aSource);
       }
       else {
         let flags = ("flags" in anno) ? anno.flags : 0;
         let expires = ("expires" in anno) ?
           anno.expires : Ci.nsIAnnotationService.EXPIRE_NEVER;
         annosvc.setItemAnnotation(aItemId, anno.name, anno.value, flags,
-                                  expires);
+                                  expires, aSource);
       }
     });
   },
@@ -948,6 +1134,11 @@ this.PlacesUtils = {
     return this.unfiledBookmarksFolderId = this.bookmarks.unfiledBookmarksFolder;
   },
 
+  get mobileFolderId() {
+    delete this.mobileFolderId;
+    return this.mobileFolderId = this.bookmarks.mobileFolder;
+  },
+
   /**
    * Checks if aItemId is a root.
    *
@@ -960,7 +1151,8 @@ this.PlacesUtils = {
            aItemId == PlacesUtils.toolbarFolderId ||
            aItemId == PlacesUtils.unfiledBookmarksFolderId ||
            aItemId == PlacesUtils.tagsFolderId ||
-           aItemId == PlacesUtils.placesRootId;
+           aItemId == PlacesUtils.placesRootId ||
+           aItemId == PlacesUtils.mobileFolderId;
   },
 
   /**
@@ -999,7 +1191,7 @@ this.PlacesUtils = {
 
       // Fetch keywords for this href.
       let cache = yield gKeywordsCachePromise;
-      for (let [ keyword, entry ] of cache) {
+      for (let [ , entry ] of cache) {
         // Set the POST data on keywords not having it.
         if (entry.url.href == bm.url.href && !entry.postData) {
           entry.postData = aPostData;
@@ -1450,10 +1642,10 @@ this.PlacesUtils = {
    *           properties: { uri, dataLen, data, mimeType }
    * @rejects JavaScript exception if the given url has no associated favicon.
    */
-  promiseFaviconData: function (aPageUrl) {
+  promiseFaviconData: function(aPageUrl) {
     let deferred = Promise.defer();
     PlacesUtils.favicons.getFaviconDataForPage(NetUtil.newURI(aPageUrl),
-      function (aURI, aDataLen, aData, aMimeType) {
+      function(aURI, aDataLen, aData, aMimeType) {
         if (aURI) {
           deferred.resolve({ uri: aURI,
                              dataLen: aDataLen,
@@ -1473,7 +1665,7 @@ this.PlacesUtils = {
    * @resolves to the nsIURL of the favicon link
    * @rejects if the given url has no associated favicon.
    */
-  promiseFaviconLinkUrl: function (aPageUrl) {
+  promiseFaviconLinkUrl: function(aPageUrl) {
     let deferred = Promise.defer();
     if (!(aPageUrl instanceof Ci.nsIURI))
       aPageUrl = NetUtil.newURI(aPageUrl);
@@ -1653,6 +1845,8 @@ this.PlacesUtils = {
             item.root = "unfiledBookmarksFolder";
           else if (itemId == PlacesUtils.toolbarFolderId)
             item.root = "toolbarFolder";
+          else if (itemId == PlacesUtils.mobileFolderId)
+            item.root = "mobileFolder";
           break;
         case Ci.nsINavBookmarksService.TYPE_SEPARATOR:
           item.type = PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR;
@@ -1665,7 +1859,8 @@ this.PlacesUtils = {
     }.bind(this);
 
     const QUERY_STR =
-      `WITH RECURSIVE
+      `/* do not warn (bug no): cannot use an index */
+       WITH RECURSIVE
        descendants(fk, level, type, id, guid, parent, parentGuid, position,
                    title, dateAdded, lastModified) AS (
          SELECT b1.fk, 0, b1.type, b1.id, b1.guid, b1.parent,
@@ -1733,7 +1928,7 @@ this.PlacesUtils = {
                                                         , writable: true
                                                         , enumerable: false
                                                         , configurable: false });
-        } catch(ex) {
+        } catch (ex) {
           throw new Error("Failed to fetch the data for the root item " + ex);
         }
       } else {
@@ -1752,7 +1947,7 @@ this.PlacesUtils = {
             parentItem.children = [item];
 
           rootItem.itemsCount++;
-        } catch(ex) {
+        } catch (ex) {
           // This is a bogus child, report and skip it.
           Cu.reportError("Failed to fetch the data for an item " + ex);
           continue;
@@ -1837,7 +2032,7 @@ XPCOMUtils.defineLazyGetter(PlacesUtils, "transactionManager", function() {
   let tm = Cc["@mozilla.org/transactionmanager;1"].
            createInstance(Ci.nsITransactionManager);
   tm.AddListener(PlacesUtils);
-  this.registerShutdownFunction(function () {
+  this.registerShutdownFunction(function() {
     // Clear all references to local transactions in the transaction manager,
     // this prevents from leaking it.
     this.transactionManager.RemoveListener(this);
@@ -1916,7 +2111,7 @@ function setupDbForShutdown(conn, name) {
       () => promiseClosed.catch(Cu.reportError),
       () => state
     );
-  } catch(ex) {
+  } catch (ex) {
     // It's too late to block shutdown, just close the connection.
     conn.close();
     throw ex;
@@ -1963,7 +2158,7 @@ var Keywords = {
    * @resolves to an object in the form: { keyword, url, postData },
    *           or null if a keyword entry was not found.
    */
-  fetch(keywordOrEntry, onResult=null) {
+  fetch(keywordOrEntry, onResult = null) {
     if (typeof(keywordOrEntry) == "string")
       keywordOrEntry = { keyword: keywordOrEntry };
 
@@ -2043,7 +2238,8 @@ var Keywords = {
       throw new Error("Invalid POST data");
     if (!("url" in keywordEntry))
       throw new Error("undefined is not a valid URL");
-    let { keyword, url } = keywordEntry;
+    let { keyword, url,
+          source = Ci.nsINavBookmarksService.SOURCE_DEFAULT } = keywordEntry;
     keyword = keyword.trim().toLowerCase();
     let postData = keywordEntry.postData || null;
     // This also checks href for validity
@@ -2071,7 +2267,7 @@ var Keywords = {
                  post_data = :post_data
              WHERE keyword = :keyword
             `, { url: url.href, keyword: keyword, post_data: postData });
-          yield notifyKeywordChange(oldEntry.url.href, "");
+          yield notifyKeywordChange(oldEntry.url.href, "", source);
         } else {
           // An entry for the given page could be missing, in such a case we need to
           // create it.  The IGNORE conflict can trigger on `guid`.
@@ -2088,10 +2284,13 @@ var Keywords = {
             `, { url: url.href, keyword: keyword, post_data: postData });
         }
 
+        yield PlacesSyncUtils.bookmarks.addSyncChangesForBookmarksWithURL(
+          db, url, PlacesSyncUtils.bookmarks.determineSyncChangeDelta(source));
+
         cache.set(keyword, { keyword, url, postData });
 
         // In any case, notify about the new keyword.
-        yield notifyKeywordChange(url.href, keyword);
+        yield notifyKeywordChange(url.href, keyword, source);
       }.bind(this))
     );
   },
@@ -2104,10 +2303,17 @@ var Keywords = {
    * @return {Promise}
    * @resolves when the removal is complete.
    */
-  remove(keyword) {
-    if (!keyword || typeof(keyword) != "string")
+  remove(keywordOrEntry) {
+    if (typeof(keywordOrEntry) == "string")
+      keywordOrEntry = { keyword: keywordOrEntry };
+
+    if (keywordOrEntry === null || typeof(keywordOrEntry) != "object" ||
+        !keywordOrEntry.keyword || typeof keywordOrEntry.keyword != "string")
       throw new Error("Invalid keyword");
-    keyword = keyword.trim().toLowerCase();
+
+    let { keyword,
+          source = Ci.nsINavBookmarksService.SOURCE_DEFAULT } = keywordOrEntry;
+    keyword = keywordOrEntry.keyword.trim().toLowerCase();
     return PlacesUtils.withConnectionWrapper("Keywords.remove",  Task.async(function*(db) {
       let cache = yield gKeywordsCachePromise;
       if (!cache.has(keyword))
@@ -2118,8 +2324,11 @@ var Keywords = {
       yield db.execute(`DELETE FROM moz_keywords WHERE keyword = :keyword`,
                        { keyword });
 
+      yield PlacesSyncUtils.bookmarks.addSyncChangesForBookmarksWithURL(
+        db, url, PlacesSyncUtils.bookmarks.determineSyncChangeDelta(source));
+
       // Notify bookmarks about the removal.
-      yield notifyKeywordChange(url.href, "");
+      yield notifyKeywordChange(url.href, "", source);
     }.bind(this))) ;
   }
 };
@@ -2186,29 +2395,54 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
           }).catch(Cu.reportError);
         },
 
-        onItemChanged(id, prop, isAnno, val, lastMod, itemType, parentId, guid) {
-          if (gIgnoreKeywordNotifications ||
-              prop != "keyword")
+        onItemChanged(id, prop, isAnno, val, lastMod, itemType, parentId, guid,
+                      parentGuid, oldVal) {
+          if (gIgnoreKeywordNotifications) {
             return;
+          }
 
-          Task.spawn(function* () {
-            let bookmark = yield PlacesUtils.bookmarks.fetch(guid);
-            // By this time the bookmark could have gone, there's nothing we can do.
-            if (!bookmark)
-              return;
+          if (prop == "keyword") {
+            this._onKeywordChanged(guid, val).catch(Cu.reportError);
+          } else if (prop == "uri") {
+            this._onUrlChanged(guid, val, oldVal).catch(Cu.reportError);
+          }
+        },
 
-            if (val.length == 0) {
-              // We are removing a keyword.
-              let keywords = keywordsForHref(bookmark.url.href)
-              for (let keyword of keywords) {
-                cache.delete(keyword);
-              }
-            } else {
-              // We are adding a new keyword.
-              cache.set(val, { keyword: val, url: bookmark.url });
+        _onKeywordChanged: Task.async(function* (guid, keyword) {
+          let bookmark = yield PlacesUtils.bookmarks.fetch(guid);
+          // Due to mixed sync/async operations, by this time the bookmark could
+          // have disappeared and we already handle removals in onItemRemoved.
+          if (!bookmark) {
+            return;
+          }
+
+          if (keyword.length == 0) {
+            // We are removing a keyword.
+            let keywords = keywordsForHref(bookmark.url.href)
+            for (let kw of keywords) {
+              cache.delete(kw);
             }
-          }).catch(Cu.reportError);
-        }
+          } else {
+            // We are adding a new keyword.
+            cache.set(keyword, { keyword, url: bookmark.url });
+          }
+        }),
+
+        _onUrlChanged: Task.async(function* (guid, url, oldUrl) {
+          // Check if the old url is associated with keywords.
+          let entries = [];
+          yield PlacesUtils.keywords.fetch({ url: oldUrl }, e => entries.push(e));
+          if (entries.length == 0) {
+            return;
+          }
+
+          // Move the keywords to the new url.
+          for (let entry of entries) {
+            yield PlacesUtils.keywords.remove(entry.keyword);
+            entry.url = new URL(url);
+            yield PlacesUtils.keywords.insert(entry);
+          }
+        }),
       };
 
       PlacesUtils.bookmarks.addObserver(observer, false);
@@ -2301,7 +2535,7 @@ var GuidHelper = {
     this.idsForGuids.delete(guid);
   },
 
-  ensureObservingRemovedItems: function () {
+  ensureObservingRemovedItems: function() {
     if (!("observer" in this)) {
       /**
        * This observers serves two purposes:
@@ -2339,8 +2573,7 @@ var GuidHelper = {
   }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-//// Transactions handlers.
+// Transactions handlers.
 
 /**
  * Updates commands in the undo group of the active window commands.
@@ -3253,14 +3486,18 @@ PlacesSetPageAnnotationTransaction.prototype = {
  *        new keyword for the bookmark
  * @param aNewPostData [optional]
  *        new keyword's POST data, if available
+ * @param aOldKeyword [optional]
+ *        old keyword of the bookmark
  *
  * @return nsITransaction object
  */
 this.PlacesEditBookmarkKeywordTransaction =
- function PlacesEditBookmarkKeywordTransaction(aItemId, aNewKeyword, aNewPostData)
-{
+  function PlacesEditBookmarkKeywordTransaction(aItemId, aNewKeyword,
+                                                aNewPostData, aOldKeyword) {
   this.item = new TransactionItemCache();
   this.item.id = aItemId;
+  this.item.keyword = aOldKeyword;
+  this.item.href = (PlacesUtils.bookmarks.getBookmarkURI(aItemId)).spec;
   this.new = new TransactionItemCache();
   this.new.keyword = aNewKeyword;
   this.new.postData = aNewPostData
@@ -3271,22 +3508,55 @@ PlacesEditBookmarkKeywordTransaction.prototype = {
 
   doTransaction: function EBKTXN_doTransaction()
   {
-    // Store the current values.
-    this.item.keyword = PlacesUtils.bookmarks.getKeywordForBookmark(this.item.id);
-    if (this.item.keyword)
-      this.item.postData = PlacesUtils.getPostDataForBookmark(this.item.id);
+    let done = false;
+    Task.spawn(function* () {
+      if (this.item.keyword) {
+        let oldEntry = yield PlacesUtils.keywords.fetch(this.item.keyword);
+        this.item.postData = oldEntry.postData;
+        yield PlacesUtils.keywords.remove(this.item.keyword);
+      }
 
-    // Update the keyword.
-    PlacesUtils.bookmarks.setKeywordForBookmark(this.item.id, this.new.keyword);
-    if (this.new.keyword && this.new.postData)
-      PlacesUtils.setPostDataForBookmark(this.item.id, this.new.postData);
+      if (this.new.keyword) {
+        yield PlacesUtils.keywords.insert({
+          url: this.item.href,
+          keyword: this.new.keyword,
+          postData: this.new.postData || this.item.postData
+        });
+      }
+    }.bind(this)).catch(Cu.reportError)
+                 .then(() => done = true);
+    // TODO: Until we can move to PlacesTransactions.jsm, we must spin the
+    // events loop :(
+    let thread = Services.tm.currentThread;
+    while (!done) {
+      thread.processNextEvent(true);
+    }
   },
 
   undoTransaction: function EBKTXN_undoTransaction()
   {
-    PlacesUtils.bookmarks.setKeywordForBookmark(this.item.id, this.item.keyword);
-    if (this.item.postData)
-      PlacesUtils.setPostDataForBookmark(this.item.id, this.item.postData);
+
+    let done = false;
+    Task.spawn(function* () {
+      if (this.new.keyword) {
+        yield PlacesUtils.keywords.remove(this.new.keyword);
+      }
+
+      if (this.item.keyword) {
+        yield PlacesUtils.keywords.insert({
+          url: this.item.href,
+          keyword: this.item.keyword,
+          postData: this.item.postData
+        });
+      }
+    }.bind(this)).catch(Cu.reportError)
+                 .then(() => done = true);
+    // TODO: Until we can move to PlacesTransactions.jsm, we must spin the
+    // events loop :(
+    let thread = Services.tm.currentThread;
+    while (!done) {
+      thread.processNextEvent(true);
+    }
   }
 };
 
@@ -3442,7 +3712,7 @@ PlacesSortFolderByNameTransaction.prototype = {
     let newOrder = [];
     let preSep = []; // temporary array for sorting each group of items
     let sortingMethod =
-      function (a, b) {
+      function(a, b) {
         if (PlacesUtils.nodeIsContainer(a) && !PlacesUtils.nodeIsContainer(b))
           return -1;
         if (!PlacesUtils.nodeIsContainer(a) && PlacesUtils.nodeIsContainer(b))
@@ -3583,7 +3853,7 @@ PlacesUntagURITransaction.prototype = {
     // Filter tags existing on the bookmark, otherwise on undo we may try to
     // set nonexistent tags.
     let tags = PlacesUtils.tagging.getTagsForURI(this.item.uri);
-    this.item.tags = this.item.tags.filter(function (aTag) {
+    this.item.tags = this.item.tags.filter(function(aTag) {
       return tags.includes(aTag);
     });
     PlacesUtils.tagging.untagURI(this.item.uri, this.item.tags);
@@ -3594,3 +3864,19 @@ PlacesUntagURITransaction.prototype = {
     PlacesUtils.tagging.tagURI(this.item.uri, this.item.tags);
   }
 };
+
+/**
+ * Executes a boolean validate function, throwing if it returns false.
+ *
+ * @param boolValidateFn
+ *        A boolean validate function.
+ * @return the input value.
+ * @throws if input doesn't pass the validate function.
+ */
+function simpleValidateFunc(boolValidateFn) {
+  return (v, input) => {
+    if (!boolValidateFn(v, input))
+      throw new Error("Invalid value");
+    return v;
+  };
+}

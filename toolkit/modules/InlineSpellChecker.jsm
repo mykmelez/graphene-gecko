@@ -26,7 +26,7 @@ InlineSpellChecker.prototype = {
     try {
       this.mInlineSpellChecker = this.mEditor.getInlineSpellChecker(true);
       // note: this might have been NULL if there is no chance we can spellcheck
-    } catch(e) {
+    } catch (e) {
       this.mInlineSpellChecker = null;
     }
   },
@@ -81,7 +81,7 @@ InlineSpellChecker.prototype = {
 
     var range = this.mInlineSpellChecker.getMisspelledWord(rangeParent,
                                                           rangeOffset);
-    if (! range)
+    if (!range)
       return; // not over a misspelled word
 
     this.mMisspelling = range.toString();
@@ -143,16 +143,16 @@ InlineSpellChecker.prototype = {
     try {
       if (!this.mRemote && !spellchecker.CheckCurrentWord(this.mMisspelling))
         return 0;  // word seems not misspelled after all (?)
-    } catch(e) {
+    } catch (e) {
         return 0;
     }
 
     this.mMenu = menu;
     this.mSpellSuggestions = [];
     this.mSuggestionItems = [];
-    for (var i = 0; i < maxNumber; i ++) {
+    for (var i = 0; i < maxNumber; i++) {
       var suggestion = spellchecker.GetSuggestedWord();
-      if (! suggestion.length)
+      if (!suggestion.length)
         break;
       this.mSpellSuggestions.push(suggestion);
 
@@ -174,7 +174,7 @@ InlineSpellChecker.prototype = {
   // (call from popup hiding)
   clearSuggestionsFromMenu: function()
   {
-    for (var i = 0; i < this.mSuggestionItems.length; i ++) {
+    for (var i = 0; i < this.mSuggestionItems.length; i++) {
       this.mMenu.removeChild(this.mSuggestionItems[i]);
     }
     this.mSuggestionItems = [];
@@ -182,7 +182,7 @@ InlineSpellChecker.prototype = {
 
   sortDictionaryList: function(list) {
     var sortedList = [];
-    for (var i = 0; i < list.length; i ++) {
+    for (var i = 0; i < list.length; i++) {
       sortedList.push({"id": list[i],
                        "label": this.getDictionaryDisplayName(list[i])});
     }
@@ -219,15 +219,14 @@ InlineSpellChecker.prototype = {
       var o1 = {}, o2 = {};
       spellchecker.GetDictionaryList(o1, o2);
       list = o1.value;
-      var listcount = o2.value;
       try {
         curlang = spellchecker.GetCurrentDictionary();
-      } catch(e) {}
+      } catch (e) {}
     }
 
     var sortedList = this.sortDictionaryList(list);
 
-    for (var i = 0; i < sortedList.length; i ++) {
+    for (var i = 0; i < sortedList.length; i++) {
       this.mDictionaryNames.push(sortedList[i].id);
       var item = menu.ownerDocument.createElement("menuitem");
       item.setAttribute("id", "spell-check-dictionary-" + sortedList[i].id);
@@ -263,8 +262,8 @@ InlineSpellChecker.prototype = {
     try {
       // Get the display name for this dictionary.
       let languageTagMatch = /^([a-z]{2,3}|[a-z]{4}|[a-z]{5,8})(?:[-_]([a-z]{4}))?(?:[-_]([A-Z]{2}|[0-9]{3}))?((?:[-_](?:[a-z0-9]{5,8}|[0-9][a-z0-9]{3}))*)(?:[-_][a-wy-z0-9](?:[-_][a-z0-9]{2,8})+)*(?:[-_]x(?:[-_][a-z0-9]{1,8})+)?$/i;
-      var [languageTag, languageSubtag, scriptSubtag, regionSubtag, variantSubtags] = dictionaryName.match(languageTagMatch);
-    } catch(e) {
+      var [/* languageTag */, languageSubtag, scriptSubtag, regionSubtag, variantSubtags] = dictionaryName.match(languageTagMatch);
+    } catch (e) {
       // If we weren't given a valid language tag, just use the raw dictionary name.
       return dictionaryName;
     }
@@ -284,7 +283,7 @@ InlineSpellChecker.prototype = {
     // Language subtag will normally be 2 or 3 letters, but could be up to 8.
     try {
       displayName += gLanguageBundle.GetStringFromName(languageSubtag.toLowerCase());
-    } catch(e) {
+    } catch (e) {
       displayName += languageSubtag.toLowerCase(); // Fall back to raw language subtag.
     }
 
@@ -294,7 +293,7 @@ InlineSpellChecker.prototype = {
 
       try {
         displayName += gRegionBundle.GetStringFromName(regionSubtag.toLowerCase());
-      } catch(e) {
+      } catch (e) {
         displayName += regionSubtag.toUpperCase(); // Fall back to raw region subtag.
       }
 
@@ -321,7 +320,7 @@ InlineSpellChecker.prototype = {
   // (call on popup hiding)
   clearDictionaryListFromMenu: function()
   {
-    for (var i = 0; i < this.mDictionaryItems.length; i ++) {
+    for (var i = 0; i < this.mDictionaryItems.length; i++) {
       this.mDictionaryMenu.removeChild(this.mDictionaryItems[i]);
     }
     this.mDictionaryItems = [];
@@ -334,7 +333,7 @@ InlineSpellChecker.prototype = {
       this.mRemote.selectDictionary(index);
       return;
     }
-    if (! this.mInlineSpellChecker || index < 0 || index >= this.mDictionaryNames.length)
+    if (!this.mInlineSpellChecker || index < 0 || index >= this.mDictionaryNames.length)
       return;
     var spellchecker = this.mInlineSpellChecker.spellChecker;
     spellchecker.SetCurrentDictionary(this.mDictionaryNames[index]);
@@ -348,7 +347,7 @@ InlineSpellChecker.prototype = {
       this.mRemote.replaceMisspelling(index);
       return;
     }
-    if (! this.mInlineSpellChecker || ! this.mOverMisspelling)
+    if (!this.mInlineSpellChecker || !this.mOverMisspelling)
       return;
     if (index < 0 || index >= this.mSpellSuggestions.length)
       return;
@@ -506,7 +505,7 @@ var SpellCheckHelper = {
             isEditable = true;
           }
         }
-        catch(ex) {
+        catch (ex) {
           // If someone built with composer disabled, we can't get an editing session.
         }
 

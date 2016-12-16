@@ -8,7 +8,7 @@ var expectedData;
 var TestObserver = {
   QueryInterface : XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
 
-  observe : function (subject, topic, data) {
+  observe : function(subject, topic, data) {
     do_check_eq(topic, "passwordmgr-storage-changed");
     do_check_eq(data, expectedNotification);
 
@@ -67,7 +67,7 @@ Services.obs.addObserver(TestObserver, "passwordmgr-storage-changed", false);
 
 /* ========== 1 ========== */
 testnum = 1;
-testdesc = "Initial connection to storage module"
+testdesc = "Initial connection to storage module";
 
 /* ========== 2 ========== */
 testnum++;
@@ -84,7 +84,7 @@ testnum++;
 testdesc = "modifyLogin";
 
 expectedNotification = "modifyLogin";
-expectedData=[testuser1, testuser2];
+expectedData = [testuser1, testuser2];
 Services.logins.modifyLogin(testuser1, testuser2);
 do_check_eq(expectedNotification, null);
 LoginTestUtils.checkLogins([testuser2]);

@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-var SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
+var SocialService = Cu.import("resource:///modules/SocialService.jsm", {}).SocialService;
 
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
   "resource://gre/modules/Task.jsm");
@@ -17,7 +17,7 @@ var snippet =
 '         "iconURL": "chrome://branding/content/icon16.png",' +
 '         "icon32URL": "chrome://branding/content/icon32.png",' +
 '         "icon64URL": "chrome://branding/content/icon64.png",' +
-'         "sidebarURL": "https://example.com/browser/browser/base/content/test/social/social_sidebar_empty.html",' +
+'         "shareURL": "https://example.com/browser/browser/base/content/test/social/social_share.html",' +
 '         "postActivationURL": "https://example.com/browser/browser/base/content/test/social/social_postActivation.html",' +
 '       };' +
 '       function activateProvider(node) {' +
@@ -39,7 +39,7 @@ var snippet2 =
 '         "iconURL": "chrome://branding/content/icon16.png",' +
 '         "icon32URL": "chrome://branding/content/icon32.png",' +
 '         "icon64URL": "chrome://branding/content/icon64.png",' +
-'         "sidebarURL": "https://example.com/browser/browser/base/content/test/social/social_sidebar_empty.html",' +
+'         "shareURL": "https://example.com/browser/browser/base/content/test/social/social_share.html",' +
 '         "postActivationURL": "https://example.com/browser/browser/base/content/test/social/social_postActivation.html",' +
 '         "oneclick": true' +
 '       };' +
@@ -74,19 +74,19 @@ function test()
   requestLongerTimeout(2);
   ignoreAllUncaughtExceptions();
   PopupNotifications.panel.setAttribute("animate", "false");
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     PopupNotifications.panel.removeAttribute("animate");
   });
 
-  Task.spawn(function () {
-    for (let test of gTests) {
-      info(test.desc);
+  Task.spawn(function* () {
+    for (let testCase of gTests) {
+      info(testCase.desc);
 
       // Create a tab to run the test.
       let tab = gBrowser.selectedTab = gBrowser.addTab("about:blank");
 
       // Add an event handler to modify the snippets map once it's ready.
-      let snippetsPromise = promiseSetupSnippetsMap(tab, test.snippet);
+      let snippetsPromise = promiseSetupSnippetsMap(tab, testCase.snippet);
 
       // Start loading about:home and wait for it to complete, snippets should be loaded
       yield promiseTabLoadEvent(tab, "about:home", "AboutHomeLoadSnippetsCompleted");
@@ -100,11 +100,9 @@ function test()
       });
 
       yield new Promise(resolve => {
-        activateProvider(tab, test.panel).then(() => {
-          ok(SocialSidebar.provider, "provider activated");
+        activateProvider(tab, testCase.panel).then(() => {
           checkSocialUI();
-          is(gBrowser.currentURI.spec, SocialSidebar.provider.manifest.postActivationURL, "postActivationURL was loaded");
-          SocialService.uninstallProvider(SocialSidebar.provider.origin, function () {
+          SocialService.uninstallProvider("https://example.com", function() {
             info("provider uninstalled");
             resolve();
           });
@@ -132,7 +130,7 @@ function test()
  *        The load event type to wait for.  Defaults to "load".
  * @return {Promise} resolved when the event is handled.
  */
-function promiseTabLoadEvent(aTab, aURL, aEventType="load")
+function promiseTabLoadEvent(aTab, aURL, aEventType = "load")
 {
   return new Promise(resolve => {
     info("Wait tab event: " + aEventType);
@@ -176,7 +174,7 @@ function promiseSetupSnippetsMap(aTab, aSnippet)
 
         // The snippets should already be ready by this point. Here we're
         // just obtaining a reference to the snippets map.
-        cw.ensureSnippetsMapThen(function (aSnippetsMap) {
+        cw.ensureSnippetsMapThen(function(aSnippetsMap) {
           aSnippetsMap = Cu.waiveXrays(aSnippetsMap);
           console.log("Got snippets map: " +
                "{ last-update: " + aSnippetsMap.get("snippets-last-update") +
@@ -210,14 +208,12 @@ function sendActivationEvent(tab) {
 function activateProvider(tab, expectPanel, aCallback) {
   return new Promise(resolve => {
     if (expectPanel) {
-      ensureEventFired(PopupNotifications.panel, "popupshown").then(() => {
+      BrowserTestUtils.waitForEvent(PopupNotifications.panel, "popupshown").then(() => {
         let panel = document.getElementById("servicesInstall-notification");
         panel.button.click();
       });
     }
     waitForProviderLoad().then(() => {
-      ok(SocialSidebar.provider, "new provider is active");
-      ok(SocialSidebar.opened, "sidebar is open");
       checkSocialUI();
       resolve();
     });
@@ -229,6 +225,5 @@ function waitForProviderLoad(cb) {
   return Promise.all([
     promiseObserverNotified("social:provider-enabled"),
     ensureFrameLoaded(gBrowser, "https://example.com/browser/browser/base/content/test/social/social_postActivation.html"),
-    ensureFrameLoaded(SocialSidebar.browser)
   ]);
 }

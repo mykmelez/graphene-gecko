@@ -27,6 +27,7 @@ class ServiceWorkerRegistrationInfo final
 
   uint64_t mLastUpdateCheckTime;
 
+  RefPtr<ServiceWorkerInfo> mEvaluatingWorker;
   RefPtr<ServiceWorkerInfo> mActiveWorker;
   RefPtr<ServiceWorkerInfo> mWaitingWorker;
   RefPtr<ServiceWorkerInfo> mInstallingWorker;
@@ -110,9 +111,6 @@ public:
   IsLastUpdateCheckTimeOverOneDay() const;
 
   void
-  NotifyListenersOnChange(WhichServiceWorker aChangedWorkers);
-
-  void
   MaybeScheduleTimeCheckAndUpdate();
 
   void
@@ -120,6 +118,9 @@ public:
 
   bool
   CheckAndClearIfUpdateNeeded();
+
+  ServiceWorkerInfo*
+  GetEvaluating() const;
 
   ServiceWorkerInfo*
   GetInstalling() const;
@@ -130,19 +131,28 @@ public:
   ServiceWorkerInfo*
   GetActive() const;
 
+  // Set the given worker as the evaluating service worker.  The worker
+  // state is not changed.
+  void
+  SetEvaluating(ServiceWorkerInfo* aServiceWorker);
+
+  // Remove an existing evaluating worker, if present.  The worker will
+  // be transitioned to the Redundant state.
+  void
+  ClearEvaluating();
+
   // Remove an existing installing worker, if present.  The worker will
   // be transitioned to the Redundant state.
   void
   ClearInstalling();
 
-  // Set a new installing worker.  This may only be called if there is no
-  // existing installing worker.  The worker is transitioned to the Installing
-  // state.
+  // Transition the current evaluating worker to be the installing worker.  The
+  // worker's state is update to Installing.
   void
-  SetInstalling(ServiceWorkerInfo* aServiceWorker);
+  TransitionEvaluatingToInstalling();
 
   // Transition the current installing worker to be the waiting worker.  The
-  // workers state is updated to Installed.
+  // worker's state is updated to Installed.
   void
   TransitionInstallingToWaiting();
 
@@ -158,6 +168,33 @@ public:
   // worker is updated to the Activating state.
   void
   TransitionWaitingToActive();
+
+  // Determine if the registration is actively performing work.
+  bool
+  IsIdle() const;
+
+private:
+  enum TransitionType {
+    TransitionToNextState = 0,
+    Invalidate
+  };
+
+  // Queued as a runnable from UpdateRegistrationStateProperties.
+  void
+  AsyncUpdateRegistrationStateProperties(WhichServiceWorker aWorker, TransitionType aType);
+
+  // Roughly equivalent to [[Update Registration State algorithm]]. Make sure
+  // this is called *before* updating SW instances' state, otherwise they
+  // may get CC-ed.
+  void
+  UpdateRegistrationStateProperties(WhichServiceWorker aWorker, TransitionType aType);
+
+  // Used by devtools to track changes to the properties of *nsIServiceWorkerRegistrationInfo*.
+  // Note, this doesn't necessarily need to be in sync with the DOM registration objects, but
+  // it does need to be called in the same task that changed |mInstallingWorker|,
+  // |mWaitingWorker| or |mActiveWorker|.
+  void
+  NotifyChromeRegistrationListeners();
 };
 
 } // namespace workers

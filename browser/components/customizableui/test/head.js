@@ -11,8 +11,8 @@ Cu.import("resource:///modules/CustomizableUI.jsm", tmp);
 Cu.import("resource://gre/modules/AppConstants.jsm", tmp);
 var {Promise, CustomizableUI, AppConstants} = tmp;
 
-var ChromeUtils = {};
-Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/ChromeUtils.js", ChromeUtils);
+var EventUtils = {};
+Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
 Services.prefs.setBoolPref("browser.uiCustomization.skipSourceNodeCheck", true);
 registerCleanupFunction(() => Services.prefs.clearUserPref("browser.uiCustomization.skipSourceNodeCheck"));
@@ -22,7 +22,7 @@ registerCleanupFunction(() => Services.prefs.clearUserPref("browser.uiCustomizat
 CustomizableUI.destroyWidget("e10s-button");
 CustomizableUI.removeWidgetFromArea("e10s-button");
 
-var {synthesizeDragStart, synthesizeDrop} = ChromeUtils;
+var {synthesizeDragStart, synthesizeDrop} = EventUtils;
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const kTabEventFailureTimeoutInMs = 20000;
@@ -174,7 +174,7 @@ function simulateItemDrag(aToDrag, aTarget) {
   synthesizeDrop(aToDrag.parentNode, aTarget);
 }
 
-function endCustomizing(aWindow=window) {
+function endCustomizing(aWindow = window) {
   if (aWindow.document.documentElement.getAttribute("customizing") != "true") {
     return true;
   }
@@ -191,7 +191,7 @@ function endCustomizing(aWindow=window) {
   return deferredEndCustomizing.promise;
 }
 
-function startCustomizing(aWindow=window) {
+function startCustomizing(aWindow = window) {
   if (aWindow.document.documentElement.getAttribute("customizing") == "true") {
     return null;
   }
@@ -209,14 +209,14 @@ function startCustomizing(aWindow=window) {
 
 function promiseObserverNotified(aTopic) {
   let deferred = Promise.defer();
-  Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
-    Services.obs.removeObserver(onNotification, aTopic);
-      deferred.resolve({subject: aSubject, data: aData});
+  Services.obs.addObserver(function onNotification(subject, topic, data) {
+    Services.obs.removeObserver(onNotification, topic);
+      deferred.resolve({subject, data});
     }, aTopic, false);
   return deferred.promise;
 }
 
-function openAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
+function openAndLoadWindow(aOptions, aWaitForDelayedStartup = false) {
   let deferred = Promise.defer();
   let win = OpenBrowserWindow(aOptions);
   if (aWaitForDelayedStartup) {
@@ -329,7 +329,7 @@ function subviewHidden(aSubview) {
   return deferred.promise;
 }
 
-function waitForCondition(aConditionFn, aMaxTries=50, aCheckInterval=100) {
+function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
   function tryNow() {
     tries++;
     if (aConditionFn()) {
@@ -349,7 +349,7 @@ function waitForCondition(aConditionFn, aMaxTries=50, aCheckInterval=100) {
   return deferred.promise;
 }
 
-function waitFor(aTimeout=100) {
+function waitFor(aTimeout = 100) {
   let deferred = Promise.defer();
   setTimeout(() => deferred.resolve(), aTimeout);
   return deferred.promise;
@@ -363,7 +363,7 @@ function waitFor(aTimeout=100) {
  * @param aEventType The load event type to wait for.  Defaults to "load".
  * @return {Promise} resolved when the event is handled.
  */
-function promiseTabLoadEvent(aTab, aURL, aEventType="load") {
+function promiseTabLoadEvent(aTab, aURL, aEventType = "load") {
   let deferred = Promise.defer();
   info("Wait for tab event: " + aEventType);
 
@@ -476,7 +476,6 @@ function popupHidden(aPopup) {
  */
 function promisePopupEvent(aPopup, aEventSuffix) {
   let deferred = Promise.defer();
-  let win = aPopup.ownerGlobal;
   let eventType = "popup" + aEventSuffix;
 
   function onPopupEvent(e) {
@@ -490,7 +489,7 @@ function promisePopupEvent(aPopup, aEventSuffix) {
 
 // This is a simpler version of the context menu check that
 // exists in contextmenu_common.js.
-function checkContextMenu(aContextMenu, aExpectedEntries, aWindow=window) {
+function checkContextMenu(aContextMenu, aExpectedEntries, aWindow = window) {
   let childNodes = [...aContextMenu.childNodes];
   // Ignore hidden nodes:
   childNodes = childNodes.filter((n) => !n.hidden);

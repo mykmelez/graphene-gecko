@@ -18,7 +18,7 @@
 #undef LOG
 #endif
 
-static PRLogModuleInfo* gMediaStreamTrackLog;
+static mozilla::LazyLogModule gMediaStreamTrackLog("MediaStreamTrack");
 #define LOG(type, msg) MOZ_LOG(gMediaStreamTrackLog, type, msg)
 
 namespace mozilla {
@@ -52,6 +52,14 @@ MediaStreamTrackSource::ApplyConstraints(
                                  NS_LITERAL_STRING("")));
   return p.forget();
 }
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(MediaStreamTrackConsumer)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(MediaStreamTrackConsumer)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaStreamTrackConsumer)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION_0(MediaStreamTrackConsumer)
 
 /**
  * PrincipalHandleListener monitors changes in PrincipalHandle of the media flowing
@@ -116,13 +124,8 @@ MediaStreamTrack::MediaStreamTrack(DOMMediaStream* aStream, TrackID aTrackID,
     mInputTrackID(aInputTrackID), mSource(aSource),
     mPrincipal(aSource->GetPrincipal()),
     mReadyState(MediaStreamTrackState::Live),
-    mEnabled(true), mRemote(aSource->IsRemote()),
-    mConstraints(aConstraints)
+    mEnabled(true), mConstraints(aConstraints)
 {
-
-  if (!gMediaStreamTrackLog) {
-    gMediaStreamTrackLog = PR_NewLogModule("MediaStreamTrack");
-  }
 
   GetSource().RegisterSink(this);
 
@@ -175,6 +178,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(MediaStreamTrack)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MediaStreamTrack,
                                                 DOMEventTargetHelper)
   tmp->Destroy();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mConsumers)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOwningStream)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSource)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOriginalTrack)
@@ -184,6 +188,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MediaStreamTrack,
                                                   DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConsumers)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwningStream)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSource)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOriginalTrack)
@@ -216,7 +221,8 @@ MediaStreamTrack::SetEnabled(bool aEnabled)
                        this, aEnabled ? "Enabled" : "Disabled"));
 
   mEnabled = aEnabled;
-  GetOwnedStream()->SetTrackEnabled(mTrackID, aEnabled);
+  GetOwnedStream()->SetTrackEnabled(mTrackID, mEnabled ? DisabledTrackMode::ENABLED
+                                                       : DisabledTrackMode::SILENCE_BLACK);
 }
 
 void
@@ -226,11 +232,6 @@ MediaStreamTrack::Stop()
 
   if (Ended()) {
     LOG(LogLevel::Warning, ("MediaStreamTrack %p Already ended", this));
-    return;
-  }
-
-  if (mRemote) {
-    LOG(LogLevel::Warning, ("MediaStreamTrack %p is remote. Can't be stopped.", this));
     return;
   }
 
@@ -248,6 +249,8 @@ MediaStreamTrack::Stop()
   Unused << p;
 
   mReadyState = MediaStreamTrackState::Ended;
+
+  NotifyEnded();
 }
 
 void
@@ -360,6 +363,18 @@ MediaStreamTrack::NotifyPrincipalHandleChanged(const PrincipalHandle& aNewPrinci
   }
 }
 
+void
+MediaStreamTrack::NotifyEnded()
+{
+  MOZ_ASSERT(mReadyState == MediaStreamTrackState::Ended);
+
+  for (int32_t i = mConsumers.Length() - 1; i >= 0; --i) {
+    // Loop backwards by index in case the consumer removes itself in the
+    // callback.
+    mConsumers[i]->NotifyEnded(this);
+  }
+}
+
 bool
 MediaStreamTrack::AddPrincipalChangeObserver(
   PrincipalChangeObserver<MediaStreamTrack>* aObserver)
@@ -372,6 +387,19 @@ MediaStreamTrack::RemovePrincipalChangeObserver(
   PrincipalChangeObserver<MediaStreamTrack>* aObserver)
 {
   return mPrincipalChangeObservers.RemoveElement(aObserver);
+}
+
+void
+MediaStreamTrack::AddConsumer(MediaStreamTrackConsumer* aConsumer)
+{
+  MOZ_ASSERT(!mConsumers.Contains(aConsumer));
+  mConsumers.AppendElement(aConsumer);
+}
+
+void
+MediaStreamTrack::RemoveConsumer(MediaStreamTrackConsumer* aConsumer)
+{
+  mConsumers.RemoveElement(aConsumer);
 }
 
 already_AddRefed<MediaStreamTrack>
@@ -391,7 +419,23 @@ MediaStreamTrack::Clone()
 }
 
 void
-MediaStreamTrack::NotifyEnded()
+MediaStreamTrack::SetReadyState(MediaStreamTrackState aState)
+{
+  MOZ_ASSERT(!(mReadyState == MediaStreamTrackState::Ended &&
+               aState == MediaStreamTrackState::Live),
+             "We don't support overriding the ready state from ended to live");
+
+  if (mReadyState == MediaStreamTrackState::Live &&
+      aState == MediaStreamTrackState::Ended &&
+      mSource) {
+    mSource->UnregisterSink(this);
+  }
+
+  mReadyState = aState;
+}
+
+void
+MediaStreamTrack::OverrideEnded()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -401,7 +445,16 @@ MediaStreamTrack::NotifyEnded()
 
   LOG(LogLevel::Info, ("MediaStreamTrack %p ended", this));
 
+  if (!mSource) {
+    MOZ_ASSERT(false);
+    return;
+  }
+
+  mSource->UnregisterSink(this);
+
   mReadyState = MediaStreamTrackState::Ended;
+
+  NotifyEnded();
 
   DispatchTrustedEvent(NS_LITERAL_STRING("ended"));
 }
@@ -483,12 +536,13 @@ MediaStreamTrack::RemoveDirectListener(DirectMediaStreamTrackListener *aListener
 }
 
 already_AddRefed<MediaInputPort>
-MediaStreamTrack::ForwardTrackContentsTo(ProcessedMediaStream* aStream)
+MediaStreamTrack::ForwardTrackContentsTo(ProcessedMediaStream* aStream,
+                                         TrackID aDestinationTrackID)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_RELEASE_ASSERT(aStream);
   RefPtr<MediaInputPort> port =
-    aStream->AllocateInputPort(GetOwnedStream(), mTrackID);
+    aStream->AllocateInputPort(GetOwnedStream(), mTrackID, aDestinationTrackID);
   return port.forget();
 }
 

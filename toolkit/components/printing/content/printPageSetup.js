@@ -15,10 +15,10 @@ var gDoingMetric   = false;
 var gPrintSettingsInterface = Components.interfaces.nsIPrintSettings;
 var gDoDebug = false;
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function initDialog()
 {
-  gDialog = new Object;
+  gDialog = {};
 
   gDialog.orientation     = document.getElementById("orientation");
   gDialog.portrait        = document.getElementById("portrait");
@@ -54,28 +54,28 @@ function initDialog()
 
   gDialog.enabled         = false;
 
-  gDialog.strings                          = new Array;
-  gDialog.strings[ "marginUnits.inches" ]  = document.getElementById("marginUnits.inches").childNodes[0].nodeValue;
-  gDialog.strings[ "marginUnits.metric" ]  = document.getElementById("marginUnits.metric").childNodes[0].nodeValue;
-  gDialog.strings[ "customPrompt.title" ]  = document.getElementById("customPrompt.title").childNodes[0].nodeValue;
-  gDialog.strings[ "customPrompt.prompt" ] = document.getElementById("customPrompt.prompt").childNodes[0].nodeValue;
+  gDialog.strings                        = new Array;
+  gDialog.strings["marginUnits.inches"]  = document.getElementById("marginUnits.inches").childNodes[0].nodeValue;
+  gDialog.strings["marginUnits.metric"]  = document.getElementById("marginUnits.metric").childNodes[0].nodeValue;
+  gDialog.strings["customPrompt.title"]  = document.getElementById("customPrompt.title").childNodes[0].nodeValue;
+  gDialog.strings["customPrompt.prompt"] = document.getElementById("customPrompt.prompt").childNodes[0].nodeValue;
 
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function isListOfPrinterFeaturesAvailable()
 {
   var has_printerfeatures = false;
 
   try {
     has_printerfeatures = gPrefs.getBoolPref("print.tmp.printerfeatures." + gPrintSettings.printerName + ".has_special_printerfeatures");
-  } catch(ex) {
+  } catch (ex) {
   }
 
   return has_printerfeatures;
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function checkDouble(element)
 {
   element.value = element.value.replace(/[^.0-9]/g, "");
@@ -85,7 +85,7 @@ function checkDouble(element)
 var gPageWidth  = 8.5;
 var gPageHeight = 11.0;
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function setOrientation()
 {
   var selection = gDialog.orientation.selectedItem;
@@ -99,24 +99,24 @@ function setOrientation()
     gPageWidth = temp;
   }
   var div = gDoingMetric ? 100 : 10;
-  style += "width:" + gPageWidth/div + unitString() + ";height:" + gPageHeight/div + unitString() + ";";
+  style += "width:" + gPageWidth / div + unitString() + ";height:" + gPageHeight / div + unitString() + ";";
   gDialog.marginPage.setAttribute( "style", style );
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function unitString()
 {
   return (gPrintSettings.paperSizeUnit == gPrintSettingsInterface.kPaperSizeInches) ? "in" : "mm";
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function checkMargin( value, max, other )
 {
   // Don't draw this margin bigger than permitted.
   return Math.min(value, max - other.value);
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function changeMargin( node )
 {
   // Correct invalid input.
@@ -125,7 +125,7 @@ function changeMargin( node )
   // Reset the margin height/width for this node.
   var val = node.value;
   var nodeToStyle;
-  var attr="width";
+  var attr = "width";
   if ( node == gDialog.topInput ) {
     nodeToStyle = gDialog.marginTop;
     val = checkMargin( val, gPageHeight, gDialog.bottomInput );
@@ -141,11 +141,11 @@ function changeMargin( node )
     nodeToStyle = gDialog.marginRight;
     val = checkMargin( val, gPageWidth, gDialog.leftInput );
   }
-  var style = attr + ":" + (val/10) + unitString() + ";";
+  var style = attr + ":" + (val / 10) + unitString() + ";";
   nodeToStyle.setAttribute( "style", style );
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function changeMargins()
 {
   changeMargin( gDialog.topInput );
@@ -154,15 +154,15 @@ function changeMargins()
   changeMargin( gDialog.rightInput );
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function customize( node )
 {
   // If selection is now "Custom..." then prompt user for custom setting.
   if ( node.value == 6 ) {
-    var prompter = Components.classes[ "@mozilla.org/embedcomp/prompt-service;1" ]
+    var prompter = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
                      .getService( Components.interfaces.nsIPromptService );
-    var title      = gDialog.strings[ "customPrompt.title" ];
-    var promptText = gDialog.strings[ "customPrompt.prompt" ];
+    var title      = gDialog.strings["customPrompt.title"];
+    var promptText = gDialog.strings["customPrompt.prompt"];
     var result = { value: node.custom };
     var ok = prompter.prompt(window, title, promptText, result, null, { value: false } );
     if ( ok ) {
@@ -171,10 +171,10 @@ function customize( node )
   }
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function setHeaderFooter( node, value )
 {
-  node.value= hfValueToId(value);
+  node.value = hfValueToId(value);
   if (node.value == 6) {
     // Remember current Custom... value.
     node.custom = value;
@@ -185,11 +185,11 @@ function setHeaderFooter( node, value )
 }
 
 var gHFValues = new Array;
-gHFValues[ "&T" ] = 1;
-gHFValues[ "&U" ] = 2;
-gHFValues[ "&D" ] = 3;
-gHFValues[ "&P" ] = 4;
-gHFValues[ "&PT" ] = 5;
+gHFValues["&T"] = 1;
+gHFValues["&U"] = 2;
+gHFValues["&D"] = 3;
+gHFValues["&P"] = 4;
+gHFValues["&PT"] = 5;
 
 function hfValueToId(val)
 {
@@ -198,9 +198,8 @@ function hfValueToId(val)
   }
   if ( val.length ) {
       return 6; // Custom...
-  } else {
-      return 0; // --blank--
   }
+  return 0; // --blank--
 }
 
 function hfIdToValue(node)
@@ -244,11 +243,11 @@ function setPrinterDefaultsForSelectedPrinter()
   gPrintService.initPrintSettingsFromPrefs(gPrintSettings, true, gPrintSettingsInterface.kInitSaveAll);
 
   if (gDoDebug) {
-    dump("pagesetup/setPrinterDefaultsForSelectedPrinter: printerName='"+gPrintSettings.printerName+"', orientation='"+gPrintSettings.orientation+"'\n");
+    dump("pagesetup/setPrinterDefaultsForSelectedPrinter: printerName='" + gPrintSettings.printerName + "', orientation='" + gPrintSettings.orientation + "'\n");
   }
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function loadDialog()
 {
   var print_orientation   = 0;
@@ -267,8 +266,8 @@ function loadDialog()
         gPrintService = gPrintService.QueryInterface(Components.interfaces.nsIPrintSettingsService);
       }
     }
-  } catch(ex) {
-    dump("loadDialog: ex="+ex+"\n");
+  } catch (ex) {
+    dump("loadDialog: ex=" + ex + "\n");
   }
 
   setPrinterDefaultsForSelectedPrinter();
@@ -299,12 +298,12 @@ function loadDialog()
   print_margin_bottom = convertMarginInchesToUnits(gPrintSettings.marginBottom, gDoingMetric);
 
   if (gDoDebug) {
-    dump("print_orientation   "+print_orientation+"\n");
+    dump("print_orientation   " + print_orientation + "\n");
 
-    dump("print_margin_top    "+print_margin_top+"\n");
-    dump("print_margin_left   "+print_margin_left+"\n");
-    dump("print_margin_right  "+print_margin_right+"\n");
-    dump("print_margin_bottom "+print_margin_bottom+"\n");
+    dump("print_margin_top    " + print_margin_top + "\n");
+    dump("print_margin_left   " + print_margin_left + "\n");
+    dump("print_margin_right  " + print_margin_right + "\n");
+    dump("print_margin_bottom " + print_margin_bottom + "\n");
   }
 
   if (print_orientation == gPrintSettingsInterface.kPortraitOrientation) {
@@ -340,7 +339,7 @@ function loadDialog()
     if (gPrefs.getBoolPref("print.tmp.printerfeatures." + gPrintSettings.printerName + ".can_change_orientation"))
       gDialog.orientation.removeAttribute("disabled");
     else
-      gDialog.orientation.setAttribute("disabled","true");
+      gDialog.orientation.setAttribute("disabled", "true");
   }
 
   // Give initial focus to the orientation radio group.
@@ -348,7 +347,7 @@ function loadDialog()
   setTimeout( function() { gDialog.orientation.focus(); }, 0 );
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function onLoad()
 {
   // Init gDialog.
@@ -375,21 +374,19 @@ function convertUnitsMarginToInches(aVal, aIsMetric)
 {
   if (aIsMetric) {
     return aVal / 25.4;
-  } else {
-    return aVal;
   }
+  return aVal;
 }
 
 function convertMarginInchesToUnits(aVal, aIsMetric)
 {
   if (aIsMetric) {
     return aVal * 25.4;
-  } else {
-    return aVal;
   }
+  return aVal;
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function onAccept()
 {
 
@@ -431,10 +428,10 @@ function onAccept()
 
     if (gDoDebug) {
       dump("******* Page Setup Accepting ******\n");
-      dump("print_margin_top    "+gDialog.topInput.value+"\n");
-      dump("print_margin_left   "+gDialog.leftInput.value+"\n");
-      dump("print_margin_right  "+gDialog.bottomInput.value+"\n");
-      dump("print_margin_bottom "+gDialog.rightInput.value+"\n");
+      dump("print_margin_top    " + gDialog.topInput.value + "\n");
+      dump("print_margin_left   " + gDialog.leftInput.value + "\n");
+      dump("print_margin_right  " + gDialog.bottomInput.value + "\n");
+      dump("print_margin_bottom " + gDialog.rightInput.value + "\n");
     }
   }
 
@@ -466,7 +463,7 @@ function onAccept()
   return true;
 }
 
-//---------------------------------------------------
+// ---------------------------------------------------
 function onCancel()
 {
   // set return value to "cancel"

@@ -23,13 +23,11 @@ MediaShutdownManager::MediaShutdownManager()
   , mIsDoingXPCOMShutDown(false)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_COUNT_CTOR(MediaShutdownManager);
 }
 
 MediaShutdownManager::~MediaShutdownManager()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_COUNT_DTOR(MediaShutdownManager);
 }
 
 // Note that we don't use ClearOnShutdown() on this StaticRefPtr, as that
@@ -74,7 +72,16 @@ MediaShutdownManager::EnsureCorrectShutdownObserverState()
       nsresult rv = GetShutdownBarrier()->AddBlocker(
         this, NS_LITERAL_STRING(__FILE__), __LINE__,
         NS_LITERAL_STRING("MediaShutdownManager shutdown"));
-      MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
+      if (NS_FAILED(rv)) {
+        // Leak the buffer on the heap to make sure that it lives long enough,
+        // as MOZ_CRASH_ANNOTATE expects the pointer passed to it to live to
+        // the end of the program.
+        const size_t CAPACITY = 256;
+        auto buf = new char[CAPACITY];
+        snprintf(buf, CAPACITY, "Failed to add shutdown blocker! rv=%x", uint32_t(rv));
+        MOZ_CRASH_ANNOTATE(buf);
+        MOZ_REALLY_CRASH();
+      }
     } else {
       GetShutdownBarrier()->RemoveBlocker(this);
       // Clear our singleton reference. This will probably delete
@@ -89,7 +96,7 @@ void
 MediaShutdownManager::Register(MediaDecoder* aDecoder)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_DIAGNOSTIC_ASSERT(!mIsDoingXPCOMShutDown);
+  MOZ_RELEASE_ASSERT(!mIsDoingXPCOMShutDown);
   // Don't call Register() after you've Unregistered() all the decoders,
   // that's not going to work.
   MOZ_ASSERT(!mDecoders.Contains(aDecoder));
@@ -137,7 +144,12 @@ MediaShutdownManager::BlockShutdown(nsIAsyncShutdownClient*)
 
   // Iterate over the decoders and shut them down.
   for (auto iter = mDecoders.Iter(); !iter.Done(); iter.Next()) {
-    iter.Get()->GetKey()->Shutdown();
+    MediaDecoderOwner* owner = iter.Get()->GetKey()->GetOwner();
+    if (owner) {
+      // The owner will call MediaDecoder::Shutdown() and
+      // drop its reference to the decoder.
+      owner->NotifyXPCOMShutdown();
+    }
     // Check MediaDecoder::Shutdown doesn't call Unregister() synchronously in
     // order not to corrupt our hashtable traversal.
     MOZ_ASSERT(mDecoders.Count() == oldCount);

@@ -83,6 +83,15 @@ const SEND_MAXIMUM_BACKOFF_DELAY_MS = 120 * MS_IN_A_MINUTE;
 // The age of a pending ping to be considered overdue (in milliseconds).
 const OVERDUE_PING_FILE_AGE = 7 * 24 * 60 * MS_IN_A_MINUTE; // 1 week
 
+function monotonicNow() {
+  try {
+    return Telemetry.msSinceProcessStart();
+  } catch (ex) {
+    // If this fails fall back to the (non-monotonic) Date value.
+    return Date.now();
+  }
+}
+
 /**
  * This is a policy object used to override behavior within this module.
  * Tests override properties on this object to allow for control of behavior
@@ -121,9 +130,8 @@ function isDeletionPing(aPing) {
 function savePing(aPing) {
   if (isDeletionPing(aPing)) {
     return TelemetryStorage.saveDeletionPing(aPing);
-  } else {
-    return TelemetryStorage.savePendingPing(aPing);
   }
+  return TelemetryStorage.savePendingPing(aPing);
 }
 
 /**
@@ -656,8 +664,8 @@ var TelemetrySendImpl = {
 
     const histograms = [
       "TELEMETRY_SUCCESS",
-      "TELEMETRY_SEND",
-      "TELEMETRY_PING",
+      "TELEMETRY_SEND_SUCCESS",
+      "TELEMETRY_SEND_FAILURE",
     ];
 
     histograms.forEach(h => Telemetry.getHistogramById(h).clear());
@@ -675,7 +683,7 @@ var TelemetrySendImpl = {
   },
 
   observe: function(subject, topic, data) {
-    switch(topic) {
+    switch (topic) {
     case TOPIC_IDLE_DAILY:
       SendScheduler.triggerSendingPings(true);
       break;
@@ -708,7 +716,7 @@ var TelemetrySendImpl = {
   /**
    * Only used in tests.
    */
-  setServer: function (server) {
+  setServer: function(server) {
     this._log.trace("setServer", server);
     this._server = server;
   },
@@ -828,12 +836,12 @@ var TelemetrySendImpl = {
   _onPingRequestFinished: function(success, startTime, id, isPersisted) {
     this._log.trace("_onPingRequestFinished - success: " + success + ", persisted: " + isPersisted);
 
-    Telemetry.getHistogramById("TELEMETRY_SEND").add(new Date() - startTime);
-    let hping = Telemetry.getHistogramById("TELEMETRY_PING");
+    let sendId = success ? "TELEMETRY_SEND_SUCCESS" : "TELEMETRY_SEND_FAILURE";
+    let hsend = Telemetry.getHistogramById(sendId);
     let hsuccess = Telemetry.getHistogramById("TELEMETRY_SUCCESS");
 
+    hsend.add(monotonicNow() - startTime);
     hsuccess.add(success);
-    hping.add(new Date() - startTime);
 
     if (!success) {
       // Let the scheduler know about send failures for triggering backoff timeouts.
@@ -845,9 +853,8 @@ var TelemetrySendImpl = {
         return TelemetryStorage.removeDeletionPing();
       }
       return TelemetryStorage.removePendingPing(id);
-    } else {
-      return Promise.resolve();
     }
+    return Promise.resolve();
   },
 
   _getSubmissionPath: function(ping) {
@@ -909,7 +916,10 @@ var TelemetrySendImpl = {
 
     this._pendingPingRequests.set(id, request);
 
-    let startTime = new Date();
+    // Prevent the request channel from running though URLClassifier (bug 1296802)
+    request.channel.loadFlags &= ~Ci.nsIChannel.LOAD_CLASSIFY_URI;
+
+    const monotonicStartTime = monotonicNow();
     let deferred = PromiseUtils.defer();
 
     let onRequestFinished = (success, event) => {
@@ -922,7 +932,7 @@ var TelemetrySendImpl = {
       };
 
       this._pendingPingRequests.delete(id);
-      this._onPingRequestFinished(success, startTime, id, isPersisted)
+      this._onPingRequestFinished(success, monotonicStartTime, id, isPersisted)
         .then(() => onCompletion(),
               (error) => {
                 this._log.error("_doPing - request success: " + success + ", error: " + error);
@@ -974,7 +984,7 @@ var TelemetrySendImpl = {
     let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                     .createInstance(Ci.nsIScriptableUnicodeConverter);
     converter.charset = "UTF-8";
-    startTime = new Date();
+    let startTime = new Date();
     let utf8Payload = converter.ConvertFromUnicode(JSON.stringify(networkPayload));
     utf8Payload += converter.Finish();
     Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(new Date() - startTime);
@@ -1049,7 +1059,7 @@ var TelemetrySendImpl = {
    * Track any pending ping send and save tasks through the promise passed here.
    * This is needed to block shutdown on any outstanding ping activity.
    */
-  _trackPendingPingTask: function (promise) {
+  _trackPendingPingTask: function(promise) {
     let clear = () => this._pendingPingActivity.delete(promise);
     promise.then(clear, clear);
     this._pendingPingActivity.add(promise);
@@ -1060,7 +1070,7 @@ var TelemetrySendImpl = {
    * @return {Object<Promise>} A promise resolved when all the pending pings promises
    *         are resolved.
    */
-  promisePendingPingActivity: function () {
+  promisePendingPingActivity: function() {
     this._log.trace("promisePendingPingActivity - Waiting for ping task");
     let p = Array.from(this._pendingPingActivity, p => p.catch(ex => {
       this._log.error("promisePendingPingActivity - ping activity had an error", ex);

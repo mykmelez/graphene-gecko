@@ -123,7 +123,7 @@ nsWindow::DoDraw(void)
         if (mozilla::layers::LayersBackend::LAYERS_CLIENT == lm->GetBackendType()) {
             // No need to do anything, the compositor will handle drawing
         } else {
-            NS_RUNTIMEABORT("Unexpected layer manager type");
+            MOZ_CRASH("Unexpected layer manager type");
         }
 
         listener->DidPaintWindow();
@@ -176,7 +176,7 @@ public:
       , mApzResponse(aApzResponse)
     {}
 
-    NS_IMETHOD Run() {
+    NS_IMETHOD Run() override {
         if (gFocusedWindow) {
             gFocusedWindow->DispatchTouchEventForAPZ(mInput, mGuid, mInputBlockId, mApzResponse);
         }
@@ -273,8 +273,13 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
         mSynthesizedTouchInput = MakeUnique<MultiTouchInput>();
     }
 
+    // We should probably use a real timestamp here, but this is B2G and
+    // so this probably never even exercised any more.
+    uint32_t time = 0;
+    TimeStamp timestamp = TimeStamp::FromSystemTime(time);
+
     MultiTouchInput inputToDispatch = UpdateSynthesizedTouchState(
-        mSynthesizedTouchInput.get(), aPointerId, aPointerState,
+        mSynthesizedTouchInput.get(), time, timestamp, aPointerId, aPointerState,
         aPoint, aPointerPressure, aPointerOrientation);
 
     // Can't use NewRunnableMethod here because that will pass a const-ref
@@ -289,7 +294,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
     return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsWindow::Create(nsIWidget* aParent,
                  void* aNativeParent,
                  const LayoutDeviceIntRect& aRect,
@@ -329,8 +334,8 @@ nsWindow::Create(nsIWidget* aParent,
     return NS_OK;
 }
 
-NS_IMETHODIMP
-nsWindow::Destroy(void)
+void
+nsWindow::Destroy()
 {
     mOnDestroyCalled = true;
     mScreen->UnregisterWindow(this);
@@ -338,7 +343,6 @@ nsWindow::Destroy(void)
         gFocusedWindow = nullptr;
     }
     nsBaseWidget::OnDestroy();
-    return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -379,14 +383,6 @@ bool
 nsWindow::IsVisible() const
 {
     return mVisible;
-}
-
-NS_IMETHODIMP
-nsWindow::ConstrainPosition(bool aAllowSlop,
-                            int32_t *aX,
-                            int32_t *aY)
-{
-    return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -553,19 +549,14 @@ nsWindow::GetInputContext()
     return mInputContext;
 }
 
-NS_IMETHODIMP
-nsWindow::ReparentNativeWidget(nsIWidget* aNewParent)
-{
-    return NS_OK;
-}
-
-NS_IMETHODIMP
+nsresult
 nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen*)
 {
     if (mWindowType != eWindowType_toplevel) {
         // Ignore fullscreen request for non-toplevel windows.
         NS_WARNING("MakeFullScreen() on a dialog or child widget?");
-        return nsBaseWidget::MakeFullScreen(aFullScreen);
+        nsBaseWidget::InfallibleMakeFullScreen(aFullScreen);
+        return NS_OK;
     }
 
     if (aFullScreen) {
@@ -632,9 +623,7 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
     if (mLayerManager) {
         // This layer manager might be used for painting outside of DoDraw(), so we need
         // to set the correct rotation on it.
-        if (mLayerManager->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
-            ClientLayerManager* manager =
-                static_cast<ClientLayerManager*>(mLayerManager.get());
+        if (ClientLayerManager* manager = mLayerManager->AsClientLayerManager()) {
             uint32_t rotation = mScreen->EffectiveScreenRotation();
             manager->SetDefaultTargetConfiguration(mozilla::layers::BufferMode::BUFFER_NONE,
                                                    ScreenRotation(rotation));

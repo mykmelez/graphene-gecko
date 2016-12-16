@@ -26,7 +26,7 @@ interface EventListener {};
 </pre>
 
    <pre id="audio-context-idl">callback DecodeSuccessCallback = void (AudioBuffer decodedData);
-callback DecodeErrorCallback = void ();
+callback DecodeErrorCallback = void (DOMException error);
 
 [Constructor]
 interface AudioContext : EventTarget {
@@ -73,7 +73,14 @@ interface AudioContext : EventTarget {
 
 };</pre>
 
-   <pre id="audio-buffer-idl">interface AudioBuffer {
+   <pre id="audio-buffer-idl">dictionary AudioBufferOptions {
+             unsigned long numberOfChannels = 1;
+    required unsigned long length;
+             float         sampleRate;
+};
+
+[Constructor(AudioContext context, AudioBufferOptions options)]
+interface AudioBuffer {
 
     readonly attribute float sampleRate;
     readonly attribute long length;

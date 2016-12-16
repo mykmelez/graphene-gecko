@@ -62,13 +62,14 @@ public:
 // with an appropriate reason before any runnable is dispatched to the worker.
 // If the event is extendable then the runnable should inherit
 // ExtendableEventWorkerRunnable.
-class ServiceWorkerPrivate final : public nsISupports
+class ServiceWorkerPrivate final : public nsIObserver
 {
   friend class KeepAliveToken;
 
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(ServiceWorkerPrivate)
+  NS_DECL_NSIOBSERVER
 
   explicit ServiceWorkerPrivate(ServiceWorkerInfo* aInfo);
 
@@ -146,6 +147,12 @@ public:
   nsresult
   DetachDebugger();
 
+  bool
+  IsIdle() const;
+
+  void
+  AddPendingWindow(Runnable* aPendingWindow);
+
 private:
   enum WakeUpReason {
     FetchEvent = 0,
@@ -186,6 +193,9 @@ private:
 
   ~ServiceWorkerPrivate();
 
+  already_AddRefed<KeepAliveToken>
+  CreateEventKeepAliveToken();
+
   // The info object owns us. It is possible to outlive it for a brief period
   // of time if there are pending waitUntil promises, in which case it
   // will be null and |SpawnWorkerIfNeeded| will always fail.
@@ -200,7 +210,7 @@ private:
 
   // We keep a token for |dom.serviceWorkers.idle_timeout| seconds to give the
   // worker a grace period after each event.
-  RefPtr<KeepAliveToken> mKeepAliveToken;
+  RefPtr<KeepAliveToken> mIdleKeepAliveToken;
 
   uint64_t mDebuggerCount;
 
@@ -215,6 +225,8 @@ private:
   // Array of function event worker runnables that are pending due to
   // the worker activating.  Main thread only.
   nsTArray<RefPtr<WorkerRunnable>> mPendingFunctionalEvents;
+
+  nsTArray<Runnable*> pendingWindows;
 };
 
 } // namespace workers

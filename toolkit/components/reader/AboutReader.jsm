@@ -17,8 +17,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "NarrateControls", "resource://gre/modul
 XPCOMUtils.defineLazyModuleGetter(this, "Rect", "resource://gre/modules/Geometry.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry", "resource://gre/modules/UITelemetry.jsm");
+XPCOMUtils.defineLazyServiceGetter(this, "gChromeRegistry",
+                                   "@mozilla.org/chrome/chrome-registry;1", Ci.nsIXULChromeRegistry);
 
 var gStrings = Services.strings.createBundle("chrome://global/locale/aboutReader.properties");
+
+const gIsFirefoxDesktop = Services.appinfo.ID == "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";
 
 var AboutReader = function(mm, win, articlePromise) {
   let url = this._getOriginalUrl(win);
@@ -45,6 +49,9 @@ var AboutReader = function(mm, win, articlePromise) {
     .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
 
   this._article = null;
+  this._languagePromise = new Promise(resolve => {
+    this._foundLanguage = resolve;
+  });
 
   if (articlePromise) {
     this._articlePromise = articlePromise;
@@ -53,6 +60,7 @@ var AboutReader = function(mm, win, articlePromise) {
   this._headerElementRef = Cu.getWeakReference(doc.getElementById("reader-header"));
   this._domainElementRef = Cu.getWeakReference(doc.getElementById("reader-domain"));
   this._titleElementRef = Cu.getWeakReference(doc.getElementById("reader-title"));
+  this._readTimeElementRef = Cu.getWeakReference(doc.getElementById("reader-estimated-time"));
   this._creditsElementRef = Cu.getWeakReference(doc.getElementById("reader-credits"));
   this._contentElementRef = Cu.getWeakReference(doc.getElementById("moz-reader-content"));
   this._toolbarElementRef = Cu.getWeakReference(doc.getElementById("reader-toolbar"));
@@ -73,7 +81,6 @@ var AboutReader = function(mm, win, articlePromise) {
   this._setupStyleDropdown();
   this._setupButton("close-button", this._onReaderClose.bind(this), "aboutReader.toolbar.close");
 
-  const gIsFirefoxDesktop = Services.appinfo.ID == "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";
   if (gIsFirefoxDesktop) {
     // we're ready for any external setup, send a signal for that.
     this._mm.sendAsyncMessage("Reader:OnSetup");
@@ -114,11 +121,11 @@ var AboutReader = function(mm, win, articlePromise) {
   this._setupLineHeightButtons();
 
   if (win.speechSynthesis && Services.prefs.getBoolPref("narrate.enabled")) {
-    new NarrateControls(mm, win);
+    new NarrateControls(mm, win, this._languagePromise);
   }
 
   this._loadArticle();
-}
+};
 
 AboutReader.prototype = {
   _BLOCK_IMAGES_SELECTOR: ".content p > img:only-child, " +
@@ -144,6 +151,10 @@ AboutReader.prototype = {
 
   get _titleElement() {
     return this._titleElementRef.get();
+  },
+
+  get _readTimeElement() {
+    return this._readTimeElementRef.get();
   },
 
   get _creditsElement() {
@@ -178,7 +189,7 @@ AboutReader.prototype = {
     return _viewId;
   },
 
-  receiveMessage: function (message) {
+  receiveMessage: function(message) {
     switch (message.name) {
       // Triggered by Android user pressing BACK while the banner font-dropdown is open.
       case "Reader:CloseDropdown": {
@@ -513,7 +524,7 @@ AboutReader.prototype = {
       return;
     }
     // Holds the average of the lux values collected in this._luxValues.
-    let averageLuxValue = this._totalLux/luxValuesSize;
+    let averageLuxValue = this._totalLux / luxValuesSize;
 
     this._updateColorScheme(averageLuxValue);
     // Pop the oldest value off the array.
@@ -691,12 +702,12 @@ AboutReader.prototype = {
       }
 
       // If the image is at least half as wide as the body, center it on desktop.
-      if (img.naturalWidth >= bodyWidth/2) {
+      if (img.naturalWidth >= bodyWidth / 2) {
         img.setAttribute("moz-reader-center", true);
       } else {
         img.removeAttribute("moz-reader-center");
       }
-    }
+    };
 
     let imgs = this._doc.querySelectorAll(this._BLOCK_IMAGES_SELECTOR);
     for (let i = imgs.length; --i >= 0;) {
@@ -707,18 +718,45 @@ AboutReader.prototype = {
       } else {
         img.onload = function() {
           setImageMargins(img);
-        }
+        };
       }
     }
   },
 
-  _maybeSetTextDirection: function Read_maybeSetTextDirection(article){
-    if(!article.dir)
-      return;
+  _maybeSetTextDirection: function Read_maybeSetTextDirection(article) {
+    if (article.dir) {
+      // Set "dir" attribute on content
+      this._contentElement.setAttribute("dir", article.dir);
+      this._headerElement.setAttribute("dir", article.dir);
 
-    //Set "dir" attribute on content
-    this._contentElement.setAttribute("dir", article.dir);
-    this._headerElement.setAttribute("dir", article.dir);
+      // The native locale could be set differently than the article's text direction.
+      var localeDirection = gChromeRegistry.isLocaleRTL("global") ? "rtl" : "ltr";
+      this._readTimeElement.setAttribute("dir", localeDirection);
+      this._readTimeElement.style.textAlign = article.dir == "rtl" ? "right" : "left";
+    }
+  },
+
+  _fixLocalLinks() {
+    // We need to do this because preprocessing the content through nsIParserUtils
+    // gives back a DOM with a <base> element. That influences how these URLs get
+    // resolved, making them no longer match the document URI (which is
+    // about:reader?url=...). To fix this, make all the hash URIs absolute. This
+    // is hacky, but the alternative of removing the base element has potential
+    // security implications if Readability has not successfully made all the URLs
+    // absolute, so we pick just fixing these in-document links explicitly.
+    let localLinks = this._contentElement.querySelectorAll("a[href^='#']");
+    for (let localLink of localLinks) {
+      // Have to get the attribute because .href provides an absolute URI.
+      localLink.href = this._doc.documentURI + localLink.getAttribute("href");
+    }
+  },
+
+  _formatReadTime(slowEstimate, fastEstimate) {
+    if (slowEstimate == fastEstimate) {
+      return gStrings.formatStringFromName("aboutReader.estimatedReadTimeValue", [slowEstimate], 1);
+    }
+
+    return gStrings.formatStringFromName("aboutReader.estimatedReadTimeRange", [fastEstimate, slowEstimate], 2);
   },
 
   _showError: function() {
@@ -762,6 +800,7 @@ AboutReader.prototype = {
     this._creditsElement.textContent = article.byline;
 
     this._titleElement.textContent = article.title;
+    this._readTimeElement.textContent = this._formatReadTime(article.readingTimeMinsSlow, article.readingTimeMinsFast);
     this._doc.title = article.title;
 
     this._headerElement.style.display = "block";
@@ -772,13 +811,17 @@ AboutReader.prototype = {
       false, articleUri, this._contentElement);
     this._contentElement.innerHTML = "";
     this._contentElement.appendChild(contentFragment);
+    this._fixLocalLinks();
     this._maybeSetTextDirection(article);
+    this._foundLanguage(article.language);
 
     this._contentElement.style.display = "block";
     this._updateImageMargins();
 
     this._requestFavicon();
     this._doc.body.classList.add("loaded");
+
+    this._goToReference(articleUri.ref);
 
     Services.obs.notifyObservers(this._win, "AboutReader:Ready", "");
 
@@ -965,6 +1008,15 @@ AboutReader.prototype = {
     // Trigger BackPressListener cleanup in Android.
     if (openDropdowns.length) {
       this._mm.sendAsyncMessage("Reader:DropdownClosed", this.viewId);
+    }
+  },
+
+  /*
+   * Scroll reader view to a reference
+   */
+  _goToReference(ref) {
+    if (ref) {
+      this._win.location.hash = ref;
     }
   }
 };

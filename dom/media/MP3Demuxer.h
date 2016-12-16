@@ -228,8 +228,11 @@ public:
     // Returns true iff Xing/Info TOC (table of contents) is present.
     bool IsTOCPresent() const;
 
-    // Returns whether the header is valid (containing reasonable field values).
+    // Returns whether the header is valid (type XING or VBRI).
     bool IsValid() const;
+
+    // Returns whether the header is valid and contains reasonable non-zero field values.
+    bool IsComplete() const;
 
     // Returns the byte offset for the given duration percentage as a factor
     // (0: begin, 1.0: end).
@@ -380,11 +383,11 @@ public:
 
   // MediaTrackDemuxer interface.
   UniquePtr<TrackInfo> GetInfo() const override;
-  RefPtr<SeekPromise> Seek(media::TimeUnit aTime) override;
+  RefPtr<SeekPromise> Seek(const media::TimeUnit& aTime) override;
   RefPtr<SamplesPromise> GetSamples(int32_t aNumSamples = 1) override;
   void Reset() override;
   RefPtr<SkipAccessPointPromise> SkipToNextRandomAccessPoint(
-    media::TimeUnit aTimeThreshold) override;
+    const media::TimeUnit& aTimeThreshold) override;
   int64_t GetResourceOffset() const override;
   media::TimeIntervals GetBuffered() override;
 

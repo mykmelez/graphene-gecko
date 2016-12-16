@@ -16,6 +16,19 @@ using namespace std;
 
 namespace mozilla {
 
+static map<uint32_t, RefPtr<CDMWrapper>> sDecryptors;
+
+/* static */
+RefPtr<CDMWrapper>
+WidevineDecryptor::GetInstance(uint32_t aInstanceId)
+{
+  auto itr = sDecryptors.find(aInstanceId);
+  if (itr != sDecryptors.end()) {
+    return itr->second;
+  }
+  return nullptr;
+}
+
 
 WidevineDecryptor::WidevineDecryptor()
   : mCallback(nullptr)
@@ -30,9 +43,11 @@ WidevineDecryptor::~WidevineDecryptor()
 }
 
 void
-WidevineDecryptor::SetCDM(RefPtr<CDMWrapper> aCDM)
+WidevineDecryptor::SetCDM(RefPtr<CDMWrapper> aCDM, uint32_t aInstanceId)
 {
   mCDM = aCDM;
+  mInstanceId = aInstanceId;
+  sDecryptors[mInstanceId] = aCDM.forget();
 }
 
 void
@@ -76,11 +91,23 @@ WidevineDecryptor::CreateSession(uint32_t aCreateSessionToken,
                                  GMPSessionType aSessionType)
 {
   Log("Decryptor::CreateSession(token=%d, pid=%d)", aCreateSessionToken, aPromiseId);
-  MOZ_ASSERT(!strcmp(aInitDataType, "cenc"));
+  InitDataType initDataType;
+  if (!strcmp(aInitDataType, "cenc")) {
+    initDataType = kCenc;
+  } else if (!strcmp(aInitDataType, "webm")) {
+    initDataType = kWebM;
+  } else if (!strcmp(aInitDataType, "keyids")) {
+    initDataType = kKeyIds;
+  } else {
+    // Invalid init data type
+    const char* errorMsg = "Invalid init data type when creating session.";
+    OnRejectPromise(aPromiseId, kNotSupportedError, 0, errorMsg, sizeof(errorMsg));
+    return;
+  }
   mPromiseIdToNewSessionTokens[aPromiseId] = aCreateSessionToken;
   CDM()->CreateSessionAndGenerateRequest(aPromiseId,
                                          ToCDMSessionType(aSessionType),
-                                         kCenc,
+                                         initDataType,
                                          aInitData, aInitDataSize);
 }
 
@@ -141,7 +168,7 @@ public:
   {
   }
 
-  ~WidevineDecryptedBlock() {
+  ~WidevineDecryptedBlock() override {
     if (mBuffer) {
       mBuffer->Destroy();
       mBuffer = nullptr;
@@ -198,7 +225,12 @@ void
 WidevineDecryptor::DecryptingComplete()
 {
   Log("WidevineDecryptor::DecryptingComplete() this=%p", this);
+  // Drop our references to the CDMWrapper. When any other references
+  // held elsewhere are dropped (for example references held by a
+  // WidevineVideoDecoder, or a runnable), the CDMWrapper destroys
+  // the CDM.
   mCDM = nullptr;
+  sDecryptors.erase(mInstanceId);
   mCallback = nullptr;
   Release();
 }
@@ -209,7 +241,7 @@ public:
     Log("WidevineBuffer(size=" PRIuSIZE ") created", aSize);
     mBuffer.SetLength(aSize);
   }
-  ~WidevineBuffer() {
+  ~WidevineBuffer() override {
     Log("WidevineBuffer(size=" PRIuSIZE ") destroyed", Size());
   }
   void Destroy() override { delete this; }
@@ -242,7 +274,7 @@ public:
     , mContext(aContext)
   {
   }
-  ~TimerTask() override {}
+  ~TimerTask() override = default;
   void Run() override {
     mCDM->GetCDM()->TimerExpired(mContext);
   }
@@ -309,7 +341,12 @@ ToGMPDOMException(cdm::Error aError)
   switch (aError) {
     case kNotSupportedError: return kGMPNotSupportedError;
     case kInvalidStateError: return kGMPInvalidStateError;
-    case kInvalidAccessError: return kGMPInvalidAccessError;
+    case kInvalidAccessError:
+      // Note: Chrome converts kInvalidAccessError to TypeError, since the
+      // Chromium CDM API doesn't have a type error enum value. The EME spec
+      // requires TypeError in some places, so we do the same conversion.
+      // See bug 1313202.
+      return kGMPTypeError;
     case kQuotaExceededError: return kGMPQuotaExceededError;
     case kUnknownError: return kGMPInvalidModificationError; // Note: Unique placeholder.
     case kClientError: return kGMPAbortError; // Note: Unique placeholder.
@@ -397,13 +434,15 @@ WidevineDecryptor::OnSessionKeysChange(const char* aSessionId,
     return;
   }
   Log("Decryptor::OnSessionKeysChange()");
+
+  nsTArray<GMPMediaKeyInfo> key_infos;
   for (uint32_t i = 0; i < aKeysInfoCount; i++) {
-    mCallback->KeyStatusChanged(aSessionId,
-                                aSessionIdSize,
-                                aKeysInfo[i].key_id,
-                                aKeysInfo[i].key_id_size,
-                                ToGMPKeyStatus(aKeysInfo[i].status));
+    key_infos.AppendElement(GMPMediaKeyInfo(aKeysInfo[i].key_id,
+                                            aKeysInfo[i].key_id_size,
+                                            ToGMPKeyStatus(aKeysInfo[i].status)));
   }
+  mCallback->BatchedKeyStatusChanged(aSessionId, aSessionIdSize,
+                                     key_infos.Elements(), key_infos.Length());
 }
 
 static GMPTimestamp

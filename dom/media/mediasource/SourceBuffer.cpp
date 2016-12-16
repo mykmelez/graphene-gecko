@@ -23,6 +23,12 @@
 #include <time.h>
 #include "TimeUnits.h"
 
+// GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
+// GetTickCount() and conflicts with MediaDecoder::GetCurrentTime implementation.
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
+
 struct JSContext;
 class JSObject;
 
@@ -289,9 +295,6 @@ SourceBuffer::Ended()
   MOZ_ASSERT(IsAttached());
   MSE_DEBUG("Ended");
   mTrackBuffersManager->Ended();
-  // We want the MediaSourceReader to refresh its buffered range as it may
-  // have been modified (end lined up).
-  mMediaSource->GetDecoder()->NotifyDataArrived();
 }
 
 SourceBuffer::SourceBuffer(MediaSource* aMediaSource, const nsACString& aType)
@@ -308,9 +311,6 @@ SourceBuffer::SourceBuffer(MediaSource* aMediaSource, const nsACString& aType)
 
   mTrackBuffersManager =
     new TrackBuffersManager(aMediaSource->GetDecoder(), aType);
-
-  // Now that we know what type we're dealing with, enable dormant as needed.
-  aMediaSource->GetDecoder()->NotifyDormantSupported(Preferences::GetBool("media.decoder.heuristic.dormant.enabled", false));
 
   MSE_DEBUG("Create mTrackBuffersManager=%p",
             mTrackBuffersManager.get());
@@ -448,24 +448,24 @@ SourceBuffer::AppendDataCompletedWithSuccess(SourceBufferTask::AppendBufferResul
 }
 
 void
-SourceBuffer::AppendDataErrored(nsresult aError)
+SourceBuffer::AppendDataErrored(const MediaResult& aError)
 {
   MOZ_ASSERT(mUpdating);
   mPendingAppend.Complete();
 
-  switch (aError) {
-    case NS_ERROR_ABORT:
+  switch (aError.Code()) {
+    case NS_ERROR_DOM_MEDIA_CANCELED:
       // Nothing further to do as the trackbuffer has been shutdown.
       // or append was aborted and abort() has handled all the events.
       break;
     default:
-      AppendError(true);
+      AppendError(aError);
       break;
   }
 }
 
 void
-SourceBuffer::AppendError(bool aDecoderError)
+SourceBuffer::AppendError(const MediaResult& aDecodeError)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -476,12 +476,9 @@ SourceBuffer::AppendError(bool aDecoderError)
   QueueAsyncSimpleEvent("error");
   QueueAsyncSimpleEvent("updateend");
 
-  if (aDecoderError) {
-    Optional<MediaSourceEndOfStreamError> decodeError(
-      MediaSourceEndOfStreamError::Decode);
-    ErrorResult dummy;
-    mMediaSource->EndOfStream(decodeError, dummy);
-  }
+  MOZ_ASSERT(NS_FAILED(aDecodeError));
+
+  mMediaSource->EndOfStream(aDecodeError);
 }
 
 already_AddRefed<MediaByteBuffer>
@@ -554,6 +551,15 @@ SourceBuffer::HighestStartTime()
   MOZ_ASSERT(NS_IsMainThread());
   return mTrackBuffersManager
          ? mTrackBuffersManager->HighestStartTime().ToSeconds()
+         : 0.0;
+}
+
+double
+SourceBuffer::HighestEndTime()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return mTrackBuffersManager
+         ? mTrackBuffersManager->HighestEndTime().ToSeconds()
          : 0.0;
 }
 

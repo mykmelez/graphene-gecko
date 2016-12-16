@@ -17,6 +17,7 @@
 #include "libANGLE/renderer/d3d/VertexDataManager.h"
 #include "libANGLE/renderer/d3d/formatutilsD3D.h"
 #include "libANGLE/renderer/d3d/WorkaroundsD3D.h"
+#include "libANGLE/Version.h"
 
 //FIXME(jmadill): std::array is currently prohibited by Chromium style guide
 #include <array>
@@ -111,8 +112,6 @@ class RendererD3D : public BufferFactoryD3D
 
     virtual ContextImpl *createContext(const gl::ContextState &state) = 0;
 
-    bool isDeviceLost() const;
-    virtual bool testDeviceLost() = 0;
     std::string getVendorString() const;
 
     virtual int getMinorShaderModel() const = 0;
@@ -128,9 +127,17 @@ class RendererD3D : public BufferFactoryD3D
 
     virtual SwapChainD3D *createSwapChain(NativeWindowD3D *nativeWindow,
                                           HANDLE shareHandle,
+                                          IUnknown *d3dTexture,
                                           GLenum backBufferFormat,
                                           GLenum depthBufferFormat,
                                           EGLint orientation) = 0;
+    virtual egl::Error getD3DTextureInfo(IUnknown *d3dTexture,
+                                         EGLint *width,
+                                         EGLint *height,
+                                         GLenum *fboFormat) const = 0;
+    virtual egl::Error validateShareHandle(const egl::Config *config,
+                                           HANDLE shareHandle,
+                                           const egl::AttributeMap &attribs) const = 0;
 
     virtual gl::Error setSamplerState(gl::SamplerType type, int index, gl::Texture *texture, const gl::SamplerState &sampler) = 0;
     virtual gl::Error setTexture(gl::SamplerType type, int index, gl::Texture *texture) = 0;
@@ -160,6 +167,21 @@ class RendererD3D : public BufferFactoryD3D
     virtual gl::Error copyImage2DArray(const gl::Framebuffer *framebuffer, const gl::Rectangle &sourceRect, GLenum destFormat,
                                        const gl::Offset &destOffset, TextureStorage *storage, GLint level) = 0;
 
+    virtual gl::Error copyTexture(const gl::Texture *source,
+                                  GLint sourceLevel,
+                                  const gl::Rectangle &sourceRect,
+                                  GLenum destFormat,
+                                  const gl::Offset &destOffset,
+                                  TextureStorage *storage,
+                                  GLint destLevel,
+                                  bool unpackFlipY,
+                                  bool unpackPremultiplyAlpha,
+                                  bool unpackUnmultiplyAlpha) = 0;
+    virtual gl::Error copyCompressedTexture(const gl::Texture *source,
+                                            GLint sourceLevel,
+                                            TextureStorage *storage,
+                                            GLint destLevel) = 0;
+
     // RenderTarget creation
     virtual gl::Error createRenderTarget(int width, int height, GLenum format, GLsizei samples, RenderTargetD3D **outRT) = 0;
     virtual gl::Error createRenderTargetCopy(RenderTargetD3D *source, RenderTargetD3D **outRT) = 0;
@@ -186,7 +208,8 @@ class RendererD3D : public BufferFactoryD3D
     virtual gl::Error generateMipmapUsingD3D(TextureStorage *storage,
                                              const gl::TextureState &textureState) = 0;
     virtual TextureStorage *createTextureStorage2D(SwapChainD3D *swapChain) = 0;
-    virtual TextureStorage *createTextureStorageEGLImage(EGLImageD3D *eglImage) = 0;
+    virtual TextureStorage *createTextureStorageEGLImage(EGLImageD3D *eglImage,
+                                                         RenderTargetD3D *renderTargetD3D) = 0;
     virtual TextureStorage *createTextureStorageExternal(
         egl::Stream *stream,
         const egl::Stream::GLTextureDescription &desc) = 0;
@@ -201,8 +224,12 @@ class RendererD3D : public BufferFactoryD3D
                                               GLenum destinationFormat, GLenum sourcePixelsType, const gl::Box &destArea) = 0;
 
     // Device lost
+    GLenum getResetStatus();
     void notifyDeviceLost();
     virtual bool resetDevice() = 0;
+    virtual bool testDeviceLost()       = 0;
+    virtual bool testDeviceResettable() = 0;
+
     virtual RendererClass getRendererClass() const = 0;
     virtual void *getD3DDevice() = 0;
 
@@ -231,6 +258,8 @@ class RendererD3D : public BufferFactoryD3D
     // Necessary hack for default framebuffers in D3D.
     virtual FramebufferImpl *createDefaultFramebuffer(const gl::FramebufferState &state) = 0;
 
+    virtual gl::Version getMaxSupportedESVersion() const = 0;
+
   protected:
     virtual bool getLUID(LUID *adapterLuid) const = 0;
     virtual void generateCaps(gl::Caps *outCaps,
@@ -248,7 +277,6 @@ class RendererD3D : public BufferFactoryD3D
     gl::Error markTransformFeedbackUsage(const gl::ContextState &data);
 
     egl::Display *mDisplay;
-    bool mDeviceLost;
 
     bool mPresentPathFastEnabled;
 
@@ -281,6 +309,7 @@ class RendererD3D : public BufferFactoryD3D
     mutable WorkaroundsD3D mWorkarounds;
 
     bool mDisjoint;
+    bool mDeviceLost;
 };
 
 }  // namespace rx

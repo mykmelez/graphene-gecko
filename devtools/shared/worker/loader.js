@@ -16,6 +16,9 @@
 // the use of Components, and for which the worker debugger doesn't provide an
 // alternative API, will be replaced by vacuous objects. Consequently, they can
 // still be required, but any attempts to use them will lead to an exception.
+//
+// Note: to see dump output when running inside the worker thread, you might
+// need to enable the browser.dom.window.dump.enabled pref.
 
 this.EXPORTED_SYMBOLS = ["WorkerDebuggerLoader", "worker"];
 
@@ -367,7 +370,7 @@ var {
   loadSubScript,
   reportError,
   setImmediate,
-  xpcInspector
+  xpcInspector,
 } = (function () {
   if (typeof Components === "object") { // Main thread
     let {
@@ -484,8 +487,10 @@ this.worker = new WorkerDebuggerLoader({
     "loader": loader,
     "reportError": reportError,
     "rpc": rpc,
-    "setImmediate": setImmediate,
     "URL": URL,
+    "setImmediate": setImmediate,
+    "retrieveConsoleEvents": this.retrieveConsoleEvents,
+    "setConsoleEventHandler": this.setConsoleEventHandler,
   },
   loadSubScript: loadSubScript,
   modules: {
@@ -497,6 +502,13 @@ this.worker = new WorkerDebuggerLoader({
   paths: {
     // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
     "": "resource://gre/modules/commonjs/",
+    // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
+    // Modules here are intended to have one implementation for
+    // chrome, and a separate implementation for content.  Here we
+    // map the directory to the chrome subdirectory, but the content
+    // loader will map to the content subdirectory.  See the
+    // README.md in devtools/shared/platform.
+    "devtools/shared/platform": "resource://devtools/shared/platform/chrome",
     // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
     "devtools": "resource://devtools",
     // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠

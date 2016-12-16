@@ -25,7 +25,7 @@ xpcAccessibleValue::GetMaximumValue(double* aValue)
   double value;
   if (Intl().IsAccessible()) {
     value = Intl().AsAccessible()->MaxValue();
-  } else { 
+  } else {
     value = Intl().AsProxy()->MaxValue();
   }
 
@@ -50,7 +50,7 @@ xpcAccessibleValue::GetMinimumValue(double* aValue)
   double value;
   if (Intl().IsAccessible()) {
     value = Intl().AsAccessible()->MinValue();
-  } else { 
+  } else {
     value = Intl().AsProxy()->MinValue();
   }
 
@@ -75,7 +75,7 @@ xpcAccessibleValue::GetCurrentValue(double* aValue)
   double value;
   if (Intl().IsAccessible()) {
     value = Intl().AsAccessible()->CurValue();
-  } else { 
+  } else {
     value = Intl().AsProxy()->CurValue();
   }
 
@@ -96,7 +96,7 @@ xpcAccessibleValue::SetCurrentValue(double aValue)
 
   if (Intl().IsAccessible()) {
     Intl().AsAccessible()->SetCurValue(aValue);
-  } else { 
+  } else {
     Intl().AsProxy()->SetCurValue(aValue);
   }
 
@@ -118,8 +118,12 @@ xpcAccessibleValue::GetMinimumIncrement(double* aValue)
   double value;
   if (Intl().IsAccessible()) {
     value = Intl().AsAccessible()->Step();
-  } else { 
+  } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     value = Intl().AsProxy()->Step();
+#endif
   }
 
   if (!IsNaN(value))

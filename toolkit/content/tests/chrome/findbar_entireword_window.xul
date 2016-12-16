@@ -105,10 +105,8 @@
 
     function onLoad() {
       Task.spawn(function* () {
-        yield new Promise(resolve => {
-          SpecialPowers.pushPrefEnv(
-            { set: [["findbar.entireword", true]] }, resolve);
-        });
+        yield SpecialPowers.pushPrefEnv(
+          { set: [["findbar.entireword", true]] });
 
         gFindBar = document.getElementById("FindToolbar");
         for (let browserId of ["content", "content-remote"]) {
@@ -154,7 +152,7 @@
         if (waitForResult) {
           promise = promiseFindResult();
         }
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, str.charCodeAt(i));
         gFindBar._findField.inputField.dispatchEvent(event);
@@ -169,21 +167,31 @@
       return gFindBar._startFindDeferred && gFindBar._startFindDeferred.promise;
     }
 
-    function promiseFindResult() {
+    function promiseFindResult(searchString) {
       return new Promise(resolve => {
         let data = {};
         let listener = {
-          onFindResult: maybeResolve.bind(null, "find"),
-          onMatchesCountResult: maybeResolve.bind(null, "matches")
-        };
+          onFindResult: res => {
+            if (searchString && res.searchString != searchString)
+              return;
 
-        function maybeResolve(which, res) {
-          data[which] = res;
-          if (!data.find || !data.matches)
-            return;
-          gFindBar.browser.finder.removeResultListener(listener);
-          resolve(data);
-        }
+            gFindBar.browser.finder.removeResultListener(listener);
+            data.find = res;
+            if (res.result == Ci.nsITypeAheadFind.FIND_NOTFOUND) {
+              data.matches = { total: 0, current: 0 };
+              resolve(data);
+              return;
+            }
+            listener = {
+              onMatchesCountResult: res => {
+                gFindBar.browser.finder.removeResultListener(listener);
+                data.matches = res;
+                resolve(data);
+              }
+            };
+            gFindBar.browser.finder.addResultListener(listener);
+          }
+        };
 
         gFindBar.browser.finder.addResultListener(listener);
       });
@@ -193,11 +201,12 @@
       for (let searchString of Object.getOwnPropertyNames(tests)) {
         gFindBar.clear();
 
-        let promise = promiseFindResult();
+        let promise = promiseFindResult(searchString);
 
         yield enterStringIntoFindField(searchString, false);
 
-        tests[searchString](yield promise);
+        let result = yield promise;
+        tests[searchString](result);
       }
     }
 
@@ -237,7 +246,7 @@
     function* testQuickfind(tests) {
       yield ContentTask.spawn(gBrowser, null, function* () {
         let document = content.document;
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, "/".charCodeAt(0));
         document.documentElement.dispatchEvent(event);
@@ -258,7 +267,7 @@
   <commandset>
     <command id="cmd_find" oncommand="document.getElementById('FindToolbar').onFindCommand();"/>
   </commandset>
-  <browser type="content-primary" flex="1" id="content" src="about:blank"/>
-  <browser type="content-primary" flex="1" id="content-remote" remote="true" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content" src="about:blank"/>
+  <browser type="content" primary="true" flex="1" id="content-remote" remote="true" src="about:blank"/>
   <findbar id="FindToolbar" browserid="content"/>
 </window>

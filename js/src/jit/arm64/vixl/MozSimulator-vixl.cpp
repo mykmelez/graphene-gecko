@@ -46,6 +46,7 @@ Simulator::Simulator(Decoder* decoder, FILE* stream)
   , stack_limit_(nullptr)
   , decoder_(nullptr)
   , oom_(false)
+  , lock_(js::mutexid::Arm64SimulatorLock)
 {
     this->init(decoder, stream);
 }
@@ -144,9 +145,6 @@ void Simulator::init(Decoder* decoder, FILE* stream) {
   // SilenceExclusiveAccessWarning().
   print_exclusive_access_warning_ = true;
 
-#ifdef DEBUG
-  lockOwner_ = nullptr;
-#endif
   redirection_ = nullptr;
 }
 
@@ -156,7 +154,7 @@ Simulator* Simulator::Current() {
 }
 
 
-Simulator* Simulator::Create() {
+Simulator* Simulator::Create(JSContext* cx) {
   Decoder *decoder = js_new<vixl::Decoder>();
   if (!decoder)
     return nullptr;
@@ -298,23 +296,8 @@ class AutoLockSimulatorCache : public js::LockGuard<js::Mutex>
  public:
   explicit AutoLockSimulatorCache(Simulator* sim)
     : Base(sim->lock_)
-    , sim_(sim)
   {
-    VIXL_ASSERT(!sim_->lockOwner_);
-#ifdef DEBUG
-    sim_->lockOwner_ = PR_GetCurrentThread();
-#endif
   }
-
-  ~AutoLockSimulatorCache() {
-#ifdef DEBUG
-    VIXL_ASSERT(sim_->lockOwner_ == PR_GetCurrentThread());
-    sim_->lockOwner_ = nullptr;
-#endif
-  }
-
- private:
-   Simulator* const sim_;
 };
 
 
@@ -384,7 +367,6 @@ class Redirection
 
 
 void Simulator::setRedirection(Redirection* redirection) {
-  // VIXL_ASSERT(lockOwner_); TODO
   redirection_ = redirection;
 }
 

@@ -8,7 +8,7 @@
 #include "mozilla/plugins/PluginWidgetParent.h"
 #include "PluginWidgetProxy.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/DebugOnly.h"
 #include "nsDebug.h"
 
@@ -33,25 +33,6 @@ PluginWidgetChild::~PluginWidgetChild()
 {
   PWLOG("PluginWidgetChild::~PluginWidgetChild()\n");
   MOZ_COUNT_DTOR(PluginWidgetChild);
-}
-
-bool
-PluginWidgetChild::RecvSetScrollCaptureId(const uint64_t& aScrollCaptureId,
-                                          const uintptr_t& aPluginInstanceId)
-{
-#if defined(XP_WIN)
-  PluginInstanceParent* instance =
-    PluginInstanceParent::LookupPluginInstanceByID(aPluginInstanceId);
-  if (instance) {
-    NS_WARN_IF(NS_FAILED(instance->SetScrollCaptureId(aScrollCaptureId)));
-  }
-
-  return true;
-#else
-  MOZ_ASSERT_UNREACHABLE(
-    "PluginWidgetChild::RecvSetScrollCaptureId calls not expected.");
-  return false;
-#endif
 }
 
 // Called by the proxy widget when it is destroyed by layout. Only gets

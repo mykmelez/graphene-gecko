@@ -16,20 +16,19 @@ const {openVariablesView} = require("devtools/client/webconsole/new-console-outp
 VariablesViewLink.displayName = "VariablesViewLink";
 
 VariablesViewLink.propTypes = {
-  object: PropTypes.object.required
+  object: PropTypes.object.isRequired
 };
 
 function VariablesViewLink(props) {
-  const { object, children } = props;
+  const { className, object, children } = props;
 
   return (
     dom.a({
       onClick: openVariablesView.bind(null, object),
-      className: "cm-variable",
+      className: className || "cm-variable",
       draggable: false,
-      href: "#"
     }, children)
   );
 }
 
-module.exports.VariablesViewLink = VariablesViewLink;
+module.exports = VariablesViewLink;

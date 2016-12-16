@@ -16,6 +16,7 @@ import sys
 from automation import Automation
 from mozdevice import DMError, DeviceManager
 from mozlog import get_default_logger
+from mozscreenshot import dump_screen
 import mozcrash
 
 # signatures for logcat messages that we don't care about much
@@ -108,6 +109,7 @@ class RemoteAutomation(Automation):
             If maxTime seconds elapse or no output is detected for timeout
             seconds, kill the process and fail the test.
         """
+        proc.utilityPath = utilityPath
         # maxTime is used to override the default timeout, we should honor that
         status = proc.wait(timeout = maxTime, noOutputTimeout = timeout)
         self.lastTestSeen = proc.getLastTestSeen
@@ -211,7 +213,7 @@ class RemoteAutomation(Automation):
 
         logcat = self._devicemanager.getLogcat(filterOutRegexps=fennecLogcatFilters)
 
-        javaException = mozcrash.check_for_java_exception(logcat)
+        javaException = mozcrash.check_for_java_exception(logcat, test_name=self.lastTestSeen)
         if javaException:
             return True
 
@@ -284,6 +286,7 @@ class RemoteAutomation(Automation):
             self.lastTestSeen = "remoteautomation.py"
             self.proc = dm.launchProcess(cmd, stdout, cwd, env, True)
             self.messageLogger = messageLogger
+            self.utilityPath = None
 
             if (self.proc is None):
                 if cmd[0] == 'am':
@@ -345,9 +348,13 @@ class RemoteAutomation(Automation):
             lines = [l for l in lines if l]
 
             if lines:
-                # We only keep the last (unfinished) line in the buffer
-                self.logBuffer = lines[-1]
-                del lines[-1]
+                if self.logBuffer.endswith('\n'):
+                    # all lines are complete; no need to buffer
+                    self.logBuffer = ""
+                else:
+                    # keep the last (unfinished) line in the buffer
+                    self.logBuffer = lines[-1]
+                    del lines[-1]
 
             if not lines:
                 return False
@@ -404,6 +411,13 @@ class RemoteAutomation(Automation):
             return status
 
         def kill(self, stagedShutdown = False):
+            if self.utilityPath:
+                # Take a screenshot to capture the screen state just before
+                # the application is killed. There are on-device screenshot
+                # options but they rarely work well with Firefox on the
+                # Android emulator. dump_screen provides an effective
+                # screenshot of the emulator and its host desktop.
+                dump_screen(self.utilityPath, get_default_logger())
             if stagedShutdown:
                 # Trigger an ANR report with "kill -3" (SIGQUIT)
                 self.dm.killProcess(self.procName, 3)

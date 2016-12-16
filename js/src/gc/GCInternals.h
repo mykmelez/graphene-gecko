@@ -32,6 +32,10 @@ class MOZ_RAII AutoTraceSession
     explicit AutoTraceSession(JSRuntime* rt, JS::HeapState state = JS::HeapState::Tracing);
     ~AutoTraceSession();
 
+    // Threads with an exclusive context can hit refillFreeList while holding
+    // the exclusive access lock. To avoid deadlocking when we try to acquire
+    // this lock during GC and the other thread is waiting, make sure we hold
+    // the exclusive access lock during GC sessions.
     AutoLockForExclusiveAccess lock;
 
   protected:
@@ -54,28 +58,8 @@ class MOZ_RAII AutoPrepareForTracing
     AutoTraceSession& session() { return session_.ref(); }
 };
 
-class IncrementalSafety
-{
-    const char* reason_;
-
-    explicit IncrementalSafety(const char* reason) : reason_(reason) {}
-
-  public:
-    static IncrementalSafety Safe() { return IncrementalSafety(nullptr); }
-    static IncrementalSafety Unsafe(const char* reason) { return IncrementalSafety(reason); }
-
-    explicit operator bool() const {
-        return reason_ == nullptr;
-    }
-
-    const char* reason() {
-        MOZ_ASSERT(reason_);
-        return reason_;
-    }
-};
-
-IncrementalSafety
-IsIncrementalGCSafe(JSRuntime* rt);
+AbortReason
+IsIncrementalGCUnsafe(JSRuntime* rt);
 
 #ifdef JS_GC_ZEAL
 
@@ -124,7 +108,7 @@ struct MOZ_RAII AutoStopVerifyingBarriers
 
 #ifdef JSGC_HASH_TABLE_CHECKS
 void CheckHashTablesAfterMovingGC(JSRuntime* rt);
-void CheckHeapAfterMovingGC(JSRuntime* rt);
+void CheckHeapAfterGC(JSRuntime* rt);
 #endif
 
 struct MovingTracer : JS::CallbackTracer
@@ -137,35 +121,13 @@ struct MovingTracer : JS::CallbackTracer
     void onScriptEdge(JSScript** scriptp) override;
     void onLazyScriptEdge(LazyScript** lazyp) override;
     void onBaseShapeEdge(BaseShape** basep) override;
+    void onScopeEdge(Scope** basep) override;
     void onChild(const JS::GCCellPtr& thing) override {
         MOZ_ASSERT(!RelocationOverlay::isCellForwarded(thing.asCell()));
     }
 
 #ifdef DEBUG
     TracerKind getTracerKind() const override { return TracerKind::Moving; }
-#endif
-};
-
-// In debug builds, set/unset the GC sweeping flag for the current thread.
-struct MOZ_RAII AutoSetThreadIsSweeping
-{
-#ifdef DEBUG
-    AutoSetThreadIsSweeping()
-      : threadData_(js::TlsPerThreadData.get())
-    {
-        MOZ_ASSERT(!threadData_->gcSweeping);
-        threadData_->gcSweeping = true;
-    }
-
-    ~AutoSetThreadIsSweeping() {
-        MOZ_ASSERT(threadData_->gcSweeping);
-        threadData_->gcSweeping = false;
-    }
-
-  private:
-    PerThreadData* threadData_;
-#else
-    AutoSetThreadIsSweeping() {}
 #endif
 };
 
@@ -182,12 +144,28 @@ struct TenureCount
 // of potential collisions.
 struct TenureCountCache
 {
-    TenureCount entries[16];
+    static const size_t EntryShift = 4;
+    static const size_t EntryCount = 1 << EntryShift;
+
+    TenureCount entries[EntryCount];
 
     TenureCountCache() { mozilla::PodZero(this); }
 
+    HashNumber hash(ObjectGroup* group) {
+#if JS_BITS_PER_WORD == 32
+        static const size_t ZeroBits = 3;
+#else
+        static const size_t ZeroBits = 4;
+#endif
+
+        uintptr_t word = uintptr_t(group);
+        MOZ_ASSERT((word & ((1 << ZeroBits) - 1)) == 0);
+        word >>= ZeroBits;
+        return HashNumber((word >> EntryShift) ^ word);
+    }
+
     TenureCount& findEntry(ObjectGroup* group) {
-        return entries[PointerHasher<ObjectGroup*, 3>::hash(group) % mozilla::ArrayLength(entries)];
+        return entries[hash(group) % EntryCount];
     }
 };
 

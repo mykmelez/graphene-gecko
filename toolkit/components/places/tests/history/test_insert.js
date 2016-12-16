@@ -8,13 +8,6 @@
 add_task(function* test_insert_error_cases() {
   const TEST_URL = "http://mozilla.com";
 
-  let validPageInfo = {
-    url: TEST_URL,
-    visits: [
-      {transition: TRANSITION_LINK}
-    ]
-  };
-
   Assert.throws(
     () =>  PlacesUtils.history.insert(),
     /TypeError: pageInfo must be an object/,
@@ -78,7 +71,7 @@ add_task(function* test_insert_error_cases() {
     "passing a second visit object with an invalid date to History.insert should throw a TypeError"
   );
   let futureDate = new Date();
-  futureDate.setDate(futureDate.getDate() + 1);
+  futureDate.setDate(futureDate.getDate() + 1000);
   Assert.throws(
     () =>  PlacesUtils.history.insert({
       url: TEST_URL,
@@ -115,7 +108,7 @@ add_task(function* test_history_insert() {
     let pageInfo = {
       title,
       visits: [
-        {transition: transition, referrer: referrer, date: date,}
+        {transition: transition, referrer: referrer, date: date, }
       ]
     };
 
@@ -184,7 +177,7 @@ add_task(function* test_insert_multiple_error_cases() {
 
 add_task(function* test_history_insertMany() {
   const BAD_URLS = ["about:config", "chrome://browser/content/browser.xul"];
-  const GOOD_URLS = [1, 2, 3].map(x => {return `http://mozilla.com/${x}`;});
+  const GOOD_URLS = [1, 2, 3].map(x => { return `http://mozilla.com/${x}`; });
 
   let makePageInfos = Task.async(function*(urls, filter = x => x) {
     let pageInfos = [];

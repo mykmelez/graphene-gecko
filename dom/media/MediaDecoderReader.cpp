@@ -25,13 +25,15 @@ namespace mozilla {
 //#define SEEK_LOGGING
 
 extern LazyLogModule gMediaDecoderLog;
-#define DECODER_LOG(x, ...) \
-  MOZ_LOG(gMediaDecoderLog, LogLevel::Debug, ("Decoder=%p " x, mDecoder, ##__VA_ARGS__))
 
-// Same workaround as MediaDecoderStateMachine.cpp.
-#define DECODER_WARN_HELPER(a, b) NS_WARNING b
-#define DECODER_WARN(x, ...) \
-  DECODER_WARN_HELPER(0, (nsPrintfCString("Decoder=%p " x, mDecoder, ##__VA_ARGS__).get()))
+// avoid redefined macro in unified build
+#undef FMT
+#undef DECODER_LOG
+#undef DECODER_WARN
+
+#define FMT(x, ...) "Decoder=%p " x, mDecoder, ##__VA_ARGS__
+#define DECODER_LOG(...) MOZ_LOG(gMediaDecoderLog, LogLevel::Debug,   (FMT(__VA_ARGS__)))
+#define DECODER_WARN(...) NS_WARNING(nsPrintfCString(FMT(__VA_ARGS__)).get())
 
 class VideoQueueMemoryFunctor : public nsDequeFunctor {
 public:
@@ -64,154 +66,6 @@ public:
   size_t mSize;
 };
 
-// The ReaderQueue is used to keep track of the numer of active readers to
-// enforce a given limit on the number of simultaneous active decoders.
-// Readers are added/removed during construction/destruction and are
-// suspended and resumed by the queue. The max number of active decoders is
-// controlled by the "media.decoder.limit" pref.
-class ReaderQueue
-{
-public:
-  static ReaderQueue& Instance()
-  {
-    static StaticMutex sMutex;
-    StaticMutexAutoLock lock(sMutex);
-
-    if (!sInstance) {
-      sInstance = new ReaderQueue;
-      sInstance->MaxNumActive(MediaPrefs::MediaDecoderLimit());
-      ClearOnShutdown(&sInstance, ShutdownPhase::Shutdown);
-    }
-    MOZ_ASSERT(sInstance);
-    return *sInstance;
-  }
-
-  void MaxNumActive(int32_t aNumActive)
-  {
-    MutexAutoLock lock(mMutex);
-
-    if (aNumActive < 0) {
-      mNumMaxActive = std::numeric_limits<uint32_t>::max();
-    } else {
-      mNumMaxActive = aNumActive;
-    }
-  }
-
-  void Add(MediaDecoderReader* aReader)
-  {
-    MutexAutoLock lock(mMutex);
-
-    if (mActive.Length() < mNumMaxActive) {
-      // Below active limit, resume the new reader.
-      mActive.AppendElement(aReader);
-      DispatchResume(aReader);
-    } else if (mActive.IsEmpty()) {
-      MOZ_ASSERT(mNumMaxActive == 0);
-      mSuspended.AppendElement(aReader);
-    } else {
-      // We're past the active limit, suspend an old reader and resume the new.
-      mActive.AppendElement(aReader);
-      MediaDecoderReader* suspendReader = mActive.ElementAt(0);
-      mSuspended.AppendElement(suspendReader);
-      mActive.RemoveElementAt(0);
-      DispatchSuspendResume(suspendReader, aReader);
-    }
-  }
-
-  void Remove(MediaDecoderReader* aReader)
-  {
-    MutexAutoLock lock(mMutex);
-
-    if (aReader->IsSuspended()) {
-      // Removing suspended readers has no immediate side-effects.
-      DebugOnly<bool> result = mSuspended.RemoveElement(aReader);
-      MOZ_ASSERT(result, "Suspended reader must be in mSuspended");
-    } else {
-      // For each removed active reader, we resume a suspended one.
-      DebugOnly<bool> result = mActive.RemoveElement(aReader);
-      MOZ_ASSERT(result, "Non-suspended reader must be in mActive");
-      if (mSuspended.IsEmpty()) {
-        return;
-      }
-      MediaDecoderReader* resumeReader = mSuspended.LastElement();
-      mActive.AppendElement(resumeReader);
-      mSuspended.RemoveElementAt(mSuspended.Length() - 1);
-      DispatchResume(resumeReader);
-    }
-  }
-
-private:
-  ReaderQueue()
-    : mNumMaxActive(std::numeric_limits<uint32_t>::max())
-    , mMutex("ReaderQueue:mMutex")
-  {
-  }
-
-  static void Resume(MediaDecoderReader* aReader)
-  {
-    if (!aReader->IsSuspended()) {
-      return;
-    }
-    aReader->SetIsSuspended(false);
-  }
-
-  static void Suspend(MediaDecoderReader* aReader)
-  {
-    if (aReader->IsSuspended()) {
-      return;
-    }
-    aReader->SetIsSuspended(true);
-
-    aReader->ReleaseMediaResources();
-  }
-
-  static void DispatchResume(MediaDecoderReader* aReader)
-  {
-    RefPtr<MediaDecoderReader> reader = aReader;
-
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
-      [reader]() {
-        Resume(reader);
-    });
-    reader->OwnerThread()->Dispatch(task.forget());
-  }
-
-  static void DispatchSuspend(MediaDecoderReader* aReader)
-  {
-    RefPtr<MediaDecoderReader> reader = aReader;
-
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
-      [reader]() {
-        Suspend(reader);
-    });
-    reader->OwnerThread()->Dispatch(task.forget());
-  }
-
-  static void DispatchSuspendResume(MediaDecoderReader* aSuspend,
-                                    MediaDecoderReader* aResume)
-  {
-    RefPtr<MediaDecoderReader> suspend = aSuspend;
-    RefPtr<MediaDecoderReader> resume = aResume;
-
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
-      [suspend, resume] () {
-        Suspend(suspend);
-        DispatchResume(resume);
-    });
-    suspend->OwnerThread()->Dispatch(task.forget());
-  }
-
-  static StaticAutoPtr<ReaderQueue> sInstance;
-
-  nsTArray<RefPtr<MediaDecoderReader>> mActive;
-  nsTArray<RefPtr<MediaDecoderReader>> mSuspended;
-  uint32_t mNumMaxActive;
-
-  mutable Mutex mMutex;
-};
-
-StaticAutoPtr<ReaderQueue> ReaderQueue::sInstance;
-
 MediaDecoderReader::MediaDecoderReader(AbstractMediaDecoder* aDecoder)
   : mAudioCompactor(mAudioQueue)
   , mDecoder(aDecoder)
@@ -223,23 +77,21 @@ MediaDecoderReader::MediaDecoderReader(AbstractMediaDecoder* aDecoder)
   , mIgnoreAudioOutputFormat(false)
   , mHitAudioDecodeError(false)
   , mShutdown(false)
-  , mAudioDiscontinuity(false)
-  , mVideoDiscontinuity(false)
-  , mIsSuspended(mTaskQueue, true,
-                 "MediaDecoderReader::mIsSuspended (Canonical)")
 {
   MOZ_COUNT_CTOR(MediaDecoderReader);
   MOZ_ASSERT(NS_IsMainThread());
+}
 
+nsresult
+MediaDecoderReader::Init()
+{
   if (mDecoder && mDecoder->DataArrivedEvent()) {
     mDataArrivedListener = mDecoder->DataArrivedEvent()->Connect(
       mTaskQueue, this, &MediaDecoderReader::NotifyDataArrived);
   }
-
-  ReaderQueue::Instance().Add(this);
-
   // Dispatch initialization that needs to happen on that task queue.
   mTaskQueue->Dispatch(NewRunnableMethod(this, &MediaDecoderReader::InitializationTask));
+  return InitInternal();
 }
 
 void
@@ -290,14 +142,12 @@ nsresult MediaDecoderReader::ResetDecode(TrackSet aTracks)
 {
   if (aTracks.contains(TrackInfo::kVideoTrack)) {
     VideoQueue().Reset();
-    mVideoDiscontinuity = true;
-    mBaseVideoPromise.RejectIfExists(CANCELED, __func__);
+    mBaseVideoPromise.RejectIfExists(NS_ERROR_DOM_MEDIA_CANCELED, __func__);
   }
 
   if (aTracks.contains(TrackInfo::kAudioTrack)) {
     AudioQueue().Reset();
-    mAudioDiscontinuity = true;
-    mBaseAudioPromise.RejectIfExists(CANCELED, __func__);
+    mBaseAudioPromise.RejectIfExists(NS_ERROR_DOM_MEDIA_CANCELED, __func__);
   }
 
   return NS_OK;
@@ -326,7 +176,7 @@ MediaDecoderReader::DecodeToFirstVideoData()
     p->Resolve(self->VideoQueue().PeekFront(), __func__);
   }, [p] () {
     // We don't have a way to differentiate EOS, error, and shutdown here. :-(
-    p->Reject(END_OF_STREAM, __func__);
+    p->Reject(NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
   });
 
   return p.forget();
@@ -348,9 +198,7 @@ media::TimeIntervals
 MediaDecoderReader::GetBuffered()
 {
   MOZ_ASSERT(OnTaskQueue());
-  if (!HaveStartTime()) {
-    return media::TimeIntervals();
-  }
+
   AutoPinned<MediaResource> stream(mDecoder->GetResource());
 
   if (!mDuration.Ref().isSome()) {
@@ -363,8 +211,6 @@ MediaDecoderReader::GetBuffered()
 RefPtr<MediaDecoderReader::MetadataPromise>
 MediaDecoderReader::AsyncReadMetadata()
 {
-  typedef ReadMetadataFailureReason Reason;
-
   MOZ_ASSERT(OnTaskQueue());
   DECODER_LOG("MediaDecoderReader::AsyncReadMetadata");
 
@@ -373,11 +219,14 @@ MediaDecoderReader::AsyncReadMetadata()
   nsresult rv = ReadMetadata(&metadata->mInfo, getter_Transfers(metadata->mTags));
   metadata->mInfo.AssertValid();
 
+  // Update the buffer ranges before resolving the metadata promise. Bug 1320258.
+  UpdateBuffered();
+
   // We're not waiting for anything. If we didn't get the metadata, that's an
   // error.
   if (NS_FAILED(rv) || !metadata->mInfo.HasValidMedia()) {
     DECODER_WARN("ReadMetadata failed, rv=%x HasValidMedia=%d", rv, metadata->mInfo.HasValidMedia());
-    return MetadataPromise::CreateAndReject(Reason::METADATA_ERROR, __func__);
+    return MetadataPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_METADATA_ERR, __func__);
   }
 
   // Success!
@@ -394,7 +243,7 @@ public:
   {
   }
 
-  NS_METHOD Run()
+  NS_IMETHOD Run() override
   {
     MOZ_ASSERT(mReader->OnTaskQueue());
 
@@ -419,7 +268,7 @@ public:
   {
   }
 
-  NS_METHOD Run()
+  NS_IMETHOD Run() override
   {
     MOZ_ASSERT(mReader->OnTaskQueue());
 
@@ -457,13 +306,9 @@ MediaDecoderReader::RequestVideoData(bool aSkipToNextKeyframe,
   }
   if (VideoQueue().GetSize() > 0) {
     RefPtr<VideoData> v = VideoQueue().PopFront();
-    if (v && mVideoDiscontinuity) {
-      v->mDiscontinuity = true;
-      mVideoDiscontinuity = false;
-    }
     mBaseVideoPromise.Resolve(v, __func__);
   } else if (VideoQueue().IsFinished()) {
-    mBaseVideoPromise.Reject(END_OF_STREAM, __func__);
+    mBaseVideoPromise.Reject(NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
   } else {
     MOZ_ASSERT(false, "Dropping this promise on the floor");
   }
@@ -493,13 +338,11 @@ MediaDecoderReader::RequestAudioData()
   }
   if (AudioQueue().GetSize() > 0) {
     RefPtr<AudioData> a = AudioQueue().PopFront();
-    if (mAudioDiscontinuity) {
-      a->mDiscontinuity = true;
-      mAudioDiscontinuity = false;
-    }
     mBaseAudioPromise.Resolve(a, __func__);
   } else if (AudioQueue().IsFinished()) {
-    mBaseAudioPromise.Reject(mHitAudioDecodeError ? DECODE_ERROR : END_OF_STREAM, __func__);
+    mBaseAudioPromise.Reject(mHitAudioDecodeError
+                             ? NS_ERROR_DOM_MEDIA_FATAL_ERR
+                             : NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
     mHitAudioDecodeError = false;
   } else {
     MOZ_ASSERT(false, "Dropping this promise on the floor");
@@ -514,30 +357,21 @@ MediaDecoderReader::Shutdown()
   MOZ_ASSERT(OnTaskQueue());
   mShutdown = true;
 
-  mBaseAudioPromise.RejectIfExists(END_OF_STREAM, __func__);
-  mBaseVideoPromise.RejectIfExists(END_OF_STREAM, __func__);
+  mBaseAudioPromise.RejectIfExists(NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
+  mBaseVideoPromise.RejectIfExists(NS_ERROR_DOM_MEDIA_END_OF_STREAM, __func__);
 
   mDataArrivedListener.DisconnectIfExists();
 
-  ReleaseMediaResources();
+  ReleaseResources();
   mDuration.DisconnectIfConnected();
   mBuffered.DisconnectAll();
-  mIsSuspended.DisconnectAll();
 
   // Shut down the watch manager before shutting down our task queue.
   mWatchManager.Shutdown();
 
-  RefPtr<ShutdownPromise> p;
-
   mDecoder = nullptr;
-
-  ReaderQueue::Instance().Remove(this);
 
   return mTaskQueue->BeginShutdown();
 }
 
 } // namespace mozilla
-
-#undef DECODER_LOG
-#undef DECODER_WARN
-#undef DECODER_WARN_HELPER

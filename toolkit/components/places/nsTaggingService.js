@@ -32,11 +32,14 @@ TaggingService.prototype = {
    *
    * @param aTagName
    *        the name for the new tag.
+   * @param aSource
+   *        a change source constant from nsINavBookmarksService::SOURCE_*.
    * @returns the id of the new tag container.
    */
-  _createTag: function TS__createTag(aTagName) {
+  _createTag: function TS__createTag(aTagName, aSource) {
     var newFolderId = PlacesUtils.bookmarks.createFolder(
-      PlacesUtils.tagsFolderId, aTagName, PlacesUtils.bookmarks.DEFAULT_INDEX
+      PlacesUtils.tagsFolderId, aTagName, PlacesUtils.bookmarks.DEFAULT_INDEX,
+      /* aGuid */ null, aSource
     );
     // Add the folder to our local cache, so we can avoid doing this in the
     // observer that would have to check itemType.
@@ -107,7 +110,7 @@ TaggingService.prototype = {
    * @throws Cr.NS_ERROR_INVALID_ARG if any element of the input array is not
    *         a valid tag.
    */
-  _convertInputMixedTagsArray(aTags, trim=false) {
+  _convertInputMixedTagsArray(aTags, trim = false) {
     // Handle sparse array with a .filter.
     return aTags.filter(tag => tag !== undefined)
                 .map(idOrName => {
@@ -135,7 +138,7 @@ TaggingService.prototype = {
   },
 
   // nsITaggingService
-  tagURI: function TS_tagURI(aURI, aTags)
+  tagURI: function TS_tagURI(aURI, aTags, aSource)
   {
     if (!aURI || !aTags || !Array.isArray(aTags)) {
       throw Cr.NS_ERROR_INVALID_ARG;
@@ -148,15 +151,22 @@ TaggingService.prototype = {
       for (let tag of tags) {
         if (tag.id == -1) {
           // Tag does not exist yet, create it.
-          this._createTag(tag.name);
+          this._createTag(tag.name, aSource);
         }
 
-        if (this._getItemIdForTaggedURI(aURI, tag.name) == -1) {
+        let itemId = this._getItemIdForTaggedURI(aURI, tag.name);
+        if (itemId == -1) {
           // The provided URI is not yet tagged, add a tag for it.
           // Note that bookmarks under tag containers must have null titles.
           PlacesUtils.bookmarks.insertBookmark(
-            tag.id, aURI, PlacesUtils.bookmarks.DEFAULT_INDEX, null
+            tag.id, aURI, PlacesUtils.bookmarks.DEFAULT_INDEX,
+            /* aTitle */ null, /* aGuid */ null, aSource
           );
+        } else {
+          // Otherwise, bump the tag's timestamp, so that we can increment the
+          // sync change counter for all bookmarks with the URI.
+          PlacesUtils.bookmarks.setItemLastModified(itemId,
+            PlacesUtils.toPRTime(Date.now()), aSource);
         }
 
         // Try to preserve user's tag name casing.
@@ -164,7 +174,7 @@ TaggingService.prototype = {
         // user-typed value.
         if (PlacesUtils.bookmarks.getItemTitle(tag.id) != tag.name) {
           // this._tagFolders is updated by the bookmarks observer.
-          PlacesUtils.bookmarks.setItemTitle(tag.id, tag.name);
+          PlacesUtils.bookmarks.setItemTitle(tag.id, tag.name, aSource);
         }
       }
     };
@@ -182,8 +192,10 @@ TaggingService.prototype = {
    *
    * @param aTagId
    *        the itemId of the tag element under the tags root
+   * @param aSource
+   *        a change source constant from nsINavBookmarksService::SOURCE_*
    */
-  _removeTagIfEmpty: function TS__removeTagIfEmpty(aTagId) {
+  _removeTagIfEmpty: function TS__removeTagIfEmpty(aTagId, aSource) {
     let count = 0;
     let db = PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase)
                                 .DBConnection;
@@ -202,12 +214,12 @@ TaggingService.prototype = {
     }
 
     if (count == 0) {
-      PlacesUtils.bookmarks.removeItem(aTagId);
+      PlacesUtils.bookmarks.removeItem(aTagId, aSource);
     }
   },
 
   // nsITaggingService
-  untagURI: function TS_untagURI(aURI, aTags)
+  untagURI: function TS_untagURI(aURI, aTags, aSource)
   {
     if (!aURI || (aTags && !Array.isArray(aTags))) {
       throw Cr.NS_ERROR_INVALID_ARG;
@@ -235,7 +247,7 @@ TaggingService.prototype = {
           let itemId = this._getItemIdForTaggedURI(aURI, tag.name);
           if (itemId != -1) {
             // There is a tagged item.
-            PlacesUtils.bookmarks.removeItem(itemId);
+            PlacesUtils.bookmarks.removeItem(itemId, aSource);
           }
         }
       }
@@ -293,7 +305,7 @@ TaggingService.prototype = {
 
     var tags = [];
     var bookmarkIds = PlacesUtils.bookmarks.getBookmarkIdsForURI(aURI);
-    for (var i=0; i < bookmarkIds.length; i++) {
+    for (var i = 0; i < bookmarkIds.length; i++) {
       var folderId = PlacesUtils.bookmarks.getFolderIdForItem(bookmarkIds[i]);
       if (this._tagFolders[folderId])
         tags.push(this._tagFolders[folderId]);
@@ -414,7 +426,8 @@ TaggingService.prototype = {
   },
 
   onItemRemoved: function TS_onItemRemoved(aItemId, aFolderId, aIndex,
-                                           aItemType, aURI) {
+                                           aItemType, aURI, aGuid, aParentGuid,
+                                           aSource) {
     // Item is a tag folder.
     if (aFolderId == PlacesUtils.tagsFolderId && this._tagFolders[aItemId]) {
       delete this._tagFolders[aItemId];
@@ -427,13 +440,13 @@ TaggingService.prototype = {
       let itemIds = this._getTaggedItemIdsIfUnbookmarkedURI(aURI);
       for (let i = 0; i < itemIds.length; i++) {
         try {
-          PlacesUtils.bookmarks.removeItem(itemIds[i]);
+          PlacesUtils.bookmarks.removeItem(itemIds[i], aSource);
         } catch (ex) {}
       }
     }
     // Item is a tag entry.  If this was the last entry for this tag, remove it.
     else if (aURI && this._tagFolders[aFolderId]) {
-      this._removeTagIfEmpty(aFolderId);
+      this._removeTagIfEmpty(aFolderId, aSource);
     }
   },
 
@@ -451,12 +464,11 @@ TaggingService.prototype = {
       delete this._tagFolders[aItemId];
   },
 
-  onItemVisited: function () {},
-  onBeginUpdateBatch: function () {},
-  onEndUpdateBatch: function () {},
+  onItemVisited: function() {},
+  onBeginUpdateBatch: function() {},
+  onEndUpdateBatch: function() {},
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// nsISupports
+  // nsISupports
 
   classID: Components.ID("{bbc23860-2553-479d-8b78-94d9038334f7}"),
 
@@ -520,10 +532,6 @@ TagAutoCompleteResult.prototype = {
    */
   get matchCount() {
     return this._results.length;
-  },
-
-  get typeAheadResult() {
-    return false;
   },
 
   /**
@@ -617,8 +625,8 @@ TagAutoCompleteSearch.prototype = {
       searchString.lastIndexOf(";"));
     var before = '';
     if (index != -1) {
-      before = searchString.slice(0, index+1);
-      searchString = searchString.slice(index+1);
+      before = searchString.slice(0, index + 1);
+      searchString = searchString.slice(index + 1);
       // skip past whitespace
       var m = searchString.match(/\s+/);
       if (m) {
@@ -692,8 +700,7 @@ TagAutoCompleteSearch.prototype = {
     this._stopped = true;
   },
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// nsISupports
+  // nsISupports
 
   classID: Components.ID("{1dcc23b0-d4cb-11dc-9ad6-479d56d89593}"),
 

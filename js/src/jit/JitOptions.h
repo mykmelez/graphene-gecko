@@ -47,6 +47,7 @@ struct DefaultJitOptions
 #endif
     bool checkRangeAnalysis;
     bool runExtraChecks;
+    bool disableInlineBacktracking;
     bool disableAma;
     bool disableEaa;
     bool disableEagerSimdUnbox;
@@ -61,6 +62,7 @@ struct DefaultJitOptions
     bool disableRangeAnalysis;
     bool disableRecoverIns;
     bool disableScalarReplacement;
+    bool disableCacheIR;
     bool disableSharedStubs;
     bool disableSincos;
     bool disableSink;
@@ -68,8 +70,11 @@ struct DefaultJitOptions
     bool forceInlineCaches;
     bool limitScriptSize;
     bool osr;
+    bool asmJSAtomicsEnable;
     bool wasmTestMode;
-    bool wasmExplicitBoundsChecks;
+    bool wasmAlwaysCheckBounds;
+    bool wasmFoldOffsets;
+    bool ionInterruptWithoutSignals;
     uint32_t baselineWarmUpThreshold;
     uint32_t exceptionBailoutThreshold;
     uint32_t frequentBailoutThreshold;

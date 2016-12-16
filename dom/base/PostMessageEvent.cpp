@@ -36,7 +36,7 @@ PostMessageEvent::PostMessageEvent(nsGlobalWindow* aSource,
                                    nsIDocument* aSourceDocument,
                                    bool aTrustedCaller)
 : StructuredCloneHolder(CloningSupported, TransferringSupported,
-                        SameProcessSameThread),
+                        StructuredCloneScope::SameProcessSameThread),
   mSource(aSource),
   mCallerOrigin(aCallerOrigin),
   mTargetWindow(aTargetWindow),
@@ -44,12 +44,10 @@ PostMessageEvent::PostMessageEvent(nsGlobalWindow* aSource,
   mSourceDocument(aSourceDocument),
   mTrustedCaller(aTrustedCaller)
 {
-  MOZ_COUNT_CTOR(PostMessageEvent);
 }
 
 PostMessageEvent::~PostMessageEvent()
 {
-  MOZ_COUNT_DTOR(PostMessageEvent);
 }
 
 NS_IMETHODIMP
@@ -60,6 +58,9 @@ PostMessageEvent::Run()
   MOZ_ASSERT(!mSource || mSource->IsOuterWindow(),
              "should have been passed an outer window!");
 
+  // Note: We don't init this AutoJSAPI with targetWindow, because we do not
+  // want exceptions during message deserialization to trigger error events on
+  // targetWindow.
   AutoJSAPI jsapi;
   jsapi.Init();
   JSContext* cx = jsapi.cx();
@@ -81,7 +82,7 @@ PostMessageEvent::Run()
 
   MOZ_ASSERT(targetWindow->IsInnerWindow(),
              "we ordered an inner window!");
-  JSAutoCompartment ac(cx, targetWindow->GetWrapperPreserveColor());
+  JSAutoCompartment ac(cx, targetWindow->GetWrapper());
 
   // Ensure that any origin which might have been provided is the origin of this
   // window's document.  Note that we do this *now* instead of when postMessage
@@ -104,12 +105,18 @@ PostMessageEvent::Run()
     //       don't do that in other places it seems better to hold the line for
     //       now.  Long-term, we want HTML5 to address this so that we can
     //       be compliant while being safer.
-    if (!targetPrin->Equals(mProvidedPrincipal)) {
+    if (!BasePrincipal::Cast(targetPrin)->EqualsIgnoringAddonId(mProvidedPrincipal)) {
       nsAutoString providedOrigin, targetOrigin;
       nsresult rv = nsContentUtils::GetUTFOrigin(targetPrin, targetOrigin);
       NS_ENSURE_SUCCESS(rv, rv);
       rv = nsContentUtils::GetUTFOrigin(mProvidedPrincipal, providedOrigin);
       NS_ENSURE_SUCCESS(rv, rv);
+
+      MOZ_DIAGNOSTIC_ASSERT(providedOrigin != targetOrigin ||
+                            (BasePrincipal::Cast(mProvidedPrincipal)->OriginAttributesRef() ==
+                              BasePrincipal::Cast(targetPrin)->OriginAttributesRef()),
+                            "Unexpected postMessage call to a window with mismatched "
+                            "origin attributes");
 
       const char16_t* params[] = { providedOrigin.get(), targetOrigin.get() };
 
@@ -141,15 +148,15 @@ PostMessageEvent::Run()
   Nullable<WindowProxyOrMessagePort> source;
   source.SetValue().SetAsWindowProxy() = mSource ? mSource->AsOuter() : nullptr;
 
+  Sequence<OwningNonNull<MessagePort>> ports;
+  if (!TakeTransferredPortsAsSequence(ports)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   event->InitMessageEvent(nullptr, NS_LITERAL_STRING("message"),
                           false /*non-bubbling */, false /*cancelable */,
                           messageData, mCallerOrigin,
-                          EmptyString(), source, nullptr);
-
-  nsTArray<RefPtr<MessagePort>> ports = TakeTransferredPorts();
-
-  event->SetPorts(new MessagePortList(static_cast<dom::Event*>(event.get()),
-                                      ports));
+                          EmptyString(), source, ports);
 
   // We can't simply call dispatchEvent on the window because doing so ends
   // up flipping the trusted bit on the event, and we don't want that to

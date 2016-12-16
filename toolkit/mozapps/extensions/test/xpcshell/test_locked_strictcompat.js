@@ -153,9 +153,7 @@ add_task(function* init() {
   // New profile so new add-ons are ignored
   check_startup_changes(AddonManager.STARTUP_CHANGE_INSTALLED, []);
 
-  let a1, a2, a3, a4, a5, a6, a7, t1, t2;
-
-  [a2, a3, a4, a7, t2] =
+  let [a2, a3, a4, a7, t2] =
     yield promiseAddonsByIDs(["addon2@tests.mozilla.org",
                               "addon3@tests.mozilla.org",
                               "addon4@tests.mozilla.org",
@@ -362,7 +360,12 @@ add_task(function* run_test_1() {
   // Restarting will actually apply changes to extensions.ini which will
   // then be put into the in-memory database when we next fail to load the
   // real thing
-  restartManager();
+  try {
+    shutdownManager();
+  } catch (e) {
+    // We're expecting an error here.
+  }
+  startupManager(false);
 
   // Shouldn't have seen any startup changes
   check_startup_changes(AddonManager.STARTUP_CHANGE_INSTALLED, []);
@@ -441,7 +444,12 @@ add_task(function* run_test_1() {
 
   // After allowing access to the original DB things should go back to as
   // back how they were before the lock
-  shutdownManager();
+  let shutdownError;
+  try {
+    shutdownManager();
+  } catch (e) {
+    shutdownError = e;
+  }
   do_print("Unlocking " + gExtensionsJSON.path);
   yield file.close();
   gExtensionsJSON.permissions = filePermissions;
@@ -481,7 +489,7 @@ add_task(function* run_test_1() {
   // remember that this extension was changed to disabled. On Windows we
   // couldn't replace the old DB so we read the older version of the DB
   // where the extension is enabled
-  if (gXPISaveError) {
+  if (shutdownError) {
     do_print("XPI save failed");
     do_check_true(a3.isActive);
     do_check_false(a3.appDisabled);
@@ -543,6 +551,12 @@ add_task(function* run_test_1() {
   do_check_false(t2.appDisabled);
   do_check_eq(t2.pendingOperations, AddonManager.PENDING_NONE);
   do_check_true(isThemeInAddonsList(profileDir, t2.id));
+
+  try {
+    shutdownManager();
+  } catch (e) {
+    // An error is expected here.
+  }
 });
 
 function run_test() {

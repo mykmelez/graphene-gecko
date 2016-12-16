@@ -100,7 +100,7 @@
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
-#include "GeneratedJNIWrappers.h"
+#include "FennecJNIWrappers.h"
 #endif
 
 #include "mozilla/Preferences.h"
@@ -382,7 +382,10 @@ static nsresult GetDownloadDirectory(nsIFile **_directory,
   // In the case where we do not have the permission we will start the
   // download to the app cache directory and later move it to the final
   // destination after prompting for the permission.
-  auto downloadDir = java::DownloadsIntegration::GetTemporaryDownloadDirectory();
+  jni::String::LocalRef downloadDir;
+  if (jni::IsFennec()) {
+    downloadDir = java::DownloadsIntegration::GetTemporaryDownloadDirectory();
+  }
 
   nsresult rv;
   if (downloadDir) {
@@ -522,6 +525,7 @@ static const nsDefaultMimeTypeEntry defaultMimeEntries[] =
   { APPLICATION_OGG, "ogg" },
   { AUDIO_OGG, "oga" },
   { AUDIO_OGG, "opus" },
+  { APPLICATION_PDF, "pdf" },
   { VIDEO_WEBM, "webm" },
   { AUDIO_WEBM, "webm" },
 #if defined(MOZ_WMF)
@@ -581,11 +585,15 @@ static const nsExtraMimeTypeEntry extraMimeEntries[] =
   { IMAGE_ICO, "ico,cur", "ICO Image" },
   { IMAGE_JPEG, "jpeg,jpg,jfif,pjpeg,pjp", "JPEG Image" },
   { IMAGE_PNG, "png", "PNG Image" },
+  { IMAGE_APNG, "apng", "APNG Image" },
   { IMAGE_TIFF, "tiff,tif", "TIFF Image" },
   { IMAGE_XBM, "xbm", "XBM Image" },
   { IMAGE_SVG_XML, "svg", "Scalable Vector Graphics" },
   { MESSAGE_RFC822, "eml", "RFC-822 data" },
   { TEXT_PLAIN, "txt,text", "Text File" },
+  { APPLICATION_JSON, "json", "JavaScript Object Notation" },
+  { TEXT_VTT, "vtt", "Web Video Text Tracks" },
+  { TEXT_CACHE_MANIFEST, "appcache", "Application Cache Manifest" },
   { TEXT_HTML, "html,htm,shtml,ehtml", "HyperText Markup Language" },
   { "application/xhtml+xml", "xhtml,xht", "Extensible HyperText Markup Language" },
   { APPLICATION_MATHML_XML, "mml", "Mathematical Markup Language" },
@@ -1569,6 +1577,13 @@ nsExternalAppHandler::MaybeApplyDecodingForExtension(nsIRequest *aRequest)
   // Turn off content encoding conversions if needed
   bool applyConversion = true;
 
+  // First, check to see if conversion is already disabled.  If so, we
+  // have nothing to do here.
+  encChannel->GetApplyConversion(&applyConversion);
+  if (!applyConversion) {
+    return;
+  }
+
   nsCOMPtr<nsIURL> sourceURL(do_QueryInterface(mSourceUrl));
   if (sourceURL)
   {
@@ -2297,11 +2312,11 @@ void nsExternalAppHandler::RequestSaveDestination(const nsAFlatString &aDefaultF
   RefPtr<nsExternalAppHandler> kungFuDeathGrip(this);
   nsCOMPtr<nsIHelperAppLauncherDialog> dlg(mDialog);
 
-  rv = mDialog->PromptForSaveToFileAsync(this,
-                                         GetDialogParent(),
-                                         aDefaultFile.get(),
-                                         aFileExtension.get(),
-                                         mForceSave);
+  rv = dlg->PromptForSaveToFileAsync(this,
+                                     GetDialogParent(),
+                                     aDefaultFile.get(),
+                                     aFileExtension.get(),
+                                     mForceSave);
   if (NS_FAILED(rv)) {
     Cancel(NS_BINDING_ABORTED);
   }
@@ -2713,47 +2728,44 @@ NS_IMETHODIMP nsExternalHelperAppService::GetFromTypeAndExtension(const nsACStri
   return NS_OK;
 }
 
-NS_IMETHODIMP nsExternalHelperAppService::GetTypeFromExtension(const nsACString& aFileExt, nsACString& aContentType) 
+NS_IMETHODIMP
+nsExternalHelperAppService::GetTypeFromExtension(const nsACString& aFileExt,
+                                                 nsACString& aContentType)
 {
   // OK. We want to try the following sources of mimetype information, in this order:
   // 1. defaultMimeEntries array
-  // 2. User-set preferences (managed by the handler service)
-  // 3. OS-provided information
-  // 4. our "extras" array
-  // 5. Information from plugins
-  // 6. The "ext-to-type-mapping" category
+  // 2. OS-provided information
+  // 3. our "extras" array
+  // 4. Information from plugins
+  // 5. The "ext-to-type-mapping" category
+  // Note that, we are intentionally not looking at the handler service, because
+  // that can be affected by websites, which leads to undesired behavior.
 
   // Early return if called with an empty extension parameter
-  if (aFileExt.IsEmpty())
+  if (aFileExt.IsEmpty()) {
     return NS_ERROR_NOT_AVAILABLE;
-
-  nsresult rv = NS_OK;
-  // First of all, check our default entries
-  for (size_t i = 0; i < ArrayLength(defaultMimeEntries); i++)
-  {
-    if (aFileExt.LowerCaseEqualsASCII(defaultMimeEntries[i].mFileExtension)) {
-      aContentType = defaultMimeEntries[i].mMimeType;
-      return rv;
-    }
   }
 
-  // Check user-set prefs
-  nsCOMPtr<nsIHandlerService> handlerSvc = do_GetService(NS_HANDLERSERVICE_CONTRACTID);
-  if (handlerSvc)
-    rv = handlerSvc->GetTypeFromExtension(aFileExt, aContentType);
-  if (NS_SUCCEEDED(rv) && !aContentType.IsEmpty())
-    return NS_OK;
+  // First of all, check our default entries
+  for (auto& entry : defaultMimeEntries) {
+    if (aFileExt.LowerCaseEqualsASCII(entry.mFileExtension)) {
+      aContentType = entry.mMimeType;
+      return NS_OK;
+    }
+  }
 
   // Ask OS.
   bool found = false;
   nsCOMPtr<nsIMIMEInfo> mi = GetMIMEInfoFromOS(EmptyCString(), aFileExt, &found);
-  if (mi && found)
+  if (mi && found) {
     return mi->GetMIMEType(aContentType);
+  }
 
   // Check extras array.
   found = GetTypeFromExtras(aFileExt, aContentType);
-  if (found)
+  if (found) {
     return NS_OK;
+  }
 
   // Try the plugins
   RefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
@@ -2762,24 +2774,25 @@ NS_IMETHODIMP nsExternalHelperAppService::GetTypeFromExtension(const nsACString&
     return NS_OK;
   }
 
-  rv = NS_OK;
   // Let's see if an extension added something
-  nsCOMPtr<nsICategoryManager> catMan(do_GetService("@mozilla.org/categorymanager;1"));
+  nsCOMPtr<nsICategoryManager> catMan(
+    do_GetService("@mozilla.org/categorymanager;1"));
   if (catMan) {
     // The extension in the category entry is always stored as lowercase
     nsAutoCString lowercaseFileExt(aFileExt);
     ToLowerCase(lowercaseFileExt);
     // Read the MIME type from the category entry, if available
     nsXPIDLCString type;
-    rv = catMan->GetCategoryEntry("ext-to-type-mapping", lowercaseFileExt.get(),
-                                  getter_Copies(type));
-    aContentType = type;
-  }
-  else {
-    rv = NS_ERROR_NOT_AVAILABLE;
+    nsresult rv = catMan->GetCategoryEntry("ext-to-type-mapping",
+                                           lowercaseFileExt.get(),
+                                           getter_Copies(type));
+    if (NS_SUCCEEDED(rv)) {
+      aContentType = type;
+      return NS_OK;
+    }
   }
 
-  return rv;
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP nsExternalHelperAppService::GetPrimaryExtension(const nsACString& aMIMEType, const nsACString& aFileExt, nsACString& _retval)
@@ -2856,7 +2869,6 @@ NS_IMETHODIMP nsExternalHelperAppService::GetTypeFromFile(nsIFile* aFile, nsACSt
 {
   NS_ENSURE_ARG_POINTER(aFile);
   nsresult rv;
-  nsCOMPtr<nsIMIMEInfo> info;
 
   // Get the Extension
   nsAutoString fileName;

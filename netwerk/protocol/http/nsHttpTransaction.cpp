@@ -20,6 +20,7 @@
 #include "nsIChannel.h"
 #include "nsIPipe.h"
 #include "nsCRT.h"
+#include "mozilla/Tokenizer.h"
 
 #include "nsISeekableStream.h"
 #include "nsMultiplexInputStream.h"
@@ -33,9 +34,11 @@
 #include "nsIEventTarget.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIInputStream.h"
+#include "nsIThrottledInputChannel.h"
 #include "nsITransport.h"
 #include "nsIOService.h"
 #include "nsIRequestContext.h"
+#include "nsIHttpAuthenticator.h"
 #include <algorithm>
 
 #ifdef MOZ_WIDGET_GONK
@@ -103,6 +106,7 @@ nsHttpTransaction::nsHttpTransaction()
     , mPipelinePosition(0)
     , mHttpVersion(NS_HTTP_VERSION_UNKNOWN)
     , mHttpResponseCode(0)
+    , mCurrentHttpResponseHeaderSize(0)
     , mCapsToClear(0)
     , mResponseIsComplete(false)
     , mClosed(false)
@@ -134,11 +138,8 @@ nsHttpTransaction::nsHttpTransaction()
     , mSubmittedRatePacing(false)
     , mPassedRatePacing(false)
     , mSynchronousRatePaceRequest(false)
-    , mCountRecv(0)
-    , mCountSent(0)
-    , mAppId(NECKO_NO_APP_ID)
-    , mIsInIsolatedMozBrowser(false)
     , mClassOfService(0)
+    , m0RTTInProgress(false)
 {
     LOG(("Creating nsHttpTransaction @%p\n", this));
     gHttpHandler->GetMaxPipelineObjectSize(&mMaxPipelineObjectSize);
@@ -154,7 +155,9 @@ nsHttpTransaction::nsHttpTransaction()
 nsHttpTransaction::~nsHttpTransaction()
 {
     LOG(("Destroying nsHttpTransaction @%p\n", this));
-
+    if (mTransactionObserver) {
+        mTransactionObserver->Complete(this, NS_OK);
+    }
     if (mPushedStream) {
         mPushedStream->OnPushFailed();
         mPushedStream = nullptr;
@@ -232,6 +235,7 @@ nsHttpTransaction::Init(uint32_t caps,
     MOZ_ASSERT(cinfo);
     MOZ_ASSERT(requestHead);
     MOZ_ASSERT(target);
+    MOZ_ASSERT(NS_IsMainThread());
 
     mActivityDistributor = do_GetService(NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &rv);
     if (NS_FAILED(rv)) return rv;
@@ -250,19 +254,6 @@ nsHttpTransaction::Init(uint32_t caps,
         mActivityDistributor = nullptr;
     }
     mChannel = do_QueryInterface(eventsink);
-    nsCOMPtr<nsIChannel> channel = do_QueryInterface(eventsink);
-    if (channel) {
-        NS_GetAppInfo(channel, &mAppId, &mIsInIsolatedMozBrowser);
-    }
-
-#ifdef MOZ_WIDGET_GONK
-    if (mAppId != NECKO_NO_APP_ID) {
-        nsCOMPtr<nsINetworkInfo> activeNetworkInfo;
-        GetActiveNetworkInfo(activeNetworkInfo);
-        mActiveNetworkInfo =
-            new nsMainThreadPtrHolder<nsINetworkInfo>(activeNetworkInfo);
-    }
-#endif
 
     nsCOMPtr<nsIHttpChannelInternal> httpChannelInternal =
         do_QueryInterface(eventsink);
@@ -378,6 +369,25 @@ nsHttpTransaction::Init(uint32_t caps,
     }
     else
         mRequestStream = headers;
+
+    nsCOMPtr<nsIThrottledInputChannel> throttled = do_QueryInterface(mChannel);
+    nsIInputChannelThrottleQueue* queue;
+    if (throttled) {
+        rv = throttled->GetThrottleQueue(&queue);
+        // In case of failure, just carry on without throttling.
+        if (NS_SUCCEEDED(rv) && queue) {
+            nsCOMPtr<nsIAsyncInputStream> wrappedStream;
+            rv = queue->WrapStream(mRequestStream, getter_AddRefs(wrappedStream));
+            // Failure to throttle isn't sufficient reason to fail
+            // initialization
+            if (NS_SUCCEEDED(rv)) {
+                MOZ_ASSERT(wrappedStream != nullptr);
+                LOG(("nsHttpTransaction::Init %p wrapping input stream using throttle queue %p\n",
+                     this, queue));
+                mRequestStream = do_QueryInterface(wrappedStream);
+            }
+        }
+    }
 
     uint64_t size_u64;
     rv = mRequestStream->Available(&size_u64);
@@ -659,7 +669,7 @@ nsHttpTransaction::Available()
     return size;
 }
 
-NS_METHOD
+nsresult
 nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
                                       void *closure,
                                       const char *buf,
@@ -667,6 +677,9 @@ nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
                                       uint32_t count,
                                       uint32_t *countRead)
 {
+    // For the tracking of sent bytes that we used to do for the networkstats
+    // API, please see bug 1318883 where it was removed.
+
     nsHttpTransaction *trans = (nsHttpTransaction *) closure;
     nsresult rv = trans->mReader->OnReadSegment(buf, count, countRead);
     if (NS_FAILED(rv)) return rv;
@@ -676,7 +689,6 @@ nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
         trans->SetRequestStart(TimeStamp::Now(), true);
     }
 
-    trans->CountSentBytes(*countRead);
     trans->mSentData = true;
     return NS_OK;
 }
@@ -692,7 +704,7 @@ nsHttpTransaction::ReadSegments(nsAHttpSegmentReader *reader,
         return mStatus;
     }
 
-    if (!mConnected) {
+    if (!mConnected && !m0RTTInProgress) {
         mConnected = true;
         mConnection->GetSecurityInfo(getter_AddRefs(mSecurityInfo));
     }
@@ -740,7 +752,7 @@ nsHttpTransaction::ReadSegments(nsAHttpSegmentReader *reader,
     return rv;
 }
 
-NS_METHOD
+nsresult
 nsHttpTransaction::WritePipeSegment(nsIOutputStream *stream,
                                     void *closure,
                                     char *buf,
@@ -772,7 +784,6 @@ nsHttpTransaction::WritePipeSegment(nsIOutputStream *stream,
     if (NS_FAILED(rv)) return rv; // caller didn't want to write anything
 
     MOZ_ASSERT(*countWritten > 0, "bad writer");
-    trans->CountRecvBytes(*countWritten);
     trans->mReceivedData = true;
     trans->mTransferSize += *countWritten;
 
@@ -850,45 +861,6 @@ nsHttpTransaction::WriteSegments(nsAHttpSegmentWriter *writer,
     return rv;
 }
 
-nsresult
-nsHttpTransaction::SaveNetworkStats(bool enforce)
-{
-#ifdef MOZ_WIDGET_GONK
-    // Check if active network and appid are valid.
-    if (!mActiveNetworkInfo || mAppId == NECKO_NO_APP_ID) {
-        return NS_OK;
-    }
-
-    if (mCountRecv <= 0 && mCountSent <= 0) {
-        // There is no traffic, no need to save.
-        return NS_OK;
-    }
-
-    // If |enforce| is false, the traffic amount is saved
-    // only when the total amount exceeds the predefined
-    // threshold.
-    uint64_t totalBytes = mCountRecv + mCountSent;
-    if (!enforce && totalBytes < NETWORK_STATS_THRESHOLD) {
-        return NS_OK;
-    }
-
-    // Create the event to save the network statistics.
-    // the event is then dispatched to the main thread.
-    RefPtr<Runnable> event =
-        new SaveNetworkStatsEvent(mAppId, mIsInIsolatedMozBrowser, mActiveNetworkInfo,
-                                  mCountRecv, mCountSent, false);
-    NS_DispatchToMainThread(event);
-
-    // Reset the counters after saving.
-    mCountSent = 0;
-    mCountRecv = 0;
-
-    return NS_OK;
-#else
-    return NS_ERROR_NOT_IMPLEMENTED;
-#endif
-}
-
 void
 nsHttpTransaction::Close(nsresult reason)
 {
@@ -903,6 +875,11 @@ nsHttpTransaction::Close(nsresult reason)
     if (mClosed) {
         LOG(("  already closed\n"));
         return;
+    }
+
+    if (mTransactionObserver) {
+        mTransactionObserver->Complete(this, reason);
+        mTransactionObserver = nullptr;
     }
 
     if (mTokenBucketCancel) {
@@ -958,7 +935,16 @@ nsHttpTransaction::Close(nsresult reason)
     // sent any data.  for this reason, mSendData == FALSE does not imply
     // mReceivedData == FALSE.  (see bug 203057 for more info.)
     //
-    if (reason == NS_ERROR_NET_RESET || reason == NS_OK) {
+    // Never restart transactions that are marked as sticky to their conenction.
+    // We use that capability to identify transactions bound to connection based
+    // authentication.  Reissuing them on a different connections will break
+    // this bondage.  Major issue may arise when there is an NTLM message auth
+    // header on the transaction and we send it to a different NTLM authenticated
+    // connection.  It will break that connection and also confuse the channel's
+    // auth provider, beliving the cached credentials are wrong and asking for
+    // the password mistakenly again from the user.
+    if ((reason == NS_ERROR_NET_RESET || reason == NS_OK) &&
+        !(mCaps & NS_HTTP_STICKY_CONNECTION)) {
 
         if (mForceRestart && NS_SUCCEEDED(Restart())) {
             if (mResponseHead) {
@@ -1091,9 +1077,6 @@ nsHttpTransaction::Close(nsresult reason)
         mConnection = nullptr;
     }
 
-    // save network statistics in the end of transaction
-    SaveNetworkStats(true);
-
     mStatus = reason;
     mTransactionDone = true; // forcibly flag the transaction as complete
     mClosed = true;
@@ -1192,6 +1175,10 @@ nsHttpTransaction::RestartInProgress()
     if (!mHaveAllHeaders)
         return NS_ERROR_NET_RESET;
 
+    if (mCaps & NS_HTTP_STICKY_CONNECTION) {
+        return NS_ERROR_NET_RESET;
+    }
+
     // don't try and restart 0.9 or non 200/Get HTTP/1
     if (!mRestartInProgressVerifier.IsSetup())
         return NS_ERROR_NET_RESET;
@@ -1253,7 +1240,7 @@ nsHttpTransaction::Restart()
         seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
 
     // clear old connection state...
-    mSecurityInfo = 0;
+    mSecurityInfo = nullptr;
     if (mConnection) {
         if (!mReuseOnRestart) {
             mConnection->DontReuse();
@@ -1366,9 +1353,9 @@ nsHttpTransaction::LocateHttpStart(char *buf, uint32_t len,
 }
 
 nsresult
-nsHttpTransaction::ParseLine(char *line)
+nsHttpTransaction::ParseLine(nsACString &line)
 {
-    LOG(("nsHttpTransaction::ParseLine [%s]\n", line));
+    LOG(("nsHttpTransaction::ParseLine [%s]\n", PromiseFlatCString(line).get()));
     nsresult rv = NS_OK;
 
     if (!mHaveStatusLine) {
@@ -1396,7 +1383,7 @@ nsHttpTransaction::ParseLineSegment(char *segment, uint32_t len)
         // of mLineBuf.
         mLineBuf.Truncate(mLineBuf.Length() - 1);
         if (!mHaveStatusLine || (*segment != ' ' && *segment != '\t')) {
-            nsresult rv = ParseLine(mLineBuf.BeginWriting());
+            nsresult rv = ParseLine(mLineBuf);
             mLineBuf.Truncate();
             if (NS_FAILED(rv)) {
                 gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
@@ -1475,7 +1462,7 @@ nsHttpTransaction::ParseHead(char *buf,
                 if (mRequestHead->IsPut())
                     return NS_ERROR_ABORT;
 
-                mResponseHead->ParseStatusLine("");
+                mResponseHead->ParseStatusLine(EmptyCString());
                 mHaveStatusLine = true;
                 mHaveAllHeaders = true;
                 return NS_OK;
@@ -1570,6 +1557,8 @@ nsHttpTransaction::HandleContentStart()
             LogHeaders(headers.get());
             LOG3(("]\n"));
         }
+
+        CheckForStickyAuthScheme();
 
         // Save http version, mResponseHead isn't available anymore after
         // TakeResponseHead() is called
@@ -1816,6 +1805,13 @@ nsHttpTransaction::ProcessData(char *buf, uint32_t count, uint32_t *countRead)
             bytesConsumed += localBytesConsumed;
         } while (rv == NS_ERROR_NET_INTERRUPT);
 
+        mCurrentHttpResponseHeaderSize += bytesConsumed;
+        if (mCurrentHttpResponseHeaderSize >
+            gHttpHandler->MaxHttpResponseHeaderSize()) {
+            LOG(("nsHttpTransaction %p The response header exceeds the limit.\n",
+                 this));
+            return NS_ERROR_FILE_TOO_BIG;
+        }
         count -= bytesConsumed;
 
         // if buf has some content in it, shift bytes to top of buf.
@@ -1964,6 +1960,61 @@ nsHttpTransaction::DisableSpdy()
     }
 }
 
+void
+nsHttpTransaction::CheckForStickyAuthScheme()
+{
+  LOG(("nsHttpTransaction::CheckForStickyAuthScheme this=%p"));
+
+  MOZ_ASSERT(mHaveAllHeaders);
+  MOZ_ASSERT(mResponseHead);
+  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+
+  CheckForStickyAuthSchemeAt(nsHttp::WWW_Authenticate);
+  CheckForStickyAuthSchemeAt(nsHttp::Proxy_Authenticate);
+}
+
+void
+nsHttpTransaction::CheckForStickyAuthSchemeAt(nsHttpAtom const& header)
+{
+  if (mCaps & NS_HTTP_STICKY_CONNECTION) {
+      LOG(("  already sticky"));
+      return;
+  }
+
+  nsAutoCString auth;
+  if (NS_FAILED(mResponseHead->GetHeader(header, auth))) {
+      return;
+  }
+
+  Tokenizer p(auth);
+  nsAutoCString schema;
+  while (p.ReadWord(schema)) {
+      ToLowerCase(schema);
+
+      nsAutoCString contractid;
+      contractid.Assign(NS_HTTP_AUTHENTICATOR_CONTRACTID_PREFIX);
+      contractid.Append(schema);
+
+      // using a new instance because of thread safety of auth modules refcnt
+      nsCOMPtr<nsIHttpAuthenticator> authenticator(do_CreateInstance(contractid.get()));
+      if (authenticator) {
+          uint32_t flags;
+          authenticator->GetAuthFlags(&flags);
+          if (flags & nsIHttpAuthenticator::CONNECTION_BASED) {
+              LOG(("  connection made sticky, found %s auth shema", schema.get()));
+              // This is enough to make this transaction keep it's current connection,
+              // prevents the connection from being released back to the pool.
+              mCaps |= NS_HTTP_STICKY_CONNECTION;
+              break;
+          }
+      }
+
+      // schemes are separated with LFs, nsHttpHeaderArray::MergeHeader
+      p.SkipUntil(Tokenizer::Token::NewLine());
+      p.SkipWhites(Tokenizer::INCLUDE_NEW_LINE);
+  }
+}
+
 const TimingStruct
 nsHttpTransaction::Timings()
 {
@@ -2101,7 +2152,7 @@ public:
         : mTrans(trans)
     {}
 
-    NS_IMETHOD Run()
+    NS_IMETHOD Run() override
     {
         delete mTrans;
         return NS_OK;
@@ -2318,6 +2369,34 @@ nsHttpTransaction::GetNetworkAddresses(NetAddr &self, NetAddr &peer)
     MutexAutoLock lock(mLock);
     self = mSelfAddr;
     peer = mPeerAddr;
+}
+
+bool
+nsHttpTransaction::Do0RTT()
+{
+   if (mRequestHead->IsSafeMethod() &&
+       !mConnection->IsProxyConnectInProgress()) {
+     m0RTTInProgress = true;
+   }
+   return m0RTTInProgress;
+}
+
+nsresult
+nsHttpTransaction::Finish0RTT(bool aRestart)
+{
+    MOZ_ASSERT(m0RTTInProgress);
+    m0RTTInProgress = false;
+    if (aRestart) {
+        // Reset request headers to be sent again.
+        nsCOMPtr<nsISeekableStream> seekable =
+            do_QueryInterface(mRequestStream);
+        if (seekable) {
+            seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
+        } else {
+            return NS_ERROR_FAILURE;
+        }
+    }
+    return NS_OK;
 }
 
 } // namespace net

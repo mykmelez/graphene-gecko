@@ -7,8 +7,10 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
+#include "mozilla/dom/StorageManager.h"
 #include "mozilla/dom/WorkerNavigator.h"
 #include "mozilla/dom/WorkerNavigatorBinding.h"
+#include "mozilla/dom/network/Connection.h"
 
 #include "nsProxyRelease.h"
 #include "RuntimeService.h"
@@ -26,10 +28,22 @@ namespace dom {
 
 using namespace mozilla::dom::workers;
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_0(WorkerNavigator)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(WorkerNavigator, mStorageManager,
+                                      mConnection);
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(WorkerNavigator, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(WorkerNavigator, Release)
+
+WorkerNavigator::WorkerNavigator(const NavigatorProperties& aProperties,
+                                 bool aOnline)
+  : mProperties(aProperties)
+  , mOnline(aOnline)
+{
+}
+
+WorkerNavigator::~WorkerNavigator()
+{
+}
 
 /* static */ already_AddRefed<WorkerNavigator>
 WorkerNavigator::Create(bool aOnLine)
@@ -60,7 +74,7 @@ WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages)
 }
 
 void
-WorkerNavigator::GetAppName(nsString& aAppName) const
+WorkerNavigator::GetAppName(nsString& aAppName, CallerType aCallerType) const
 {
   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
@@ -74,7 +88,8 @@ WorkerNavigator::GetAppName(nsString& aAppName) const
 }
 
 void
-WorkerNavigator::GetAppVersion(nsString& aAppVersion) const
+WorkerNavigator::GetAppVersion(nsString& aAppVersion, CallerType aCallerType,
+                               ErrorResult& aRv) const
 {
   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
@@ -88,7 +103,8 @@ WorkerNavigator::GetAppVersion(nsString& aAppVersion) const
 }
 
 void
-WorkerNavigator::GetPlatform(nsString& aPlatform) const
+WorkerNavigator::GetPlatform(nsString& aPlatform, CallerType aCallerType,
+                             ErrorResult& aRv) const
 {
   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
@@ -144,7 +160,8 @@ public:
 } // namespace
 
 void
-WorkerNavigator::GetUserAgent(nsString& aUserAgent, ErrorResult& aRv) const
+WorkerNavigator::GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+                              ErrorResult& aRv) const
 {
   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
@@ -163,6 +180,36 @@ WorkerNavigator::HardwareConcurrency() const
 
   return rts->ClampedHardwareConcurrency();
 }
+
+StorageManager*
+WorkerNavigator::Storage()
+{
+  if (!mStorageManager) {
+    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+    MOZ_ASSERT(workerPrivate);
+
+    RefPtr<nsIGlobalObject> global = workerPrivate->GlobalScope();
+    MOZ_ASSERT(global);
+
+    mStorageManager = new StorageManager(global);
+  }
+
+  return mStorageManager;
+}
+
+network::Connection*
+WorkerNavigator::GetConnection(ErrorResult& aRv)
+{
+  if (!mConnection) {
+    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+    MOZ_ASSERT(workerPrivate);
+
+    mConnection = network::Connection::CreateForWorker(workerPrivate, aRv);
+  }
+
+  return mConnection;
+}
+
 
 } // namespace dom
 } // namespace mozilla

@@ -183,7 +183,7 @@ ServiceWorkerWindowClient::Focus(ErrorResult& aRv) const
     if (promiseProxy) {
       RefPtr<ClientFocusRunnable> r = new ClientFocusRunnable(mWindowId,
                                                               promiseProxy);
-      MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(r));
+      MOZ_ALWAYS_SUCCEEDS(workerPrivate->DispatchToMainThread(r.forget()));
     } else {
       promise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
     }
@@ -328,7 +328,7 @@ class ClientNavigateRunnable final : public Runnable
   nsString mUrl;
   nsCString mBaseUrl;
   RefPtr<PromiseWorkerProxy> mPromiseProxy;
-  WorkerPrivate* mWorkerPrivate;
+  MOZ_INIT_OUTSIDE_CTOR WorkerPrivate* mWorkerPrivate;
 
 public:
   ClientNavigateRunnable(uint64_t aWindowId, const nsAString& aUrl,
@@ -336,6 +336,7 @@ public:
     : mWindowId(aWindowId)
     , mUrl(aUrl)
     , mPromiseProxy(aPromiseProxy)
+    , mWorkerPrivate(nullptr)
   {
     MOZ_ASSERT(aPromiseProxy);
     MOZ_ASSERT(aPromiseProxy->GetWorkerPrivate());
@@ -474,7 +475,7 @@ private:
       return rv;
     }
 
-    loadInfo->SetOwner(aPrincipal);
+    loadInfo->SetTriggeringPrincipal(aPrincipal);
     loadInfo->SetReferrer(doc->GetOriginalURI());
     loadInfo->SetReferrerPolicy(doc->GetReferrerPolicy());
     loadInfo->SetLoadType(nsIDocShellLoadInfo::loadStopContentAndReplace);
@@ -516,7 +517,7 @@ ServiceWorkerWindowClient::Navigate(const nsAString& aUrl, ErrorResult& aRv)
   if (promiseProxy) {
     RefPtr<ClientNavigateRunnable> r =
       new ClientNavigateRunnable(mWindowId, aUrl, promiseProxy);
-    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(r));
+    MOZ_ALWAYS_SUCCEEDS(workerPrivate->DispatchToMainThread(r.forget()));
   } else {
     promise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
   }

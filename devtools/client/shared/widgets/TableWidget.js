@@ -3,12 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {Ci} = require("chrome");
 const EventEmitter = require("devtools/shared/event-emitter");
 loader.lazyRequireGetter(this, "setNamedTimeout",
   "devtools/client/shared/widgets/view-helpers", true);
 loader.lazyRequireGetter(this, "clearNamedTimeout",
   "devtools/client/shared/widgets/view-helpers", true);
+const {KeyCodes} = require("devtools/client/shared/keycodes");
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -36,10 +36,6 @@ Object.defineProperty(this, "EVENTS", {
   enumerable: true,
   writable: false
 });
-
-// Maximum number of character visible in any cell in the table. This is to
-// avoid making the cell take up all the space in a row.
-const MAX_VISIBLE_STRING_SIZE = 100;
 
 /**
  * A table widget with various features like resizble/toggleable columns,
@@ -470,7 +466,7 @@ TableWidget.prototype = {
     let cell;
 
     switch (event.keyCode) {
-      case event.DOM_VK_UP:
+      case KeyCodes.DOM_VK_UP:
         event.preventDefault();
 
         colName = selectedCell.parentNode.id;
@@ -488,7 +484,7 @@ TableWidget.prototype = {
 
         this.emit(EVENTS.ROW_SELECTED, cell.getAttribute("data-id"));
         break;
-      case event.DOM_VK_DOWN:
+      case KeyCodes.DOM_VK_DOWN:
         event.preventDefault();
 
         colName = selectedCell.parentNode.id;
@@ -619,8 +615,13 @@ TableWidget.prototype = {
   /**
    * Populates the header context menu with the names of the columns along with
    * displaying which columns are hidden or visible.
+   *
+   * @param {Array} privateColumns=[]
+   *        An array of column names that should never appear in the table. This
+   *        allows us to e.g. have an invisible compound primary key for a
+   *        table's rows.
    */
-  populateMenuPopup: function () {
+  populateMenuPopup: function (privateColumns = []) {
     if (!this.menupopup) {
       return;
     }
@@ -630,6 +631,10 @@ TableWidget.prototype = {
     }
 
     for (let column of this.columns.values()) {
+      if (privateColumns.includes(column.id)) {
+        continue;
+      }
+
       let menuitem = this.document.createElementNS(XUL_NS, "menuitem");
       menuitem.setAttribute("label", column.header.getAttribute("value"));
       menuitem.setAttribute("data-id", column.id);
@@ -667,16 +672,21 @@ TableWidget.prototype = {
    * Creates the columns in the table. Without calling this method, data cannot
    * be inserted into the table unless `initialColumns` was supplied.
    *
-   * @param {object} columns
+   * @param {Object} columns
    *        A key value pair representing the columns of the table. Where the
    *        key represents the id of the column and the value is the displayed
    *        label in the header of the column.
-   * @param {string} sortOn
+   * @param {String} sortOn
    *        The id of the column on which the table will be initially sorted on.
-   * @param {array} hiddenColumns
+   * @param {Array} hiddenColumns
    *        Ids of all the columns that are hidden by default.
+   * @param {Array} privateColumns=[]
+   *        An array of column names that should never appear in the table. This
+   *        allows us to e.g. have an invisible compound primary key for a
+   *        table's rows.
    */
-  setColumns: function (columns, sortOn = this.sortedOn, hiddenColumns = []) {
+  setColumns: function (columns, sortOn = this.sortedOn, hiddenColumns = [],
+                        privateColumns = []) {
     for (let column of this.columns.values()) {
       column.destroy();
     }
@@ -706,13 +716,18 @@ TableWidget.prototype = {
       }
 
       this.columns.set(id, new Column(this, id, columns[id]));
-      if (hiddenColumns.indexOf(id) > -1) {
+      if (hiddenColumns.includes(id) || privateColumns.includes(id)) {
+        // Hide the column.
         this.columns.get(id).toggleColumn();
+
+        if (privateColumns.includes(id)) {
+          this.columns.get(id).private = true;
+        }
       }
     }
     this.sortedOn = sortOn;
     this.sortBy(this.sortedOn);
-    this.populateMenuPopup();
+    this.populateMenuPopup(privateColumns);
   },
 
   /**
@@ -780,6 +795,11 @@ TableWidget.prototype = {
     if (this.items.has(item[this.uniqueId])) {
       this.update(item);
       return;
+    }
+
+    if (this.editBookmark && !this.items.has(this.editBookmark)) {
+      // Key has been updated... update bookmark.
+      this.editBookmark = item[this.uniqueId];
     }
 
     let index = this.columns.get(this.sortedOn).push(item);
@@ -962,6 +982,9 @@ module.exports.TableWidget = TableWidget;
  *        The displayed string on the column's header.
  */
 function Column(table, id, header) {
+  // By default cells are visible in the UI.
+  this._private = false;
+
   this.tbody = table.tbody;
   this.document = table.document;
   this.window = table.window;
@@ -1042,6 +1065,23 @@ Column.prototype = {
    */
   get sorted() {
     return this._sortState || 0;
+  },
+
+  /**
+   * Get the private state of the column (visibility in the UI).
+   */
+  get private() {
+    return this._private;
+  },
+
+  /**
+   * Set the private state of the column (visibility in the UI).
+   *
+   * @param  {Boolean} state
+   *         Private (true or false)
+   */
+  set private(state) {
+    this._private = state;
   },
 
   /**
@@ -1350,17 +1390,17 @@ Column.prototype = {
     // Only sort the array if we are sorting based on this column
     if (this.sorted == 1) {
       items.sort((a, b) => {
-        let val1 = (a[this.id] instanceof Ci.nsIDOMNode) ?
+        let val1 = (a[this.id] instanceof Node) ?
             a[this.id].textContent : a[this.id];
-        let val2 = (b[this.id] instanceof Ci.nsIDOMNode) ?
+        let val2 = (b[this.id] instanceof Node) ?
             b[this.id].textContent : b[this.id];
         return val1 > val2;
       });
     } else if (this.sorted > 1) {
       items.sort((a, b) => {
-        let val1 = (a[this.id] instanceof Ci.nsIDOMNode) ?
+        let val1 = (a[this.id] instanceof Node) ?
             a[this.id].textContent : a[this.id];
-        let val2 = (b[this.id] instanceof Ci.nsIDOMNode) ?
+        let val2 = (b[this.id] instanceof Node) ?
             b[this.id].textContent : b[this.id];
         return val2 > val1;
       });
@@ -1428,7 +1468,7 @@ Column.prototype = {
         return;
       }
 
-      let dataid = target.getAttribute("data-id");
+      let dataid = closest.getAttribute("data-id");
       this.table.emit(EVENTS.ROW_SELECTED, dataid);
     }
   },
@@ -1504,18 +1544,13 @@ Cell.prototype = {
       return;
     }
 
-    if (this.wrapTextInElements && !(value instanceof Ci.nsIDOMNode)) {
+    if (this.wrapTextInElements && !(value instanceof Node)) {
       let span = this.label.ownerDocument.createElementNS(HTML_NS, "span");
       span.textContent = value;
       value = span;
     }
 
-    if (!(value instanceof Ci.nsIDOMNode) &&
-        value.length > MAX_VISIBLE_STRING_SIZE) {
-      value = value .substr(0, MAX_VISIBLE_STRING_SIZE) + "\u2026";
-    }
-
-    if (value instanceof Ci.nsIDOMNode) {
+    if (value instanceof Node) {
       this.label.removeAttribute("value");
 
       while (this.label.firstChild) {
@@ -1665,14 +1700,14 @@ EditableFieldsEngine.prototype = {
     }
 
     switch (event.keyCode) {
-      case event.DOM_VK_ESCAPE:
+      case KeyCodes.DOM_VK_ESCAPE:
         this.cancelEdit();
         event.preventDefault();
         break;
-      case event.DOM_VK_RETURN:
+      case KeyCodes.DOM_VK_RETURN:
         this.completeEdit();
         break;
-      case event.DOM_VK_TAB:
+      case KeyCodes.DOM_VK_TAB:
         if (this.onTab) {
           this.onTab(event);
         }
@@ -1778,7 +1813,7 @@ EditableFieldsEngine.prototype = {
    *         The node to copy styles to.
    */
   copyStyles: function (source, destination) {
-    let style = source.ownerGlobal.getComputedStyle(source);
+    let style = source.ownerDocument.defaultView.getComputedStyle(source);
     let props = [
       "borderTopWidth",
       "borderRightWidth",

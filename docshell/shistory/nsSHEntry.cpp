@@ -11,7 +11,6 @@
 #include "nsSHEntryShared.h"
 #include "nsILayoutHistoryState.h"
 #include "nsIContentViewer.h"
-#include "nsISupportsArray.h"
 #include "nsIStructuredCloneContainer.h"
 #include "nsIInputStream.h"
 #include "nsIURI.h"
@@ -412,7 +411,9 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
                   nsIInputStream* aInputStream,
                   nsILayoutHistoryState* aLayoutHistoryState,
                   nsISupports* aCacheKey, const nsACString& aContentType,
-                  nsISupports* aOwner, uint64_t aDocShellID,
+                  nsIPrincipal* aTriggeringPrincipal,
+                  nsIPrincipal* aPrincipalToInherit,
+                  const nsID& aDocShellID,
                   bool aDynamicCreation)
 {
   mURI = aURI;
@@ -424,7 +425,8 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
 
   mShared->mCacheKey = aCacheKey;
   mShared->mContentType = aContentType;
-  mShared->mOwner = aOwner;
+  mShared->mTriggeringPrincipal = aTriggeringPrincipal;
+  mShared->mPrincipalToInherit = aPrincipalToInherit;
   mShared->mDocShellID = aDocShellID;
   mShared->mDynamicallyCreated = aDynamicCreation;
 
@@ -504,16 +506,30 @@ nsSHEntry::GetViewerBounds(nsIntRect& aBounds)
 }
 
 NS_IMETHODIMP
-nsSHEntry::GetOwner(nsISupports** aOwner)
+nsSHEntry::GetTriggeringPrincipal(nsIPrincipal** aTriggeringPrincipal)
 {
-  NS_IF_ADDREF(*aOwner = mShared->mOwner);
+  NS_IF_ADDREF(*aTriggeringPrincipal = mShared->mTriggeringPrincipal);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSHEntry::SetOwner(nsISupports* aOwner)
+nsSHEntry::SetTriggeringPrincipal(nsIPrincipal* aTriggeringPrincipal)
 {
-  mShared->mOwner = aOwner;
+  mShared->mTriggeringPrincipal = aTriggeringPrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::GetPrincipalToInherit(nsIPrincipal** aPrincipalToInherit)
+{
+  NS_IF_ADDREF(*aPrincipalToInherit = mShared->mPrincipalToInherit);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetPrincipalToInherit(nsIPrincipal* aPrincipalToInherit)
+{
+  mShared->mPrincipalToInherit = aPrincipalToInherit;
   return NS_OK;
 }
 
@@ -715,11 +731,7 @@ nsSHEntry::AddChild(nsISHEntry* aChild, int32_t aOffset)
       }
     }
 
-    if (!mChildren.ReplaceObjectAt(aChild, aOffset)) {
-      NS_WARNING("Adding a child failed!");
-      aChild->SetParent(nullptr);
-      return NS_ERROR_FAILURE;
-    }
+    mChildren.ReplaceObjectAt(aChild, aOffset);
   }
 
   return NS_OK;
@@ -737,7 +749,8 @@ nsSHEntry::RemoveChild(nsISHEntry* aChild)
   } else {
     int32_t index = mChildren.IndexOfObject(aChild);
     if (index >= 0) {
-      childRemoved = mChildren.ReplaceObjectAt(nullptr, index);
+      mChildren.ReplaceObjectAt(nullptr, index);
+      childRemoved = true;
     }
   }
   if (childRemoved) {
@@ -772,17 +785,13 @@ nsSHEntry::ReplaceChild(nsISHEntry* aNewEntry)
 {
   NS_ENSURE_STATE(aNewEntry);
 
-  uint64_t docshellID;
-  aNewEntry->GetDocshellID(&docshellID);
+  nsID docshellID = aNewEntry->DocshellID();
 
-  uint64_t otherID;
   for (int32_t i = 0; i < mChildren.Count(); ++i) {
-    if (mChildren[i] && NS_SUCCEEDED(mChildren[i]->GetDocshellID(&otherID)) &&
-        docshellID == otherID) {
+    if (mChildren[i] && docshellID == mChildren[i]->DocshellID()) {
       mChildren[i]->SetParent(nullptr);
-      if (mChildren.ReplaceObjectAt(aNewEntry, i)) {
-        return aNewEntry->SetParent(this);
-      }
+      mChildren.ReplaceObjectAt(aNewEntry, i);
+      return aNewEntry->SetParent(this);
     }
   }
   return NS_ERROR_FAILURE;
@@ -811,14 +820,14 @@ nsSHEntry::ClearChildShells()
 }
 
 NS_IMETHODIMP
-nsSHEntry::GetRefreshURIList(nsISupportsArray** aList)
+nsSHEntry::GetRefreshURIList(nsIMutableArray** aList)
 {
   NS_IF_ADDREF(*aList = mShared->mRefreshURIList);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSHEntry::SetRefreshURIList(nsISupportsArray* aList)
+nsSHEntry::SetRefreshURIList(nsIMutableArray* aList)
 {
   mShared->mRefreshURIList = aList;
   return NS_OK;
@@ -904,16 +913,22 @@ nsSHEntry::HasDynamicallyAddedChild(bool* aAdded)
 }
 
 NS_IMETHODIMP
-nsSHEntry::GetDocshellID(uint64_t* aID)
+nsSHEntry::GetDocshellID(nsID** aID)
 {
-  *aID = mShared->mDocShellID;
+  *aID = static_cast<nsID*>(nsMemory::Clone(&mShared->mDocShellID, sizeof(nsID)));
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsSHEntry::SetDocshellID(uint64_t aID)
+const nsID
+nsSHEntry::DocshellID()
 {
-  mShared->mDocShellID = aID;
+  return mShared->mDocShellID;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetDocshellID(const nsID* aID)
+{
+  mShared->mDocShellID = *aID;
   return NS_OK;
 }
 

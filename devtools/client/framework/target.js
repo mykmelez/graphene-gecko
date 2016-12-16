@@ -14,6 +14,8 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient",
   "devtools/shared/client/main", true);
+loader.lazyRequireGetter(this, "gDevTools",
+  "devtools/client/framework/devtools", true);
 
 const targets = new WeakMap();
 const promiseTargets = new WeakMap();
@@ -21,7 +23,7 @@ const promiseTargets = new WeakMap();
 /**
  * Functions for creating Targets
  */
-exports.TargetFactory = {
+const TargetFactory = exports.TargetFactory = {
   /**
    * Construct a Target
    * @param {XULTab} tab
@@ -348,8 +350,15 @@ TabTarget.prototype = {
   },
 
   get isAddon() {
+    return !!(this._form && this._form.actor && (
+      this._form.actor.match(/conn\d+\.addon\d+/) ||
+      this._form.actor.match(/conn\d+\.webExtension\d+/)
+    ));
+  },
+
+  get isWebExtension() {
     return !!(this._form && this._form.actor &&
-              this._form.actor.match(/conn\d+\.addon\d+/));
+              this._form.actor.match(/conn\d+\.webExtension\d+/));
   },
 
   get isLocalTab() {
@@ -447,6 +456,7 @@ TabTarget.prototype = {
     this.tab.addEventListener("TabClose", this);
     this.tab.parentNode.addEventListener("TabSelect", this);
     this.tab.ownerDocument.defaultView.addEventListener("unload", this);
+    this.tab.addEventListener("TabRemotenessChange", this);
   },
 
   /**
@@ -460,6 +470,7 @@ TabTarget.prototype = {
     this._tab.ownerDocument.defaultView.removeEventListener("unload", this);
     this._tab.removeEventListener("TabClose", this);
     this._tab.parentNode.removeEventListener("TabSelect", this);
+    this._tab.removeEventListener("TabRemotenessChange", this);
   },
 
   /**
@@ -541,7 +552,36 @@ TabTarget.prototype = {
           this.emit("hidden", event);
         }
         break;
+      case "TabRemotenessChange":
+        this.onRemotenessChange();
+        break;
     }
+  },
+
+  // Automatically respawn the toolbox when the tab changes between being
+  // loaded within the parent process and loaded from a content process.
+  // Process change can go in both ways.
+  onRemotenessChange: function () {
+    // Responsive design do a crazy dance around tabs and triggers
+    // remotenesschange events. But we should ignore them as at the end
+    // the content doesn't change its remoteness.
+    if (this._tab.isResponsiveDesignMode) {
+      return;
+    }
+
+    // Save a reference to the tab as it will be nullified on destroy
+    let tab = this._tab;
+    let onToolboxDestroyed = (event, target) => {
+      if (target != this) {
+        return;
+      }
+      gDevTools.off("toolbox-destroyed", target);
+
+      // Recreate a fresh target instance as the current one is now destroyed
+      let newTarget = TargetFactory.forTab(tab);
+      gDevTools.showToolbox(newTarget);
+    };
+    gDevTools.on("toolbox-destroyed", onToolboxDestroyed);
   },
 
   /**
@@ -579,7 +619,7 @@ TabTarget.prototype = {
       if (this.isLocalTab) {
         // We started with a local tab and created the client ourselves, so we
         // should close it.
-        this._client.close(cleanupAndResolve);
+        this._client.close().then(cleanupAndResolve);
       } else if (this.activeTab) {
         // The client was handed to us, so we are not responsible for closing
         // it. We just need to detach from the tab, if already attached.
@@ -612,6 +652,9 @@ TabTarget.prototype = {
     this._form = null;
     this._remote = null;
     this._root = null;
+    this._title = null;
+    this._url = null;
+    this.threadActor = null;
   },
 
   toString: function () {
@@ -760,7 +803,9 @@ WorkerTarget.prototype = {
     return this._workerClient.client;
   },
 
-  destroy: function () {},
+  destroy: function () {
+    this._workerClient.detach();
+  },
 
   hasActor: function (name) {
     // console is the only one actor implemented by WorkerActor

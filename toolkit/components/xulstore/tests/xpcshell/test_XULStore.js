@@ -86,7 +86,7 @@ function checkOldStore() {
   checkValue(aboutURI, "lockCol", "ordinal", "3");
 }
 
-add_task(function* testImport(){
+add_task(function* testImport() {
   let src = "localstore.rdf";
   let dst = OS.Path.join(OS.Constants.Path.profileDir, src);
 
@@ -107,7 +107,7 @@ add_task(function* testTruncation() {
 
   // Long values should be truncated
   XULStore.setValue(browserURI, "dos", "dos", dos);
-  dos =XULStore.getValue(browserURI, "dos", "dos");
+  dos = XULStore.getValue(browserURI, "dos", "dos");
   do_check_true(dos.length == 4096)
   XULStore.removeValue(browserURI, "dos", "dos")
 });

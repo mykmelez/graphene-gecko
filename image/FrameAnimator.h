@@ -25,7 +25,8 @@ class AnimationState
 {
 public:
   explicit AnimationState(uint16_t aAnimationMode)
-    : mCurrentAnimationFrameIndex(0)
+    : mFrameCount(0)
+    , mCurrentAnimationFrameIndex(0)
     , mLoopRemainingCount(-1)
     , mLoopCount(-1)
     , mFirstFrameTimeout(FrameTimeout::FromRawMilliseconds(0))
@@ -51,6 +52,16 @@ public:
    * Constants defined in imgIContainer.idl.
    */
   void SetAnimationMode(uint16_t aAnimationMode);
+
+  /// Update the number of frames of animation this image is known to have.
+  void UpdateKnownFrameCount(uint32_t aFrameCount);
+
+  /// @return the number of frames of animation we know about so far.
+  uint32_t KnownFrameCount() const { return mFrameCount; }
+
+  /// @return the number of frames this animation has, if we know for sure.
+  /// (In other words, if decoding is finished.) Otherwise, returns Nothing().
+  Maybe<uint32_t> FrameCount() const;
 
   /**
    * Get or set the area of the image to invalidate when we loop around to the
@@ -108,7 +119,10 @@ private:
   //! the time that the animation advanced to the current frame
   TimeStamp mCurrentAnimationFrameTime;
 
-  //! The current frame index we're on. 0 to (numFrames - 1).
+  //! The number of frames of animation this image has.
+  uint32_t mFrameCount;
+
+  //! The current frame index we're on, in the range [0, mFrameCount).
   uint32_t mCurrentAnimationFrameIndex;
 
   //! number of loops remaining before animation stops (-1 no stop)
@@ -186,11 +200,11 @@ public:
   RefreshResult RequestRefresh(AnimationState& aState, const TimeStamp& aTime);
 
   /**
-   * If we have a composited frame for @aFrameNum, returns it. Otherwise,
-   * returns an empty LookupResult. It is an error to call this method with
-   * aFrameNum == 0, because the first frame is never composited.
+   * Get the full frame for the current frame of the animation (it may or may
+   * not have required compositing). It may not be available because it hasn't
+   * been decoded yet, in which case we return an empty LookupResult.
    */
-  LookupResult GetCompositedFrame(uint32_t aFrameNum);
+  LookupResult GetCompositedFrame(AnimationState& aState);
 
   /**
    * Collect an accounting of the memory occupied by the compositing surfaces we

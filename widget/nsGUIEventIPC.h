@@ -219,6 +219,30 @@ struct ParamTraits<mozilla::WidgetWheelEvent>
 };
 
 template<>
+struct ParamTraits<mozilla::WidgetPointerHelper>
+{
+  typedef mozilla::WidgetPointerHelper paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.pointerId);
+    WriteParam(aMsg, aParam.tiltX);
+    WriteParam(aMsg, aParam.tiltY);
+    // We don't serialize convertToPointer and retargetedByPointerCapture since
+    // they are temporarily variable and should be reset to default.
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    bool rv;
+    rv = ReadParam(aMsg, aIter, &aResult->pointerId) &&
+         ReadParam(aMsg, aIter, &aResult->tiltX) &&
+         ReadParam(aMsg, aIter, &aResult->tiltY);
+    return rv;
+  }
+};
+
+template<>
 struct ParamTraits<mozilla::WidgetMouseEvent>
 {
   typedef mozilla::WidgetMouseEvent paramType;
@@ -226,6 +250,7 @@ struct ParamTraits<mozilla::WidgetMouseEvent>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, static_cast<mozilla::WidgetMouseEventBase>(aParam));
+    WriteParam(aMsg, static_cast<mozilla::WidgetPointerHelper>(aParam));
     WriteParam(aMsg, aParam.mIgnoreRootScrollFrame);
     WriteParam(aMsg, static_cast<paramType::ReasonType>(aParam.mReason));
     WriteParam(aMsg, static_cast<paramType::ContextMenuTriggerType>(
@@ -242,6 +267,8 @@ struct ParamTraits<mozilla::WidgetMouseEvent>
     paramType::ExitFromType exitFrom = 0;
     rv = ReadParam(aMsg, aIter,
                    static_cast<mozilla::WidgetMouseEventBase*>(aResult)) &&
+         ReadParam(aMsg, aIter,
+                   static_cast<mozilla::WidgetPointerHelper*>(aResult)) &&
          ReadParam(aMsg, aIter, &aResult->mIgnoreRootScrollFrame) &&
          ReadParam(aMsg, aIter, &reason) &&
          ReadParam(aMsg, aIter, &contextMenuTrigger) &&
@@ -286,24 +313,18 @@ struct ParamTraits<mozilla::WidgetPointerEvent>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, static_cast<mozilla::WidgetMouseEvent>(aParam));
-    WriteParam(aMsg, aParam.pointerId);
-    WriteParam(aMsg, aParam.width);
-    WriteParam(aMsg, aParam.height);
-    WriteParam(aMsg, aParam.tiltX);
-    WriteParam(aMsg, aParam.tiltY);
-    WriteParam(aMsg, aParam.isPrimary);
+    WriteParam(aMsg, aParam.mWidth);
+    WriteParam(aMsg, aParam.mHeight);
+    WriteParam(aMsg, aParam.mIsPrimary);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
   {
     bool rv =
       ReadParam(aMsg, aIter, static_cast<mozilla::WidgetMouseEvent*>(aResult)) &&
-      ReadParam(aMsg, aIter, &aResult->pointerId) &&
-      ReadParam(aMsg, aIter, &aResult->width) &&
-      ReadParam(aMsg, aIter, &aResult->height) &&
-      ReadParam(aMsg, aIter, &aResult->tiltX) &&
-      ReadParam(aMsg, aIter, &aResult->tiltY) &&
-      ReadParam(aMsg, aIter, &aResult->isPrimary);
+      ReadParam(aMsg, aIter, &aResult->mWidth) &&
+      ReadParam(aMsg, aIter, &aResult->mHeight) &&
+      ReadParam(aMsg, aIter, &aResult->mIsPrimary);
     return rv;
   }
 };
@@ -981,8 +1002,10 @@ struct ParamTraits<mozilla::ContentCache>
     WriteParam(aMsg, aParam.mSelection.mAnchor);
     WriteParam(aMsg, aParam.mSelection.mFocus);
     WriteParam(aMsg, aParam.mSelection.mWritingMode);
-    WriteParam(aMsg, aParam.mSelection.mAnchorCharRect);
-    WriteParam(aMsg, aParam.mSelection.mFocusCharRect);
+    WriteParam(aMsg, aParam.mSelection.mAnchorCharRects[0]);
+    WriteParam(aMsg, aParam.mSelection.mAnchorCharRects[1]);
+    WriteParam(aMsg, aParam.mSelection.mFocusCharRects[0]);
+    WriteParam(aMsg, aParam.mSelection.mFocusCharRects[1]);
     WriteParam(aMsg, aParam.mSelection.mRect);
     WriteParam(aMsg, aParam.mFirstCharRect);
     WriteParam(aMsg, aParam.mCaret.mOffset);
@@ -999,8 +1022,10 @@ struct ParamTraits<mozilla::ContentCache>
            ReadParam(aMsg, aIter, &aResult->mSelection.mAnchor) &&
            ReadParam(aMsg, aIter, &aResult->mSelection.mFocus) &&
            ReadParam(aMsg, aIter, &aResult->mSelection.mWritingMode) &&
-           ReadParam(aMsg, aIter, &aResult->mSelection.mAnchorCharRect) &&
-           ReadParam(aMsg, aIter, &aResult->mSelection.mFocusCharRect) &&
+           ReadParam(aMsg, aIter, &aResult->mSelection.mAnchorCharRects[0]) &&
+           ReadParam(aMsg, aIter, &aResult->mSelection.mAnchorCharRects[1]) &&
+           ReadParam(aMsg, aIter, &aResult->mSelection.mFocusCharRects[0]) &&
+           ReadParam(aMsg, aIter, &aResult->mSelection.mFocusCharRects[1]) &&
            ReadParam(aMsg, aIter, &aResult->mSelection.mRect) &&
            ReadParam(aMsg, aIter, &aResult->mFirstCharRect) &&
            ReadParam(aMsg, aIter, &aResult->mCaret.mOffset) &&

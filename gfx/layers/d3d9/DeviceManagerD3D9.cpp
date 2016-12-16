@@ -15,7 +15,9 @@
 #include "gfxPlatform.h"
 #include "gfxWindowsPlatform.h"
 #include "TextureD3D9.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/layers/CompositorThread.h"
 #include "gfxPrefs.h"
 
 namespace mozilla {
@@ -30,6 +32,23 @@ const LPCWSTR kClassName       = L"D3D9WindowClass";
 struct vertex {
   float x, y;
 };
+
+static StaticAutoPtr<mozilla::Mutex> sDeviceManagerLock;
+static StaticRefPtr<DeviceManagerD3D9> sDeviceManager;
+
+/* static */ void
+DeviceManagerD3D9::Init()
+{
+  MOZ_ASSERT(!sDeviceManagerLock);
+  sDeviceManagerLock = new Mutex("DeviceManagerD3D9.sDeviceManagerLock");
+}
+
+/* static */ void
+DeviceManagerD3D9::Shutdown()
+{
+  sDeviceManagerLock = nullptr;
+  sDeviceManager = nullptr;
+}
 
 SwapChainD3D9::SwapChainD3D9(DeviceManagerD3D9 *aDeviceManager)
   : mDeviceManager(aDeviceManager)
@@ -165,6 +184,7 @@ DeviceManagerD3D9::DeviceManagerD3D9()
   , mDeviceResetCount(0)
   , mMaxTextureSize(0)
   , mTextureAddressingMode(D3DTADDRESS_CLAMP)
+  , mHasComponentAlpha(true)
   , mHasDynamicTextures(false)
   , mDeviceWasRemoved(false)
 {
@@ -175,8 +195,50 @@ DeviceManagerD3D9::~DeviceManagerD3D9()
   DestroyDevice();
 }
 
+/* static */ RefPtr<DeviceManagerD3D9>
+DeviceManagerD3D9::Get()
+{
+  MutexAutoLock lock(*sDeviceManagerLock);
+
+  bool canCreate =
+    !gfxPlatform::UsesOffMainThreadCompositing() ||
+    CompositorThreadHolder::IsInCompositorThread();
+  if (!sDeviceManager && canCreate) {
+    sDeviceManager = new DeviceManagerD3D9();
+    if (!sDeviceManager->Initialize()) {
+      gfxCriticalError() << "[D3D9] Could not Initialize the DeviceManagerD3D9";
+      sDeviceManager = nullptr;
+    }
+  }
+
+  return sDeviceManager;
+}
+
+/* static */ RefPtr<IDirect3DDevice9>
+DeviceManagerD3D9::GetDevice()
+{
+  MutexAutoLock lock(*sDeviceManagerLock);
+  return sDeviceManager ? sDeviceManager->device() : nullptr;
+}
+
+/* static */ void
+DeviceManagerD3D9::OnDeviceManagerDestroy(DeviceManagerD3D9* aDeviceManager)
+{
+  if (!sDeviceManagerLock) {
+    // If the device manager has shutdown, we don't care anymore. We can get
+    // here when the compositor shuts down asynchronously.
+    MOZ_ASSERT(!sDeviceManager);
+    return;
+  }
+
+  MutexAutoLock lock(*sDeviceManagerLock);
+  if (aDeviceManager == sDeviceManager) {
+    sDeviceManager = nullptr;
+  }
+}
+
 bool
-DeviceManagerD3D9::Init()
+DeviceManagerD3D9::Initialize()
 {
   WNDCLASSW wc;
   HRESULT hr;
@@ -618,7 +680,7 @@ DeviceManagerD3D9::DestroyDevice()
   if (!IsD3D9Ex()) {
     ReleaseTextureResources();
   }
-  gfxWindowsPlatform::GetPlatform()->OnDeviceManagerDestroy(this);
+  DeviceManagerD3D9::OnDeviceManagerDestroy(this);
 }
 
 DeviceManagerState
@@ -764,6 +826,10 @@ DeviceManagerD3D9::VerifyCaps()
     mTextureAddressingMode = D3DTADDRESS_WRAP;
   } else {
     gfxPlatform::DisableBufferRotation();
+  }
+
+  if (LACKS_CAP(caps.DestBlendCaps, D3DPBLENDCAPS_INVSRCCOLOR)) {
+    mHasComponentAlpha = false;
   }
 
   return true;

@@ -215,6 +215,7 @@ public:
     , mExtraData(aOther.mExtraData)
     , mRotation(aOther.mRotation)
     , mImageRect(aOther.mImageRect)
+    , mAlphaPresent(aOther.mAlphaPresent)
   {
   }
 
@@ -236,6 +237,16 @@ public:
   UniquePtr<TrackInfo> Clone() const override
   {
     return MakeUnique<VideoInfo>(*this);
+  }
+
+  void SetAlpha(bool aAlphaPresent)
+  {
+    mAlphaPresent = aAlphaPresent;
+  }
+
+  bool HasAlpha() const
+  {
+    return mAlphaPresent;
   }
 
   nsIntRect ImageRect() const
@@ -261,7 +272,8 @@ public:
   // container.
   nsIntRect ScaledImageRect(int64_t aWidth, int64_t aHeight) const
   {
-    if (aWidth == mImage.width && aHeight == mImage.height) {
+    if ((aWidth == mImage.width && aHeight == mImage.height) ||
+        !mImage.width || !mImage.height) {
       return ImageRect();
     }
     nsIntRect imageRect = ImageRect();
@@ -282,7 +294,7 @@ public:
       case 270:
         return kDegree_270;
       default:
-        NS_WARN_IF_FALSE(aDegree == 0, "Invalid rotation degree, ignored");
+        NS_WARNING_ASSERTION(aDegree == 0, "Invalid rotation degree, ignored");
         return kDegree_0;
     }
   }
@@ -308,6 +320,9 @@ private:
   // mImage may be cropped; currently only used with the WebM container.
   // A negative width or height indicate that no cropping is to occur.
   nsIntRect mImageRect;
+
+  // Indicates whether or not frames may contain alpha information.
+  bool mAlphaPresent = false;
 };
 
 class AudioInfo : public TrackInfo {
@@ -463,7 +478,8 @@ public:
 
   bool IsEncrypted() const
   {
-    return mCrypto.IsEncrypted();
+    return (HasAudio() && mAudio.mCrypto.mValid) ||
+           (HasVideo() && mVideo.mCrypto.mValid);
   }
 
   bool HasValidMedia() const
@@ -501,6 +517,10 @@ public:
   bool mMediaSeekableOnlyInBufferedRanges = false;
 
   EncryptionInfo mCrypto;
+
+  // The minimum of start times of audio and video tracks.
+  // Use to map the zero time on the media timeline to the first frame.
+  media::TimeUnit mStartTime;
 };
 
 class SharedTrackInfo {

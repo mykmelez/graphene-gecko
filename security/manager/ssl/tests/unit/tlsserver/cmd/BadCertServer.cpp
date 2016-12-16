@@ -75,6 +75,8 @@ const BadCertHost sBadCertHosts[] =
   { "ipAddressAsDNSNameInSAN.example.com", "ipAddressAsDNSNameInSAN" },
   { "noValidNames.example.com", "noValidNames" },
   { "bug413909.xn--hxajbheg2az3al.xn--jxalpdlp", "idn-certificate" },
+  { "emptyissuername.example.com", "emptyIssuerName" },
+  { "ev-test.example.com", "ev-test" },
   { nullptr, nullptr }
 };
 

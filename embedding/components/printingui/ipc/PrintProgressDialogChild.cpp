@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsIObserver.h"
 #include "PrintProgressDialogChild.h"
 
@@ -22,7 +22,6 @@ PrintProgressDialogChild::PrintProgressDialogChild(
   nsIObserver* aOpenObserver) :
   mOpenObserver(aOpenObserver)
 {
-  MOZ_COUNT_CTOR(PrintProgressDialogChild);
 }
 
 PrintProgressDialogChild::~PrintProgressDialogChild()
@@ -32,17 +31,16 @@ PrintProgressDialogChild::~PrintProgressDialogChild()
   // the parent to decrement its refcount, as well as prevent it from attempting
   // to contact us further.
   Unused << Send__delete__(this);
-  MOZ_COUNT_DTOR(PrintProgressDialogChild);
 }
 
-bool
+mozilla::ipc::IPCResult
 PrintProgressDialogChild::RecvDialogOpened()
 {
   // nsPrintEngine's observer, which we're reporting to here, doesn't care
   // what gets passed as the subject, topic or data, so we'll just send
   // nullptrs.
   mOpenObserver->Observe(nullptr, nullptr, nullptr);
-  return true;
+  return IPC_OK();
 }
 
 // nsIWebProgressListener

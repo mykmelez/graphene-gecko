@@ -77,10 +77,12 @@ CommandList.prototype = {
     for (let name of Object.keys(manifest.commands)) {
       let command = manifest.commands[name];
       let shortcut = command.suggested_key[os] || command.suggested_key.default;
-      commands.set(name, {
-        description: command.description,
-        shortcut: shortcut.replace(/\s+/g, ""),
-      });
+      if (shortcut) {
+        commands.set(name, {
+          description: command.description,
+          shortcut: shortcut.replace(/\s+/g, ""),
+        });
+      }
     }
     return commands;
   },
@@ -124,9 +126,14 @@ CommandList.prototype = {
     // therefore the listeners for these elements will be garbage collected.
     keyElement.addEventListener("command", (event) => {
       if (name == "_execute_page_action") {
-        let win = event.target.ownerGlobal;
+        let win = event.target.ownerDocument.defaultView;
         pageActionFor(this.extension).triggerAction(win);
+      } else if (name == "_execute_browser_action") {
+        let win = event.target.ownerDocument.defaultView;
+        browserActionFor(this.extension).triggerAction(win);
       } else {
+        TabManager.for(this.extension)
+                  .addActiveTabPermission(TabManager.activeTab);
         this.emit("command", name);
       }
     });
@@ -224,7 +231,8 @@ extensions.on("shutdown", (type, extension) => {
 });
 /* eslint-enable mozilla/balanced-listeners */
 
-extensions.registerSchemaAPI("commands", (extension, context) => {
+extensions.registerSchemaAPI("commands", "addon_parent", context => {
+  let {extension} = context;
   return {
     commands: {
       getAll() {
@@ -238,8 +246,8 @@ extensions.registerSchemaAPI("commands", (extension, context) => {
         }));
       },
       onCommand: new EventManager(context, "commands.onCommand", fire => {
-        let listener = (event, name) => {
-          fire(name);
+        let listener = (eventName, commandName) => {
+          fire(commandName);
         };
         commandsMap.get(extension).on("command", listener);
         return () => {

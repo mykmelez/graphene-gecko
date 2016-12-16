@@ -79,7 +79,7 @@ LogBlockedRequest(nsIRequest* aRequest,
   channel->GetURI(getter_AddRefs(aUri));
   nsAutoCString spec;
   if (aUri) {
-    aUri->GetSpec(spec);
+    spec = aUri->GetSpecOrDefault();
   }
 
   // Generate the error message
@@ -549,8 +549,13 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
   // Check if the request failed
   nsresult status;
   nsresult rv = aRequest->GetStatus(&status);
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_SUCCESS(status, status);
+  if (NS_FAILED(rv)) {
+   return rv;
+  }
+
+  if (NS_FAILED(status)) {
+    return status;
+  }
 
   // Test that things worked on a HTTP level
   nsCOMPtr<nsIHttpChannel> http = do_QueryInterface(aRequest);
@@ -588,7 +593,21 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
     return rv;
   }
 
+  // Bug 1210985 - Explicitly point out the error that the credential is
+  // not supported if the allowing origin is '*'. Note that this check
+  // has to be done before the condition
+  //
+  // >> if (mWithCredentials || !allowedOriginHeader.EqualsLiteral("*"))
+  //
+  // below since "if (A && B)" is included in "if (A || !B)".
+  //
+  if (mWithCredentials && allowedOriginHeader.EqualsLiteral("*")) {
+    LogBlockedRequest(aRequest, "CORSNotSupportingCredentials", nullptr);
+    return NS_ERROR_DOM_BAD_URI;
+  }
+
   if (mWithCredentials || !allowedOriginHeader.EqualsLiteral("*")) {
+    MOZ_ASSERT(!nsContentUtils::IsExpandedPrincipal(mOriginHeaderPrincipal));
     nsAutoCString origin;
     nsContentUtils::GetASCIIOrigin(mOriginHeaderPrincipal, origin);
 
@@ -936,6 +955,12 @@ nsCORSListenerProxy::UpdateChannel(nsIChannel* aChannel,
   nsCString userpass;
   uri->GetUserPass(userpass);
   NS_ENSURE_TRUE(userpass.IsEmpty(), NS_ERROR_DOM_BAD_URI);
+
+  // If we have an expanded principal here, we'll reject the CORS request,
+  // because we can't send a useful Origin header which is required for CORS.
+  if (nsContentUtils::IsExpandedPrincipal(mOriginHeaderPrincipal)) {
+    return NS_ERROR_DOM_BAD_URI;
+  }
 
   // Add the Origin header
   nsAutoCString origin;

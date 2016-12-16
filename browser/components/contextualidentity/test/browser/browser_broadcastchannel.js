@@ -21,11 +21,9 @@ function* openTabInUserContext(uri, userContextId) {
 
 add_task(function* setup() {
   // make sure userContext is enabled.
-  yield new Promise(resolve => {
-    SpecialPowers.pushPrefEnv({"set": [
-      ["privacy.userContext.enabled", true]
-    ]}, resolve);
-  });
+  yield SpecialPowers.pushPrefEnv({"set": [
+    ["privacy.userContext.enabled", true]
+  ]});
 });
 
 add_task(function* test() {
@@ -35,10 +33,10 @@ add_task(function* test() {
 
   // reflect the received message on title
   yield ContentTask.spawn(receiver.browser, channelName,
-    function (name) {
+    function(name) {
       content.window.testPromise = new content.window.Promise(resolve => {
         content.window.bc = new content.window.BroadcastChannel(name);
-        content.window.bc.onmessage = function (e) {
+        content.window.bc.onmessage = function(e) {
           content.document.title += e.data;
           resolve();
         }
@@ -57,23 +55,22 @@ add_task(function* test() {
     yield ContentTask.spawn(
         sender.browser,
         { name: channelName, message: sender.message },
-        function (opts) {
+        function(opts) {
           let bc = new content.window.BroadcastChannel(opts.name);
           bc.postMessage(opts.message);
         });
   }
 
-  // make sure we have received a message
-  yield ContentTask.spawn(receiver.browser, channelName,
-    function* (name) {
-      yield content.window.testPromise.then(function() {});
-    }
-  );
-
   // Since sender1 sends before sender2, if the title is exactly
   // sender2's message, sender1's message must've been blocked
-  is(receiver.browser.contentDocument.title, sender2.message,
-      "should only receive messages from the same user context");
+  yield ContentTask.spawn(receiver.browser, sender2.message,
+    function* (message) {
+      yield content.window.testPromise.then(function() {
+        is(content.document.title, message,
+           "should only receive messages from the same user context");
+      });
+    }
+  );
 
   gBrowser.removeTab(sender1.tab);
   gBrowser.removeTab(sender2.tab);

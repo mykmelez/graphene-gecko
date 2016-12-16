@@ -276,7 +276,6 @@ function parseRDFManifest(aId, aUpdateKey, aRequest, aManifestData) {
   if (aManifestData.documentElement.namespaceURI != PREFIX_NS_RDF) {
     throw Components.Exception("Update manifest had an unrecognised namespace: " +
                                aManifestData.documentElement.namespaceURI);
-    return undefined;
   }
 
   function EM_R(aProp) {
@@ -505,8 +504,10 @@ function parseJSONManifest(aId, aUpdateKey, aRequest, aManifestData) {
 
     // "gecko" is currently the only supported application entry. If
     // it's missing, skip this update.
-    if (!("gecko" in applications))
+    if (!("gecko" in applications)) {
+      logger.debug("gecko not in application entry, skipping update of ${addon}")
       continue;
+    }
 
     let app = getProperty(applications, "gecko", "object");
 

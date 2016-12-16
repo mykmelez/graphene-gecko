@@ -23,6 +23,9 @@ class nsIURI;
 class nsIPresShell;
 class nsIChannel;
 class nsTableColFrame;
+namespace mozilla {
+class ViewportFrame;
+} // namespace mozilla
 
 // These are all the block specific frame bits, they are copied from
 // the prev-in-flow to a newly created next-in-flow, except for the
@@ -48,7 +51,7 @@ class nsTableColFrame;
 // Create a frame that supports "display: block" layout behavior
 class nsBlockFrame;
 nsBlockFrame*
-NS_NewBlockFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsFrameState aFlags = nsFrameState(0));
+NS_NewBlockFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
 // Special Generated Content Node. It contains text taken from an
 // attribute of its *grandparent* content node. 
@@ -65,12 +68,8 @@ nsContainerFrame*
 NS_NewSelectsAreaFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsFrameState aFlags);
 
 // Create a block formatting context blockframe
-inline nsBlockFrame* NS_NewBlockFormattingContext(nsIPresShell* aPresShell,
-                                                  nsStyleContext* aStyleContext)
-{
-  return NS_NewBlockFrame(aPresShell, aStyleContext,
-                          NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
-}
+nsBlockFrame*
+NS_NewBlockFormattingContext(nsIPresShell* aPresShell, nsStyleContext* aStyleContext);
 
 nsIFrame*
 NS_NewBRFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
@@ -85,8 +84,7 @@ NS_NewSubDocumentFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewHTMLFramesetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-class ViewportFrame;
-ViewportFrame*
+mozilla::ViewportFrame*
 NS_NewViewportFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 class nsCanvasFrame;
 nsCanvasFrame*
@@ -175,8 +173,9 @@ nsIFrame*
 NS_NewRangeFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewNumberControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
-class DetailsFrame;
-DetailsFrame*
+nsIFrame*
+NS_NewDateTimeControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+nsBlockFrame*
 NS_NewDetailsFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
 // Table frame factories

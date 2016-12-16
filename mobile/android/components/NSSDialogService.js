@@ -212,13 +212,14 @@ NSSDialogs.prototype = {
     this.showPrompt(p);
   },
 
-  chooseCertificate: function(ctx, cnAndPort, organization, issuerOrg, certList,
-                              selectedIndex) {
+  chooseCertificate: function(ctx, hostname, port, organization, issuerOrg,
+                              certList, selectedIndex) {
     let rememberSetting =
       Services.prefs.getBoolPref("security.remember_cert_checkbox_default_setting");
 
     let serverRequestedDetails = [
-      this.escapeHTML(cnAndPort),
+      this.formatString("clientAuthAsk.hostnameAndPort",
+                        [hostname, port.toString()]),
       this.formatString("clientAuthAsk.organization", [organization]),
       this.formatString("clientAuthAsk.issuer", [issuerOrg]),
     ].join("<br/>");
@@ -228,7 +229,7 @@ NSSDialogs.prototype = {
     for (let i = 0; i < certList.length; i++) {
       let cert = certList.queryElementAt(i, Ci.nsIX509Cert);
       certNickList.push(this.formatString("clientAuthAsk.nickAndSerial",
-                                          [cert.nickname, cert.serialNumber]));
+                                          [cert.displayName, cert.serialNumber]));
       certDetailsList.push(this.getCertDetails(cert));
     }
 

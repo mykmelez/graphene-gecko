@@ -36,11 +36,11 @@ class TestNodeBase {
     nsRegion GetRegion();
     virtual bool IsLeaf() = 0;
   private:
-    int mExpectedTraversalRank;
-    int mActualTraversalRank;
-    int mValue;
-    nsRegion mRegion;
-    T mType;
+    MOZ_INIT_OUTSIDE_CTOR int mExpectedTraversalRank;
+    MOZ_INIT_OUTSIDE_CTOR int mActualTraversalRank;
+    MOZ_INIT_OUTSIDE_CTOR int mValue;
+    MOZ_INIT_OUTSIDE_CTOR nsRegion mRegion;
+    MOZ_INIT_OUTSIDE_CTOR T mType;
   protected:
     virtual ~TestNodeBase<T>() {};
 };
@@ -1501,7 +1501,6 @@ MOZ_GTEST_BENCH(TreeTraversal, TreeTraversal_ForwardDepthFirstSearchPostOrderPer
 template <typename Node>
 static RefPtr<Node> BreadthFirstSearchForwardQueue(RefPtr<Node> aNode)
 {
-  RefPtr<Node> returnNode = nullptr;
   queue<RefPtr<Node>> nodes;
   nodes.push(aNode);
   while(!nodes.empty()) {
@@ -1951,7 +1950,6 @@ MOZ_GTEST_BENCH(TreeTraversal, TreeTraversal_ReverseDepthFirstSearchPostOrderPer
 template <typename Node>
 static RefPtr<Node> BreadthFirstSearchReverseQueue(RefPtr<Node> aNode)
 {
-  RefPtr<Node> returnNode = nullptr;
   queue<RefPtr<Node>> nodes;
   nodes.push(aNode);
   while(!nodes.empty()) {

@@ -37,7 +37,8 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(SVGAElement, SVGAElementBase)
 
   // nsINode interface methods
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
+  virtual nsresult GetEventTargetParent(
+                     EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
                      EventChainPostVisitor& aVisitor) override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
@@ -76,9 +77,9 @@ protected:
 
   virtual StringAttributesInfo GetStringInfo() override;
 
-  enum { HREF, TARGET };
-  nsSVGString mStringAttributes[2];
-  static StringInfo sStringInfo[2];
+  enum { HREF, XLINK_HREF, TARGET };
+  nsSVGString mStringAttributes[3];
+  static StringInfo sStringInfo[3];
 };
 
 } // namespace dom

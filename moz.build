@@ -70,7 +70,7 @@ if CONFIG['COMPILE_ENVIRONMENT']:
     if not CONFIG['JS_STANDALONE']:
         DIRS += [
             'config/external',
-            'config/external/nss',
+            'security',
         ]
 
     if CONFIG['BUILD_CTYPES']:
@@ -83,5 +83,7 @@ else:
 if not CONFIG['JS_STANDALONE'] and CONFIG['MOZ_BUILD_APP']:
     # Bring in the configuration for the configured application.
     include('/' + CONFIG['MOZ_BUILD_APP'] + '/app.mozbuild')
+
+CONFIGURE_SUBST_FILES += ['.cargo/config']
 
 include('build/templates.mozbuild')

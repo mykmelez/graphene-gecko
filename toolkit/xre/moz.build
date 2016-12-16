@@ -8,6 +8,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
     TEST_DIRS += ['test/win']
 
 MOCHITEST_MANIFESTS += ['test/mochitest.ini']
+BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
 
 XPIDL_SOURCES += [
     'nsINativeAppSupport.idl',
@@ -126,9 +127,6 @@ if CONFIG['TARGET_XPCOM_ABI']:
     DEFINES['TARGET_OS_ABI'] = '"%s_%s"' % (CONFIG['OS_TARGET'],
                                             CONFIG['TARGET_XPCOM_ABI'])
 
-if CONFIG['WRAP_SYSTEM_INCLUDES']:
-    DEFINES['WRAP_SYSTEM_INCLUDES'] = True
-
 if CONFIG['OS_ARCH'] == 'Linux' and 'lib64' in CONFIG['libdir']:
     DEFINES['HAVE_USR_LIB64_DIR'] = True
 
@@ -156,6 +154,11 @@ if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
         '/security/sandbox/chromium-shim',
     ]
 
+if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'Linux':
+    USE_LIBS += [
+        'mozsandbox',
+    ]
+
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     LOCAL_INCLUDES += [
         '/widget',
@@ -166,9 +169,6 @@ if CONFIG['MOZ_ENABLE_XREMOTE']:
     LOCAL_INCLUDES += [
         '/widget/xremoteclient',
     ]
-
-if CONFIG['MOZ_B2G_LOADER']:
-    DEFINES['OMNIJAR_NAME'] = CONFIG['OMNIJAR_NAME']
 
 CXXFLAGS += CONFIG['TK_CFLAGS']
 CXXFLAGS += CONFIG['MOZ_DBUS_CFLAGS']
@@ -184,3 +184,6 @@ FINAL_TARGET_PP_FILES += [
 
 if CONFIG['GNU_CXX']:
     CXXFLAGS += ['-Wno-error=shadow']
+
+if CONFIG['MOZ_IPDL_TESTS']:
+    DEFINES['MOZ_IPDL_TESTS'] = True

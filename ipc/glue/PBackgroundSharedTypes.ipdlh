@@ -20,10 +20,12 @@ struct SystemPrincipalInfo
 struct NullPrincipalInfo
 {
   PrincipalOriginAttributes attrs;
+  nsCString spec;
 };
 
 struct ExpandedPrincipalInfo
 {
+  PrincipalOriginAttributes attrs;
   PrincipalInfo[] whitelist;
 };
 

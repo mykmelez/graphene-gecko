@@ -321,6 +321,12 @@ nsSMILAnimationController::DoSample(bool aSkipUnchangedContainers)
 
   bool isStyleFlushNeeded = mResampleNeeded;
   mResampleNeeded = false;
+
+  if (mDocument->IsStyledByServo()) {
+    NS_ERROR("stylo: SMIL animations not supported yet");
+    return;
+  }
+
   // Set running sample flag -- do this before flushing styles so that when we
   // flush styles we don't end up requesting extra samples
   AutoRestore<bool> autoRestoreRunningSample(mRunningSample);
@@ -424,9 +430,9 @@ nsSMILAnimationController::DoSample(bool aSkipUnchangedContainers)
     return;
   }
 
-  nsCOMPtr<nsIDocument> kungFuDeathGrip(mDocument);  // keeps 'this' alive too
+  nsCOMPtr<nsIDocument> document(mDocument);  // keeps 'this' alive too
   if (isStyleFlushNeeded) {
-    mDocument->FlushPendingNotifications(Flush_Style);
+    document->FlushPendingNotifications(Flush_Style);
   }
 
   // WARNING:
@@ -693,7 +699,7 @@ nsSMILAnimationController::GetTargetIdentifierForAnimation(
           attributeName == nsGkAtoms::height) {
         isCSS = targetElem->GetNameSpaceID() != kNameSpaceID_SVG;
       } else {
-        nsCSSProperty prop =
+        nsCSSPropertyID prop =
           nsCSSProps::LookupProperty(nsDependentAtomString(attributeName),
                                      CSSEnabledState::eForAllContent);
         isCSS = nsSMILCSSProperty::IsPropertyAnimatable(prop);

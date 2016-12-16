@@ -8,10 +8,10 @@
 <script>
   var webChannelId = "account_updates_test";
 
-  window.onload = function(){
+  window.onload = function() {
     var testName = window.location.search.replace(/^\?/, "");
 
-    switch(testName) {
+    switch (testName) {
       case "profile_change":
         test_profile_change();
         break;
@@ -70,7 +70,7 @@
   }
 
   function test_can_link_account() {
-    window.addEventListener("WebChannelMessageToContent", function (e) {
+    window.addEventListener("WebChannelMessageToContent", function(e) {
       // echo any responses from the browser back to the tests on the
       // fxaccounts_webchannel_response_echo WebChannel. The tests are
       // listening for events and do the appropriate checks.

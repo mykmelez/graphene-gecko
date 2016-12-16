@@ -1313,10 +1313,10 @@ public class ActivityChooserModel extends DataSetObservable {
             return false;
         }
 
-        final BrowserDB browserDB = GeckoProfile.get(mContext).getDB();
+        final BrowserDB browserDB = BrowserDB.from(mContext);
         final TabsAccessor tabsAccessor = browserDB.getTabsAccessor();
         final Cursor remoteClientsCursor = tabsAccessor
-                .getRemoteClientsByRecencyCursor(mContext);
+                .getRemoteClientsNoStaleSorted(mContext);
         if (remoteClientsCursor == null) {
             return false;
         }

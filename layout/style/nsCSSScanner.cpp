@@ -14,6 +14,8 @@
 #include "mozilla/Likely.h"
 #include <algorithm>
 
+using namespace mozilla;
+
 /* Character class tables and related helper functions. */
 
 static const uint8_t IS_HEX_DIGIT  = 0x01;
@@ -260,25 +262,13 @@ nsCSSToken::AppendToString(nsString& aBuffer) const
     case eCSSToken_Bad_URL:
       aBuffer.AppendLiteral("url(");
       if (mSymbol != char16_t(0)) {
-        if (mType == eCSSToken_URL) {
-          nsStyleUtil::AppendEscapedCSSString(mIdent, aBuffer, mSymbol);
-        } else {
-          // Only things up to mInteger were part of the string.
-          nsStyleUtil::AppendEscapedCSSString(StringHead(mIdent, mInteger),
-                                              aBuffer, mSymbol);
-          MOZ_ASSERT(mInteger2 == 0 || mInteger2 == 1);
-          if (mInteger2 == 1) {
-            // This was a Bad_String; strip off the closing quote.
-            aBuffer.Truncate(aBuffer.Length() - 1);
-          }
-
-          // Now append the remaining garbage.
-          aBuffer.Append(Substring(mIdent, mInteger));
-        }
+        nsStyleUtil::AppendEscapedCSSString(mIdent, aBuffer, mSymbol);
       } else {
         aBuffer.Append(mIdent);
       }
-      aBuffer.Append(char16_t(')'));
+      if (mType == eCSSToken_URL) {
+        aBuffer.Append(char16_t(')'));
+      }
       break;
 
     case eCSSToken_Number:
@@ -930,9 +920,12 @@ nsCSSScanner::ScanNumber(nsCSSToken& aToken)
   // Do all the math in double precision so it's truncated only once.
   double value = sign * (intPart + fracPart);
   if (gotE) {
-    // Explicitly cast expSign*exponent to double to avoid issues with
-    // overloaded pow() on Windows.
-    value *= pow(10.0, double(expSign * exponent));
+    // Avoid multiplication of 0 by Infinity.
+    if (value != 0.0) {
+      // Explicitly cast expSign*exponent to double to avoid issues with
+      // overloaded pow() on Windows.
+      value *= pow(10.0, double(expSign * exponent));
+    }
   } else if (!gotDot) {
     // Clamp values outside of integer range.
     if (sign > 0) {
@@ -958,6 +951,7 @@ nsCSSScanner::ScanNumber(nsCSSToken& aToken)
       aToken.mIntegerValid = false;
     }
   }
+  MOZ_ASSERT(!IsNaN(value), "The value should not be NaN");
   aToken.mNumber = value;
   aToken.mType = type;
   return true;
@@ -1178,9 +1172,6 @@ nsCSSScanner::NextURL(nsCSSToken& aToken)
     ScanString(aToken);
     if (MOZ_UNLIKELY(aToken.mType == eCSSToken_Bad_String)) {
       aToken.mType = eCSSToken_Bad_URL;
-      // Flag us as having been a Bad_String.
-      aToken.mInteger2 = 1;
-      ConsumeBadURLRemnants(aToken);
       return;
     }
     MOZ_ASSERT(aToken.mType == eCSSToken_String, "unexpected token type");
@@ -1204,44 +1195,7 @@ nsCSSScanner::NextURL(nsCSSToken& aToken)
   } else {
     mSeenBadToken = true;
     aToken.mType = eCSSToken_Bad_URL;
-    if (aToken.mSymbol != 0) {
-      // Flag us as having been a String, not a Bad_String.
-      aToken.mInteger2 = 0;
-    }
-    ConsumeBadURLRemnants(aToken);
   }
-}
-
-void
-nsCSSScanner::ConsumeBadURLRemnants(nsCSSToken& aToken)
-{
-  aToken.mInteger = aToken.mIdent.Length();
-  int32_t ch = Peek();
-  do {
-    if (ch < 0) {
-      AddEOFCharacters(eEOFCharacters_CloseParen);
-      break;
-    }
-
-    if (ch == '\\' && GatherEscape(aToken.mIdent, false)) {
-      // Nothing else needs to be done here for the moment; we've consumed the
-      // backslash and following escape.
-    } else {
-      // We always want to consume this character.
-      if (IsVertSpace(ch)) {
-        AdvanceLine();
-      } else {
-        Advance();
-      }
-      if (ch == 0) {
-        aToken.mIdent.Append(UCS2_REPLACEMENT_CHAR);
-      } else {
-        aToken.mIdent.Append(ch);
-      }
-    }
-
-    ch = Peek();
-  } while (ch != ')');
 }
 
 /**

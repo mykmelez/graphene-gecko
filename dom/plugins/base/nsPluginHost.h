@@ -202,12 +202,6 @@ public:
                      // Binds to the <applet> tag, has various special
                      // rules around opening channels, codebase, ...
                      eSpecialType_Java,
-                     // Some IPC quirks
-                     eSpecialType_Silverlight,
-                     // Native widget quirks
-                     eSpecialType_PDF,
-                     // Native widget quirks
-                     eSpecialType_RealPlayer,
                      // Native widget quirks
                      eSpecialType_Unity };
   static SpecialType GetSpecialType(const nsACString & aMIMEType);
@@ -386,8 +380,6 @@ private:
 
   // set by pref plugin.disable
   bool mPluginsDisabled;
-  // set by pref plugins.click_to_play
-  bool mPluginsClickToPlay;
 
   // Any instances in this array will have valid plugin objects via GetPlugin().
   // When removing an instance it might not die - be sure to null out it's plugin.

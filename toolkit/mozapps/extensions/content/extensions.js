@@ -5,7 +5,8 @@
 "use strict";
 
 /* import-globals-from ../../../content/contentAreaUtils.js */
-/*globals XMLStylesheetProcessingInstruction*/
+/* globals XMLStylesheetProcessingInstruction */
+/* exported UPDATES_RELEASENOTES_TRANSFORMFILE, XMLURI_PARSE_ERROR, loadView */
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
@@ -13,10 +14,15 @@ var Cu = Components.utils;
 var Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/DownloadUtils.jsm");
 Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import("resource://gre/modules/addons/AddonRepository.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils", "resource:///modules/E10SUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
+                                  "resource://gre/modules/ExtensionParent.jsm");
 
 const CONSTANTS = {};
 Cu.import("resource://gre/modules/addons/AddonConstants.jsm", CONSTANTS);
@@ -82,6 +88,87 @@ XPCOMUtils.defineLazyGetter(gStrings, "appVersion", function() {
 
 document.addEventListener("load", initialize, true);
 window.addEventListener("unload", shutdown, false);
+
+class MessageDispatcher {
+  constructor(target) {
+    this.listeners = new Map();
+    this.target = target;
+  }
+
+  addMessageListener(name, handler) {
+    if (!this.listeners.has(name)) {
+      this.listeners.set(name, new Set());
+    }
+
+    this.listeners.get(name).add(handler);
+  }
+
+  removeMessageListener(name, handler) {
+    if (this.listeners.has(name)) {
+      this.listeners.get(name).delete(handler);
+    }
+  }
+
+  sendAsyncMessage(name, data) {
+    for (let handler of this.listeners.get(name) || new Set()) {
+      Promise.resolve().then(() => {
+        handler.receiveMessage({
+          name,
+          data,
+          target: this.target,
+        });
+      });
+    }
+  }
+}
+
+/**
+ * A mock FrameMessageManager global to allow frame scripts to run in
+ * non-top-level, non-remote <browser>s as if they were top-level or
+ * remote.
+ *
+ * @param {Element} browser
+ *        A XUL <browser> element.
+ */
+class FakeFrameMessageManager {
+  constructor(browser) {
+    let dispatcher = new MessageDispatcher(browser);
+    let frameDispatcher = new MessageDispatcher(null);
+
+    let bind = (object, method) => object[method].bind(object);
+
+    this.sendAsyncMessage = bind(frameDispatcher, "sendAsyncMessage");
+    this.addMessageListener = bind(dispatcher, "addMessageListener");
+    this.removeMessageListener = bind(dispatcher, "removeMessageListener");
+
+    this.frame = {
+      get content() {
+        return browser.contentWindow;
+      },
+
+      get docShell() {
+        return browser.docShell;
+      },
+
+      addEventListener: bind(browser, "addEventListener"),
+      removeEventListener: bind(browser, "removeEventListener"),
+
+      sendAsyncMessage: bind(dispatcher, "sendAsyncMessage"),
+      addMessageListener: bind(frameDispatcher, "addMessageListener"),
+      removeMessageListener: bind(frameDispatcher, "removeMessageListener"),
+    }
+  }
+
+  loadFrameScript(url) {
+    Services.scriptloader.loadSubScript(url, Object.create(this.frame));
+  }
+}
+
+function promiseEvent(event, target, capture = false) {
+  return new Promise(resolve => {
+    target.addEventListener(event, resolve, {capture, once: true});
+  });
+}
 
 var gPendingInitializations = 1;
 Object.defineProperty(this, "gIsInitializing", {
@@ -202,18 +289,9 @@ function loadView(aViewId) {
 }
 
 function isCorrectlySigned(aAddon) {
-  // Temporary add-ons do not require signing.
-  if (aAddon.scope == AddonManager.SCOPE_TEMPORARY)
-      return true;
-  // On UNIX platforms except OSX, an additional location for system add-ons
-  // exists in /usr/{lib,share}/mozilla/extensions. Add-ons installed there
-  // do not require signing either.
-  if (aAddon.scope == AddonManager.SCOPE_SYSTEM &&
-      Services.appinfo.OS != "Darwin")
-    return true;
-  if (aAddon.signedState <= AddonManager.SIGNEDSTATE_MISSING)
-    return false;
-  return true;
+  // Add-ons without an "isCorrectlySigned" property are correctly signed as
+  // they aren't the correct type for signing.
+  return aAddon.isCorrectlySigned !== false;
 }
 
 function isDiscoverEnabled() {
@@ -281,9 +359,8 @@ function getMainWindowWithPreferencesPane() {
   let mainWindow = getMainWindow();
   if (mainWindow && "openAdvancedPreferences" in mainWindow) {
     return mainWindow;
-  } else {
-    return null;
   }
+  return null;
 }
 
 /**
@@ -490,9 +567,8 @@ var gEventManager = {
                                                               : addonItem.mAddon.version);
         }
       }
-      else {
-        if (shouldShowVersionNumber(addonItem.mInstall))
-          tiptext += " " + addonItem.mInstall.version;
+      else if (shouldShowVersionNumber(addonItem.mInstall)) {
+        tiptext += " " + addonItem.mInstall.version;
       }
 
       addonTooltip.label = tiptext;
@@ -546,7 +622,7 @@ var gEventManager = {
         continue;
       try {
         listener[aEvent].apply(listener, aParams);
-      } catch(e) {
+      } catch (e) {
         // this shouldn't be fatal
         Cu.reportError(e);
       }
@@ -565,7 +641,7 @@ var gEventManager = {
         continue;
       try {
         listener[aEvent].apply(listener, aParams);
-      } catch(e) {
+      } catch (e) {
         // this shouldn't be fatal
         Cu.reportError(e);
       }
@@ -665,7 +741,7 @@ var gViewController = {
       if ("shutdown" in view) {
         try {
           view.shutdown();
-        } catch(e) {
+        } catch (e) {
           // this shouldn't be fatal
           Cu.reportError(e);
         }
@@ -687,18 +763,17 @@ var gViewController = {
           gHistory.back();
         else
           gViewController.replaceView(gViewDefault);
+      } else if (gHistory.canGoForward) {
+        gHistory.forward();
       } else {
-        if (gHistory.canGoForward)
-          gHistory.forward();
-        else
-          gViewController.replaceView(gViewDefault);
+        gViewController.replaceView(gViewDefault);
       }
     }
   },
 
   parseViewId: function(aViewId) {
     var matchRegex = /^addons:\/\/([^\/]+)\/(.*)$/;
-    var [,viewType, viewParam] = aViewId.match(matchRegex) || [];
+    var [, viewType, viewParam] = aViewId.match(matchRegex) || [];
     return {type: viewType, param: decodeURIComponent(viewParam)};
   },
 
@@ -758,9 +833,8 @@ var gViewController = {
   get displayedView() {
     if (this.viewPort.selectedPanel == this.headeredViews) {
       return this.headeredViewsDeck.selectedPanel;
-    } else {
-      return this.viewPort.selectedPanel;
     }
+    return this.viewPort.selectedPanel;
   },
 
   set displayedView(view) {
@@ -1489,14 +1563,11 @@ function openOptionsInTab(optionsURL) {
 }
 
 function formatDate(aDate) {
-  return Cc["@mozilla.org/intl/scriptabledateformat;1"]
-           .getService(Ci.nsIScriptableDateFormat)
-           .FormatDate("",
-                       Ci.nsIScriptableDateFormat.dateFormatLong,
-                       aDate.getFullYear(),
-                       aDate.getMonth() + 1,
-                       aDate.getDate()
-                       );
+  const locale = Cc["@mozilla.org/chrome/chrome-registry;1"]
+                 .getService(Ci.nsIXULChromeRegistry)
+                 .getSelectedLocale("global", true);
+  const dtOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+  return aDate.toLocaleDateString(locale, dtOptions);
 }
 
 
@@ -1645,8 +1716,7 @@ function sortElements(aElements, aSortBy, aAscending) {
       if (addonType && (addonType.flags & AddonManager.TYPE_SUPPORTS_ASK_TO_ACTIVATE) &&
           addon.userDisabled == AddonManager.STATE_ASK_TO_ACTIVATE)
         return "askToActivate";
-      else
-        return "enabled";
+      return "enabled";
     }
 
     return addon[aKey];
@@ -1824,7 +1894,7 @@ var gCategories = {
         continue;
       // If the priorities are equal and the new type's name is earlier
       // alphabetically then this is the insertion point
-      if (String.localeCompare(aName, node.getAttribute("name")) < 0)
+      if (String(aName).localeCompare(node.getAttribute("name")) < 0)
         break;
     }
 
@@ -2445,7 +2515,7 @@ var gSearchView = {
     var maxRemoteResults = 0;
     try {
       maxRemoteResults = Services.prefs.getIntPref(PREF_MAXRESULTS);
-    } catch(e) {}
+    } catch (e) {}
 
     if (maxRemoteResults <= 0) {
       finishSearch(0);
@@ -2686,6 +2756,13 @@ var gListView = {
         Services.prefs.getCharPref("xpinstall.signatures.devInfoURL"));
     } catch (e) {
       document.getElementById("signing-dev-info").hidden = true;
+    }
+
+    if (Preferences.get("plugin.load_flash_only", true)) {
+      document.getElementById("plugindeprecation-learnmore-link")
+        .setAttribute("href", Services.urlFormatter.formatURLPref("app.support.baseURL") + "npapi");
+    } else {
+      document.getElementById("plugindeprecation-notice").hidden = true;
     }
   },
 
@@ -3113,8 +3190,6 @@ var gDetailView = {
       this.node.setAttribute("loading-extended", true);
     }, LOADING_MSG_DELAY);
 
-    var view = gViewController.currentViewId;
-
     AddonManager.getAddonByID(aAddonId, (aAddon) => {
       if (gViewController && aRequest != gViewController.currentViewRequest)
         return;
@@ -3439,7 +3514,7 @@ var gDetailView = {
         };
         xhr.send();
       }
-    } catch(e) {
+    } catch (e) {
       Cu.reportError(e);
       if (aCallback)
         aCallback();
@@ -3461,82 +3536,53 @@ var gDetailView = {
     }
   },
 
-  createOptionsBrowser: function(parentNode) {
+  createOptionsBrowser: Task.async(function*(parentNode) {
     let browser = document.createElement("browser");
     browser.setAttribute("type", "content");
     browser.setAttribute("disableglobalhistory", "true");
     browser.setAttribute("class", "inline-options-browser");
 
-    // Resize at most 10 times per second.
-    const TIMEOUT = 100;
-    let timeout;
+    let {optionsURL} = this._addon;
+    let remote = !E10SUtils.canLoadURIInProcess(optionsURL, Services.appinfo.PROCESS_TYPE_DEFAULT);
 
-    function resizeBrowser() {
-      if (timeout == null) {
-        _resizeBrowser();
-        timeout = setTimeout(_resizeBrowser, TIMEOUT);
-      }
+    let readyPromise;
+    if (remote) {
+      browser.setAttribute("remote", "true");
+      readyPromise = promiseEvent("XULFrameLoaderCreated", browser);
+    } else {
+      readyPromise = promiseEvent("load", browser, true);
     }
 
-    function _resizeBrowser() {
-      timeout = null;
+    parentNode.appendChild(browser);
 
-      let doc = browser.contentDocument;
-      if (!doc) {
-        return;
-      }
+    // Force bindings to apply synchronously.
+    browser.clientTop;
 
-      let body = doc.body || doc.documentElement;
-
-      let docHeight = doc.documentElement.getBoundingClientRect().height;
-
-      let height = Math.ceil(body.scrollHeight +
-                             // Compensate for any offsets between the scroll
-                             // area of the body and the outer height of the
-                             // document.
-                             docHeight - body.clientHeight);
-
-      // Note: This will trigger another MozScrolledAreaChanged event
-      // if it's different from the previous height.
-      browser.style.height = `${height}px`;
+    yield readyPromise;
+    if (remote) {
+      ExtensionParent.apiManager.emit("extension-browser-inserted", browser);
     }
 
-    return new Promise((resolve, reject) => {
-      let onload = () => {
-        browser.removeEventListener("load", onload, true);
-
-        browser.addEventListener("error", reject);
-        browser.addEventListener("load", event => {
-          // We only get load events targetted at one of these elements.
-          // If we're running in a tab, it's the <browser>. If we're
-          // running in a dialog, it's the content document.
-          if (event.target != browser && event.target != browser.contentDocument)
-            return;
-
-          resolve(browser);
-
-          browser.contentWindow.addEventListener("MozScrolledAreaChanged", event => {
-            resizeBrowser();
-          }, true);
-
-          new browser.contentWindow.MutationObserver(resizeBrowser).observe(
-            browser.contentDocument.documentElement, {
-              attributes: true,
-              characterData: true,
-              childList: true,
-              subtree: true,
-            });
-
-          resizeBrowser();
-        }, true);
-
-        browser.setAttribute("src", this._addon.optionsURL);
+    return new Promise(resolve => {
+      let messageListener = {
+        receiveMessage({name, data}) {
+          if (name === "Extension:BrowserResized")
+            browser.style.height = `${data.height}px`;
+          else if (name === "Extension:BrowserContentLoaded")
+            resolve(browser);
+        },
       };
-      browser.addEventListener("load", onload, true);
 
-      parentNode.appendChild(browser);
+      let mm = browser.messageManager || new FakeFrameMessageManager(browser);
+      mm.loadFrameScript("chrome://extensions/content/ext-browser-content.js",
+                         false);
+      mm.addMessageListener("Extension:BrowserContentLoaded", messageListener);
+      mm.addMessageListener("Extension:BrowserResized", messageListener);
+      mm.sendAsyncMessage("Extension:InitBrowser", {fixedWidth: true});
+
+      browser.loadURI(optionsURL);
     });
-  },
+  }),
 
   getSelectedAddon: function() {
     return this._addon;
@@ -3834,9 +3880,9 @@ var gUpdatesView = {
 var gDragDrop = {
   onDragOver: function(aEvent) {
     var types = aEvent.dataTransfer.types;
-    if (types.contains("text/uri-list") ||
-        types.contains("text/x-moz-url") ||
-        types.contains("application/x-moz-file"))
+    if (types.includes("text/uri-list") ||
+        types.includes("text/x-moz-url") ||
+        types.includes("application/x-moz-file"))
       aEvent.preventDefault();
   },
 

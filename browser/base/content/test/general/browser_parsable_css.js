@@ -13,22 +13,15 @@ let whitelist = [
   // CodeMirror is imported as-is, see bug 1004423.
   {sourceName: /codemirror\.css$/i,
    isFromDevTools: true},
+  // The debugger uses cross-browser CSS.
+  {sourceName: /devtools\/client\/debugger\/new\/styles.css/i,
+   isFromDevTools: true},
   // PDFjs is futureproofing its pseudoselectors, and those rules are dropped.
   {sourceName: /web\/viewer\.css$/i,
    errorMessage: /Unknown pseudo-class.*(fullscreen|selection)/i,
    isFromDevTools: false},
   // Tracked in bug 1004428.
   {sourceName: /aboutaccounts\/(main|normalize)\.css$/i,
-    isFromDevTools: false},
-  // TokBox SDK assets, see bug 1032469.
-  {sourceName: /loop\/.*sdk-content\/.*\.css$/i,
-    isFromDevTools: false},
-  // Loop standalone client CSS uses placeholder cross browser pseudo-element
-  {sourceName: /loop\/.*\.css$/i,
-   errorMessage: /Unknown pseudo-class.*placeholder/i,
-   isFromDevTools: false},
-  {sourceName: /loop\/.*shared\/css\/common.css$/i,
-   errorMessage: /Unknown property .user-select./i,
    isFromDevTools: false},
   // Highlighter CSS uses a UA-only pseudo-class, see bug 985597.
   {sourceName: /highlighters\.css$/i,
@@ -37,6 +30,28 @@ let whitelist = [
   // Responsive Design Mode CSS uses a UA-only pseudo-class, see Bug 1241714.
   {sourceName: /responsive-ua\.css$/i,
    errorMessage: /Unknown pseudo-class.*moz-dropdown-list/i,
+   isFromDevTools: true},
+
+  {sourceName: /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua)\.css$/i,
+   errorMessage: /Unknown pseudo-class.*-moz-/i,
+   isFromDevTools: false},
+  {sourceName: /\b(html|mathml|ua)\.css$/i,
+   errorMessage: /Unknown property.*-moz-/i,
+   isFromDevTools: false},
+  // Reserved to UA sheets unless layout.css.overflow-clip-box.enabled flipped to true.
+  {sourceName: /res\/forms\.css$/i,
+   errorMessage: /Unknown property.*overflow-clip-box/i,
+   isFromDevTools: false},
+];
+
+// Platform can be "linux", "macosx" or "win". If omitted, the exception applies to all platforms.
+let allowedImageReferences = [
+  // Bug 1302691
+  {file: "chrome://devtools/skin/images/dock-bottom-minimize@2x.png",
+   from: "chrome://devtools/skin/toolbox.css",
+   isFromDevTools: true},
+  {file: "chrome://devtools/skin/images/dock-bottom-maximize@2x.png",
+   from: "chrome://devtools/skin/toolbox.css",
    isFromDevTools: true},
 ];
 
@@ -86,6 +101,7 @@ function once(target, name) {
 function fetchFile(uri) {
   return new Promise((resolve, reject) => {
     let xhr = new XMLHttpRequest();
+    xhr.responseType = "text";
     xhr.open("GET", uri, true);
     xhr.onreadystatechange = function() {
       if (this.readyState != this.DONE) {
@@ -170,8 +186,67 @@ function messageIsCSSError(msg) {
   return false;
 }
 
+let imageURIsToReferencesMap = new Map();
+
+function processCSSRules(sheet) {
+  for (let rule of sheet.cssRules) {
+    if (rule instanceof CSSMediaRule) {
+      processCSSRules(rule);
+      continue;
+    }
+    if (!(rule instanceof CSSStyleRule))
+      continue;
+
+    // Extract urls from the css text.
+    // Note: CSSStyleRule.cssText always has double quotes around URLs even
+    //       when the original CSS file didn't.
+    let urls = rule.cssText.match(/url\("[^"]*"\)/g);
+    if (!urls)
+      continue;
+
+    for (let url of urls) {
+      // Remove the url(" prefix and the ") suffix.
+      url = url.replace(/url\("(.*)"\)/, "$1");
+      if (url.startsWith("data:"))
+        continue;
+
+      // Make the url absolute and remove the ref.
+      let baseURI = Services.io.newURI(rule.parentStyleSheet.href, null, null);
+      url = Services.io.newURI(url, null, baseURI).specIgnoringRef;
+
+      // Store the image url along with the css file referencing it.
+      let baseUrl = baseURI.spec.split("?always-parse-css")[0];
+      if (!imageURIsToReferencesMap.has(url)) {
+        imageURIsToReferencesMap.set(url, new Set([baseUrl]));
+      } else {
+        imageURIsToReferencesMap.get(url).add(baseUrl);
+      }
+    }
+  }
+}
+
+function chromeFileExists(aURI)
+{
+  let available = 0;
+  try {
+    let channel = NetUtil.newChannel({uri: aURI, loadUsingSystemPrincipal: true});
+    let stream = channel.open();
+    let sstream = Cc["@mozilla.org/scriptableinputstream;1"]
+                    .createInstance(Ci.nsIScriptableInputStream);
+    sstream.init(stream);
+    available = sstream.available();
+    sstream.close();
+  } catch (e) {
+    if (e.result != Components.results.NS_ERROR_FILE_NOT_FOUND) {
+      dump("Checking " + aURI + ": " + e + "\n");
+      Cu.reportError(e);
+    }
+  }
+  return available > 0;
+}
+
 add_task(function* checkAllTheCSS() {
-  let appDir = Services.dirsvc.get("XCurProcD", Ci.nsIFile);
+  let appDir = Services.dirsvc.get("GreD", Ci.nsIFile);
   // This asynchronously produces a list of URLs (sadly, mostly sync on our
   // test infrastructure because it runs against jarfiles there, and
   // our zipreader APIs are all sync)
@@ -216,6 +291,7 @@ add_task(function* checkAllTheCSS() {
     linkEl.setAttribute("rel", "stylesheet");
     let promiseForThisSpec = Promise.defer();
     let onLoad = (e) => {
+      processCSSRules(linkEl.sheet);
       promiseForThisSpec.resolve();
       linkEl.removeEventListener("load", onLoad);
       linkEl.removeEventListener("error", onError);
@@ -238,6 +314,26 @@ add_task(function* checkAllTheCSS() {
   // Wait for all the files to have actually loaded:
   yield Promise.all(allPromises);
 
+  // Check if all the files referenced from CSS actually exist.
+  for (let [image, references] of imageURIsToReferencesMap) {
+    if (!chromeFileExists(image)) {
+      for (let ref of references) {
+        let ignored = false;
+        for (let item of allowedImageReferences) {
+          if (image.endsWith(item.file) && ref.endsWith(item.from) &&
+              isDevtools == item.isFromDevTools &&
+              (!item.platforms || item.platforms.includes(AppConstants.platform))) {
+            item.used = true;
+            ignored = true;
+            break;
+          }
+        }
+        if (!ignored)
+          ok(false, "missing " + image + " referenced from " + ref);
+      }
+    }
+  }
+
   let messages = Services.console.getMessageArray();
   // Count errors (the test output will list actual issues for us, as well
   // as the ok(false) in messageIsCSSError.
@@ -253,6 +349,16 @@ add_task(function* checkAllTheCSS() {
     }
   }
 
+  // Confirm that all file whitelist rules have been used.
+  for (let item of allowedImageReferences) {
+    if (!item.used && isDevtools == item.isFromDevTools &&
+        (!item.platforms || item.platforms.includes(AppConstants.platform))) {
+      ok(false, "Unused file whitelist item. " +
+                " file: " + item.file +
+                " from: " + item.from);
+    }
+  }
+
   // Clean up to avoid leaks:
   iframe.remove();
   doc.head.innerHTML = '';
@@ -260,4 +366,5 @@ add_task(function* checkAllTheCSS() {
   iframe = null;
   windowless.close();
   windowless = null;
+  imageURIsToReferencesMap = null;
 });

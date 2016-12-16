@@ -112,6 +112,7 @@ class nsCSPParser {
                 bool aDeliveredViaMetaTag);
 
     static bool sCSPExperimentalEnabled;
+    static bool sStrictDynamicEnabled;
 
     ~nsCSPParser();
 
@@ -122,7 +123,9 @@ class nsCSPParser {
     nsCSPDirective*     directiveName();
     void                directiveValue(nsTArray<nsCSPBaseSrc*>& outSrcs);
     void                requireSRIForDirectiveValue(nsRequireSRIForDirective* aDir);
-    void                referrerDirectiveValue();
+    void                referrerDirectiveValue(nsCSPDirective* aDir);
+    void                reportURIList(nsCSPDirective* aDir);
+    void                sandboxFlagList(nsCSPDirective* aDir);
     void                sourceList(nsTArray<nsCSPBaseSrc*>& outSrcs);
     nsCSPBaseSrc*       sourceExpression();
     nsCSPSchemeSrc*     schemeSource();
@@ -142,10 +145,6 @@ class nsCSPParser {
     bool atValidSubDelimChar();                             // helper function to parse sub-delims
     bool atValidPctEncodedChar();                           // helper function to parse pct-encoded
     bool subPath(nsCSPHostSrc* aCspHost);                   // helper function to parse paths
-    void reportURIList(nsTArray<nsCSPBaseSrc*>& outSrcs);   // helper function to parse report-uris
-    void percentDecodeStr(const nsAString& aEncStr,         // helper function to percent-decode
-                          nsAString& outDecStr);
-    void sandboxFlagList(nsTArray<nsCSPBaseSrc*>& outSrcs); // helper function to parse sandbox flags
 
     inline bool atEnd()
     {
@@ -238,8 +237,10 @@ class nsCSPParser {
     nsString           mCurToken;
     nsTArray<nsString> mCurDir;
 
-    // cache variables to ignore unsafe-inline if hash or nonce is specified
+    // helpers to allow invalidation of srcs within script-src and style-src
+    // if either 'strict-dynamic' or at least a hash or nonce is present.
     bool               mHasHashOrNonce; // false, if no hash or nonce is defined
+    bool               mStrictDynamic;  // false, if 'strict-dynamic' is not defined
     nsCSPKeywordSrc*   mUnsafeInlineKeywordSrc; // null, otherwise invlidate()
 
     // cache variables for child-src and frame-src directive handling.

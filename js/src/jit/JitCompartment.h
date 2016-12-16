@@ -11,10 +11,11 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MemoryReporting.h"
 
-#include "builtin/SIMD.h"
+#include "builtin/TypedObject.h"
 #include "jit/CompileInfo.h"
 #include "jit/ICStubSpace.h"
 #include "jit/IonCode.h"
+#include "jit/IonControlFlow.h"
 #include "jit/JitFrames.h"
 #include "jit/shared/Assembler-shared.h"
 #include "js/GCHashTable.h"
@@ -34,7 +35,7 @@ enum EnterJitType {
 struct EnterJitData
 {
     explicit EnterJitData(JSContext* cx)
-      : scopeChain(cx),
+      : envChain(cx),
         result(cx)
     {}
 
@@ -48,14 +49,14 @@ struct EnterJitData
     unsigned numActualArgs;
     unsigned osrNumStackValues;
 
-    RootedObject scopeChain;
+    RootedObject envChain;
     RootedValue result;
 
     bool constructing;
 };
 
 typedef void (*EnterJitCode)(void* code, unsigned argc, Value* argv, InterpreterFrame* fp,
-                             CalleeToken calleeToken, JSObject* scopeChain,
+                             CalleeToken calleeToken, JSObject* envChain,
                              size_t numStackValues, Value* vp);
 
 class JitcodeGlobalTable;
@@ -90,7 +91,7 @@ class JitRuntime
   private:
     friend class JitCompartment;
 
-    // Executable allocator for all code except asm.js code and Ion code with
+    // Executable allocator for all code except wasm code and Ion code with
     // patchable backedges (see below).
     ExecutableAllocator execAlloc_;
 
@@ -148,7 +149,7 @@ class JitRuntime
     void* baselineDebugModeOSRHandlerNoFrameRegPopAddr_;
 
     // Map VMFunction addresses to the JitCode of the wrapper.
-    typedef GCRekeyableHashMap<const VMFunction*, JitCode*> VMWrapperMap;
+    using VMWrapperMap = HashMap<const VMFunction*, JitCode*>;
     VMWrapperMap* functionWrappers_;
 
     // Buffer for OSR from baseline to Ion. To avoid holding on to this for
@@ -204,6 +205,15 @@ class JitRuntime
     JitCode* generateBaselineDebugModeOSRHandler(JSContext* cx, uint32_t* noFrameRegPopOffsetOut);
     JitCode* generateVMWrapper(JSContext* cx, const VMFunction& f);
 
+    bool generateTLEventVM(JSContext* cx, MacroAssembler& masm, const VMFunction& f, bool enter);
+
+    inline bool generateTLEnterVM(JSContext* cx, MacroAssembler& masm, const VMFunction& f) {
+        return generateTLEventVM(cx, masm, f, /* enter = */ true);
+    }
+    inline bool generateTLExitVM(JSContext* cx, MacroAssembler& masm, const VMFunction& f) {
+        return generateTLEventVM(cx, masm, f, /* enter = */ false);
+    }
+
   public:
     explicit JitRuntime(JSRuntime* rt);
     ~JitRuntime();
@@ -212,9 +222,9 @@ class JitRuntime
     uint8_t* allocateOsrTempData(size_t size);
     void freeOsrTempData();
 
-    static void Mark(JSTracer* trc, js::AutoLockForExclusiveAccess& lock);
-    static void MarkJitcodeGlobalTableUnconditionally(JSTracer* trc);
-    static MOZ_MUST_USE bool MarkJitcodeGlobalTableIteratively(JSTracer* trc);
+    static void Trace(JSTracer* trc, js::AutoLockForExclusiveAccess& lock);
+    static void TraceJitcodeGlobalTable(JSTracer* trc);
+    static MOZ_MUST_USE bool MarkJitcodeGlobalTableIteratively(GCMarker* marker);
     static void SweepJitcodeGlobalTable(JSRuntime* rt);
 
     ExecutableAllocator& execAlloc() {
@@ -375,24 +385,35 @@ class JitZone
 {
     // Allocated space for optimized baseline stubs.
     OptimizedICStubSpace optimizedStubSpace_;
+    // Allocated space for cached cfg.
+    CFGSpace cfgSpace_;
 
   public:
     OptimizedICStubSpace* optimizedStubSpace() {
         return &optimizedStubSpace_;
     }
+    CFGSpace* cfgSpace() {
+        return &cfgSpace_;
+    }
 };
 
-enum class CacheKind;
+enum class CacheKind : uint8_t;
 class CacheIRStubInfo;
+
+enum class ICStubEngine : uint8_t {
+    Baseline = 0,
+    IonMonkey
+};
 
 struct CacheIRStubKey : public DefaultHasher<CacheIRStubKey> {
     struct Lookup {
         CacheKind kind;
+        ICStubEngine engine;
         const uint8_t* code;
         uint32_t length;
 
-        Lookup(CacheKind kind, const uint8_t* code, uint32_t length)
-          : kind(kind), code(code), length(length)
+        Lookup(CacheKind kind, ICStubEngine engine, const uint8_t* code, uint32_t length)
+          : kind(kind), engine(engine), code(code), length(length)
         {}
     };
 
@@ -551,7 +572,7 @@ class JitCompartment
     // Initialize code stubs only used by Ion, not Baseline.
     MOZ_MUST_USE bool ensureIonStubsExist(JSContext* cx);
 
-    void mark(JSTracer* trc, JSCompartment* compartment);
+    void trace(JSTracer* trc, JSCompartment* compartment);
     void sweep(FreeOp* fop, JSCompartment* compartment);
 
     JitCode* stringConcatStubNoBarrier() const {

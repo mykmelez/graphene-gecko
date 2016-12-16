@@ -22,7 +22,6 @@ import mozinfo
 SCRIPT_DIR = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
 
 
-# TODO inherit from MochitestBase instead
 class MochiRemote(MochitestDesktop):
     _automation = None
     _dm = None
@@ -190,11 +189,11 @@ class MochiRemote(MochitestDesktop):
     def addChromeToProfile(self, options):
         manifest = MochitestDesktop.addChromeToProfile(self, options)
 
-        # Support Firefox (browser), B2G (shell), SeaMonkey (navigator), and Webapp
-        # Runtime (webapp).
-        if options.chrome:
+        # Support Firefox (browser), SeaMonkey (navigator), and Webapp Runtime (webapp).
+        if options.flavor == 'chrome':
             # append overlay to chrome.manifest
-            chrome = "overlay chrome://browser/content/browser.xul chrome://mochikit/content/browser-test-overlay.xul"
+            chrome = ("overlay chrome://browser/content/browser.xul "
+                      "chrome://mochikit/content/browser-test-overlay.xul")
             path = os.path.join(options.profilePath, 'extensions', 'staged',
                                 'mochikit@mozilla.org', 'chrome.manifest')
             with open(path, "a") as f:
@@ -226,7 +225,7 @@ class MochiRemote(MochitestDesktop):
         local = super(MochiRemote, self).getChromeTestDir(options)
         local = os.path.join(local, "chrome")
         remote = self.remoteChromeTestDir
-        if options.chrome:
+        if options.flavor == 'chrome':
             self.log.info("pushing %s to %s on device..." % (local, remote))
             self._dm.pushDir(local, remote)
         return remote
@@ -288,12 +287,13 @@ class MochiRemote(MochitestDesktop):
 
         # remove args not supported by automation.py
         kwargs.pop('marionette_args', None)
-        kwargs.pop('quiet', None)
 
         return self._automation.runApp(*args, **kwargs)
 
 
-def run_test_harness(options):
+def run_test_harness(parser, options):
+    parser.validate(options)
+
     message_logger = MessageLogger(logger=None)
     process_args = {'messageLogger': message_logger}
     auto = RemoteAutomation(None, "fennec", processArgs=process_args)
@@ -304,7 +304,7 @@ def run_test_harness(options):
     options.runByDir = False
     # roboextender is used by mochitest-chrome tests like test_java_addons.html,
     # but not by any plain mochitests
-    if not options.chrome:
+    if options.flavor != 'chrome':
         options.extensionsToExclude.append('roboextender@mozilla.org')
 
     dm = options.dm
@@ -385,7 +385,7 @@ def main(args=sys.argv[1:]):
     parser = MochitestArgumentParser(app='android')
     options = parser.parse_args(args)
 
-    return run_test_harness(options)
+    return run_test_harness(parser, options)
 
 
 if __name__ == "__main__":

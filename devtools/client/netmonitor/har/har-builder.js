@@ -1,17 +1,22 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 "use strict";
 
 const { defer, all } = require("promise");
-const { LocalizationHelper } = require("devtools/client/shared/l10n");
+const { LocalizationHelper } = require("devtools/shared/l10n");
 const Services = require("Services");
 const appInfo = Services.appinfo;
-
-loader.lazyRequireGetter(this, "NetworkHelper", "devtools/shared/webconsole/network-helper");
+const { CurlUtils } = require("devtools/client/shared/curl");
+const {
+  getFormDataSections,
+  getUrlQuery,
+  parseQueryString,
+} = require("devtools/client/netmonitor/request-utils");
 
 loader.lazyGetter(this, "L10N", () => {
-  return new LocalizationHelper("chrome://devtools/locale/har.properties");
+  return new LocalizationHelper("devtools/client/locales/har.properties");
 });
 
 const HAR_VERSION = "1.1";
@@ -58,9 +63,7 @@ HarBuilder.prototype = {
     let log = this.buildLog();
 
     // Build entries.
-    let items = this._options.items;
-    for (let i = 0; i < items.length; i++) {
-      let file = items[i].attachment;
+    for (let file of this._options.items) {
       log.entries.push(this.buildEntry(log, file));
     }
 
@@ -165,10 +168,10 @@ HarBuilder.prototype = {
     request.httpVersion = file.httpVersion || "";
 
     request.headers = this.buildHeaders(file.requestHeaders);
+    request.headers = this.appendHeadersPostData(request.headers, file);
     request.cookies = this.buildCookies(file.requestCookies);
 
-    request.queryString = NetworkHelper.parseQueryString(
-      NetworkHelper.nsIURL(file.url).query) || [];
+    request.queryString = parseQueryString(getUrlQuery(file.url)) || [];
 
     request.postData = this.buildPostData(file);
 
@@ -197,6 +200,21 @@ HarBuilder.prototype = {
     }
 
     return this.buildNameValuePairs(input.headers);
+  },
+
+  appendHeadersPostData: function (input = [], file) {
+    if (!file.requestPostData) {
+      return input;
+    }
+
+    this.fetchData(file.requestPostData.postData.text).then(value => {
+      let multipartHeaders = CurlUtils.getHeadersFromMultipartText(value);
+      for (let header of multipartHeaders) {
+        input.push(header);
+      }
+    });
+
+    return input;
   },
 
   buildCookies: function (input) {
@@ -246,24 +264,28 @@ HarBuilder.prototype = {
     }
 
     // Load request body from the backend.
-    this.fetchData(file.requestPostData.postData.text).then(value => {
-      postData.text = value;
+    this.fetchData(file.requestPostData.postData.text).then(postDataText => {
+      postData.text = postDataText;
 
       // If we are dealing with URL encoded body, parse parameters.
-      if (isURLEncodedFile(file, value)) {
+      let { headers } = file.requestHeaders;
+      if (CurlUtils.isUrlEncodedRequest({ headers, postDataText })) {
         postData.mimeType = "application/x-www-form-urlencoded";
 
         // Extract form parameters and produce nice HAR array.
-        this._options.view._getFormDataSections(file.requestHeaders,
+        getFormDataSections(
+          file.requestHeaders,
           file.requestHeadersFromUploadStream,
-          file.requestPostData).then(formDataSections => {
-            formDataSections.forEach(section => {
-              let paramsArray = NetworkHelper.parseQueryString(section);
-              if (paramsArray) {
-                postData.params = [...postData.params, ...paramsArray];
-              }
-            });
+          file.requestPostData,
+          this._options.getString
+        ).then(formDataSections => {
+          formDataSections.forEach(section => {
+            let paramsArray = parseQueryString(section);
+            if (paramsArray) {
+              postData.params = [...postData.params, ...paramsArray];
+            }
           });
+        });
       }
     });
 
@@ -403,27 +425,6 @@ HarBuilder.prototype = {
 };
 
 // Helpers
-
-/**
- * Returns true if specified request body is URL encoded.
- */
-function isURLEncodedFile(file, text) {
-  let contentType = "content-type: application/x-www-form-urlencoded";
-  if (text && text.toLowerCase().indexOf(contentType) != -1) {
-    return true;
-  }
-
-  // The header value doesn't have to be always exactly
-  // "application/x-www-form-urlencoded",
-  // there can be even charset specified. So, use indexOf rather than just
-  // "==".
-  let value = findValue(file.requestHeaders.headers, "content-type");
-  if (value && value.indexOf("application/x-www-form-urlencoded") == 0) {
-    return true;
-  }
-
-  return false;
-}
 
 /**
  * Find specified value within an array of name-value pairs

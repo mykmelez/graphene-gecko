@@ -5,6 +5,7 @@
 
 require("devtools/shared/fronts/styles");
 require("devtools/shared/fronts/highlighters");
+require("devtools/shared/fronts/layout");
 const { SimpleStringFront } = require("devtools/shared/fronts/string");
 const {
   Front,
@@ -26,6 +27,8 @@ const { Class } = require("sdk/core/heritage");
 const events = require("sdk/event/core");
 const object = require("sdk/util/object");
 const nodeConstants = require("devtools/shared/dom-node-constants.js");
+loader.lazyRequireGetter(this, "CommandUtils",
+  "devtools/client/shared/developer-toolbar", true);
 
 const HIDDEN_CLASS = "__fx-devtools-hide-shortcut__";
 
@@ -749,6 +752,11 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
         let targetFront;
 
         if (change.type === "newRoot") {
+          // We may receive a new root without receiving any documentUnload
+          // beforehand. Like when opening tools in middle of a document load.
+          if (this.rootNode) {
+            this._createRootNodePromise();
+          }
           this.rootNode = types.getType("domnode").read(change.target, this);
           this._rootNodeDeferred.resolve(this.rootNode);
           targetID = this.rootNode.actorID;
@@ -977,6 +985,22 @@ var InspectorFront = FrontClassWithSpec(inspectorSpec, {
     });
   }, {
     impl: "_getPageStyle"
+  }),
+
+  pickColorFromPage: custom(Task.async(function* (toolbox, options) {
+    if (toolbox) {
+      // If the eyedropper was already started using the gcli command, hide it so we don't
+      // end up with 2 instances of the eyedropper on the page.
+      let {target} = toolbox;
+      let requisition = yield CommandUtils.createRequisition(target, {
+        environment: CommandUtils.createEnvironment({target})
+      });
+      yield requisition.updateExec("eyedropper --hide");
+    }
+
+    yield this._pickColorFromPage(options);
+  }), {
+    impl: "_pickColorFromPage"
   })
 });
 

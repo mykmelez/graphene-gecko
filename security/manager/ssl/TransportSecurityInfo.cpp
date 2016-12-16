@@ -54,7 +54,7 @@ TransportSecurityInfo::~TransportSecurityInfo()
   if (isAlreadyShutDown())
     return;
 
-  shutdown(calledFromObject);
+  shutdown(ShutdownCalledFrom::Object);
 }
 
 void
@@ -95,6 +95,14 @@ nsresult
 TransportSecurityInfo::GetPort(int32_t *aPort)
 {
   *aPort = mPort;
+  return NS_OK;
+}
+
+nsresult
+TransportSecurityInfo::SetOriginAttributes(
+  const NeckoOriginAttributes& aOriginAttributes)
+{
+  mOriginAttributes = aOriginAttributes;
   return NS_OK;
 }
 
@@ -1049,7 +1057,7 @@ TransportSecurityInfo::SetStatusErrorBits(nsNSSCertificate* cert,
     mSSLStatus = new nsSSLStatus();
   }
 
-  mSSLStatus->SetServerCert(cert, nsNSSCertificate::ev_status_invalid);
+  mSSLStatus->SetServerCert(cert, EVStatus::NotEV);
 
   mSSLStatus->mHaveCertErrorBits = true;
   mSSLStatus->mIsDomainMismatch = 

@@ -14,6 +14,7 @@
 interface nsIEditor;
 interface MozControllers;
 
+[HTMLConstructor]
 interface HTMLTextAreaElement : HTMLElement {
            // attribute DOMString autocomplete;
   [SetterThrows, Pure]
@@ -28,6 +29,8 @@ interface HTMLTextAreaElement : HTMLElement {
            // attribute DOMString inputMode;
   [SetterThrows, Pure]
            attribute long maxLength;
+  [SetterThrows, Pure]
+           attribute long minLength;
   [SetterThrows, Pure]
            attribute DOMString name;
   [SetterThrows, Pure]
@@ -59,11 +62,11 @@ interface HTMLTextAreaElement : HTMLElement {
 
   void select();
   [Throws]
-           attribute unsigned long selectionStart;
+           attribute unsigned long? selectionStart;
   [Throws]
-           attribute unsigned long selectionEnd;
+           attribute unsigned long? selectionEnd;
   [Throws]
-           attribute DOMString selectionDirection;
+           attribute DOMString? selectionDirection;
   [Throws]
   void setRangeText(DOMString replacement);
   [Throws]

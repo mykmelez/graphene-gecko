@@ -103,6 +103,14 @@ CaptureStreamTestHelper.prototype = {
   },
 
   /*
+   * Behaves like isPixelNot but ignores the alpha channel.
+   */
+  isOpaquePixelNot: function(px, refColor, threshold) {
+    px[3] = refColor.data[3];
+    return h.isPixelNot(px, refColor, threshold);
+  },
+
+  /*
    * Returns a promise that resolves when the provided function |test|
    * returns true.
    */
@@ -113,8 +121,8 @@ CaptureStreamTestHelper.prototype = {
         var pixelMatch = false;
         try {
             pixelMatch = test(this.getPixel(video, offsetX, offsetY, width, height));
-        } catch (NS_ERROR_NOT_AVAILABLE) {
-          info("Waiting for pixel but no video available");
+        } catch (e) {
+          info("Waiting for pixel but no video available: " + e + "\n" + e.stack);
         }
         if (!pixelMatch &&
             (!timeout || video.currentTime < startTime + (timeout / 1000.0))) {

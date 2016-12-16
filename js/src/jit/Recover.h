@@ -65,6 +65,7 @@ namespace jit {
     _(Lsh)                                      \
     _(Rsh)                                      \
     _(Ursh)                                     \
+    _(SignExtend)                               \
     _(Add)                                      \
     _(Sub)                                      \
     _(Mul)                                      \
@@ -87,7 +88,9 @@ namespace jit {
     _(Atan2)                                    \
     _(Hypot)                                    \
     _(MathFunction)                             \
+    _(Random)                                   \
     _(StringSplit)                              \
+    _(NaNToZero)                                \
     _(RegExpMatcher)                            \
     _(RegExpSearcher)                           \
     _(RegExpTester)                             \
@@ -97,6 +100,7 @@ namespace jit {
     _(ToFloat32)                                \
     _(TruncateToInt32)                          \
     _(NewObject)                                \
+    _(NewTypedArray)                            \
     _(NewArray)                                 \
     _(NewDerivedTypedObject)                    \
     _(CreateThisWithTemplate)                   \
@@ -240,6 +244,17 @@ class RUrsh final : public RInstruction
 {
   public:
     RINSTRUCTION_HEADER_NUM_OP_(Ursh, 2)
+
+    MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
+};
+
+class RSignExtend final : public RInstruction
+{
+  private:
+    uint8_t mode_;
+
+  public:
+    RINSTRUCTION_HEADER_NUM_OP_(SignExtend, 1)
 
     MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
 };
@@ -450,12 +465,27 @@ class RMathFunction final : public RInstruction
     MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
 };
 
+class RRandom final : public RInstruction
+{
+    RINSTRUCTION_HEADER_NUM_OP_(Random, 0)
+  public:
+    MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
+};
+
 class RStringSplit final : public RInstruction
 {
   public:
     RINSTRUCTION_HEADER_NUM_OP_(StringSplit, 3)
 
     MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
+};
+
+class RNaNToZero final : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_NUM_OP_(NaNToZero, 1);
+
+    bool recover(JSContext* cx, SnapshotIterator& iter) const;
 };
 
 class RRegExpMatcher final : public RInstruction
@@ -532,6 +562,14 @@ class RNewObject final : public RInstruction
 
   public:
     RINSTRUCTION_HEADER_NUM_OP_(NewObject, 1)
+
+    MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
+};
+
+class RNewTypedArray final : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_NUM_OP_(NewTypedArray, 1)
 
     MOZ_MUST_USE bool recover(JSContext* cx, SnapshotIterator& iter) const;
 };

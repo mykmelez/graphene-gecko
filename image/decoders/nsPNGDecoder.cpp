@@ -34,9 +34,12 @@ namespace image {
 static LazyLogModule sPNGLog("PNGDecoder");
 static LazyLogModule sPNGDecoderAccountingLog("PNGDecoderAccounting");
 
-// Limit image dimensions (bug #251381, #591822, and #967656)
-#ifndef MOZ_PNG_MAX_DIMENSION
-#  define MOZ_PNG_MAX_DIMENSION 32767
+// limit image dimensions (bug #251381, #591822, #967656, and #1283961)
+#ifndef MOZ_PNG_MAX_WIDTH
+#  define MOZ_PNG_MAX_WIDTH 0x7fffffff // Unlimited
+#endif
+#ifndef MOZ_PNG_MAX_HEIGHT
+#  define MOZ_PNG_MAX_HEIGHT 0x7fffffff // Unlimited
 #endif
 
 nsPNGDecoder::AnimFrameInfo::AnimFrameInfo()
@@ -148,7 +151,7 @@ nsPNGDecoder::GetTransparencyType(SurfaceFormat aFormat,
   if (aFormat == SurfaceFormat::B8G8R8A8) {
     return TransparencyType::eAlpha;
   }
-  if (!IntRect(IntPoint(), GetSize()).IsEqualEdges(aFrameRect)) {
+  if (!aFrameRect.IsEqualEdges(FullFrame())) {
     MOZ_ASSERT(HasAnimation());
     return TransparencyType::eFrameRect;
   }
@@ -187,19 +190,18 @@ nsPNGDecoder::CreateFrame(const FrameInfo& aFrameInfo)
   MOZ_ASSERT(!IsMetadataDecode());
 
   // Check if we have transparency, and send notifications if needed.
-  auto transparency = GetTransparencyType(aFrameInfo.mFormat, aFrameInfo.mFrameRect);
+  auto transparency = GetTransparencyType(aFrameInfo.mFormat,
+                                          aFrameInfo.mFrameRect);
   PostHasTransparencyIfNeeded(transparency);
   SurfaceFormat format = transparency == TransparencyType::eNone
                        ? SurfaceFormat::B8G8R8X8
                        : SurfaceFormat::B8G8R8A8;
 
   // Make sure there's no animation or padding if we're downscaling.
-  MOZ_ASSERT_IF(mDownscaler, mNumFrames == 0);
-  MOZ_ASSERT_IF(mDownscaler, !GetImageMetadata().HasAnimation());
-  MOZ_ASSERT_IF(mDownscaler, transparency != TransparencyType::eFrameRect);
-
-  IntSize targetSize = mDownscaler ? mDownscaler->TargetSize()
-                                   : GetSize();
+  MOZ_ASSERT_IF(Size() != OutputSize(), mNumFrames == 0);
+  MOZ_ASSERT_IF(Size() != OutputSize(), !GetImageMetadata().HasAnimation());
+  MOZ_ASSERT_IF(Size() != OutputSize(),
+                transparency != TransparencyType::eFrameRect);
 
   // If this image is interlaced, we can display better quality intermediate
   // results to the user by post processing them with ADAM7InterpolatingFilter.
@@ -213,8 +215,8 @@ nsPNGDecoder::CreateFrame(const FrameInfo& aFrameInfo)
   }
 
   Maybe<SurfacePipe> pipe =
-    SurfacePipeFactory::CreateSurfacePipe(this, mNumFrames, GetSize(),
-                                          targetSize, aFrameInfo.mFrameRect,
+    SurfacePipeFactory::CreateSurfacePipe(this, mNumFrames, Size(),
+                                          OutputSize(), aFrameInfo.mFrameRect,
                                           format, pipeFlags);
 
   if (!pipe) {
@@ -323,6 +325,7 @@ nsPNGDecoder::InitInternal()
 #endif
 
 #ifdef PNG_SET_USER_LIMITS_SUPPORTED
+  png_set_user_limits(mPNG, MOZ_PNG_MAX_WIDTH, MOZ_PNG_MAX_HEIGHT);
   if (mCMSMode != eCMSMode_Off) {
     png_set_chunk_malloc_max(mPNG, 4000000L);
   }
@@ -337,10 +340,18 @@ nsPNGDecoder::InitInternal()
   png_set_check_for_invalid_index(mPNG, 0);
 #endif
 
-#if defined(PNG_SET_OPTION_SUPPORTED) && defined(PNG_sRGB_PROFILE_CHECKS) && \
-            PNG_sRGB_PROFILE_CHECKS >= 0
+#ifdef PNG_SET_OPTION_SUPPORTED
+#if defined(PNG_sRGB_PROFILE_CHECKS) && PNG_sRGB_PROFILE_CHECKS >= 0
   // Skip checking of sRGB ICC profiles
   png_set_option(mPNG, PNG_SKIP_sRGB_CHECK_PROFILE, PNG_OPTION_ON);
+#endif
+
+#ifdef PNG_MAXIMUM_INFLATE_WINDOW
+  // Force a larger zlib inflate window as some images in the wild have
+  // incorrectly set metadata (specifically CMF bits) which prevent us from
+  // decoding them otherwise.
+  png_set_option(mPNG, PNG_MAXIMUM_INFLATE_WINDOW, PNG_OPTION_ON);
+#endif
 #endif
 
   // use this as libpng "progressive pointer" (retrieve in callbacks)
@@ -557,18 +568,13 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
   png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type,
                &interlace_type, &compression_type, &filter_type);
 
-  // Are we too big?
-  if (width > MOZ_PNG_MAX_DIMENSION || height > MOZ_PNG_MAX_DIMENSION) {
-    png_longjmp(decoder->mPNG, 1);
-  }
-
   const IntRect frameRect(0, 0, width, height);
 
   // Post our size to the superclass
   decoder->PostSize(frameRect.width, frameRect.height);
   if (decoder->HasError()) {
     // Setting the size led to an error.
-    png_longjmp(decoder->mPNG, 1);
+    png_error(decoder->mPNG, "Sizing error");
   }
 
   if (color_type == PNG_COLOR_TYPE_PALETTE) {
@@ -670,7 +676,7 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
   } else if (channels == 2 || channels == 4) {
     decoder->format = gfx::SurfaceFormat::B8G8R8A8;
   } else {
-    png_longjmp(decoder->mPNG, 1); // invalid number of channels
+    png_error(decoder->mPNG, "Invalid number of channels");
   }
 
 #ifdef PNG_APNG_SUPPORTED
@@ -679,22 +685,25 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
     int32_t rawTimeout = GetNextFrameDelay(png_ptr, info_ptr);
     decoder->PostIsAnimated(FrameTimeout::FromRawMilliseconds(rawTimeout));
 
-    if (decoder->mDownscaler && !decoder->IsFirstFrameDecode()) {
+    if (decoder->Size() != decoder->OutputSize() &&
+        !decoder->IsFirstFrameDecode()) {
       MOZ_ASSERT_UNREACHABLE("Doing downscale-during-decode "
                              "for an animated image?");
-      png_longjmp(decoder->mPNG, 1);  // Abort the decode.
+      png_error(decoder->mPNG, "Invalid downscale attempt"); // Abort decode.
     }
   }
 #endif
 
   if (decoder->IsMetadataDecode()) {
-    // If we are animated then the first frame rect is either: 1) the whole image
-    // if the IDAT chunk is part of the animation 2) the frame rect of the first
-    // fDAT chunk otherwise. If we are not animated then we want to make sure to
-    // call PostHasTransparency in the metadata decode if we need to. So it's okay
-    // to pass IntRect(0, 0, width, height) here for animated images; they will
-    // call with the proper first frame rect in the full decode.
-    auto transparency = decoder->GetTransparencyType(decoder->format, frameRect);
+    // If we are animated then the first frame rect is either:
+    // 1) the whole image if the IDAT chunk is part of the animation
+    // 2) the frame rect of the first fDAT chunk otherwise.
+    // If we are not animated then we want to make sure to call
+    // PostHasTransparency in the metadata decode if we need to. So it's
+    // okay to pass IntRect(0, 0, width, height) here for animated images;
+    // they will call with the proper first frame rect in the full decode.
+    auto transparency = decoder->GetTransparencyType(decoder->format,
+                                                     frameRect);
     decoder->PostHasTransparencyIfNeeded(transparency);
 
     // We have the metadata we're looking for, so stop here, before we allocate
@@ -716,7 +725,7 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
                                                   frameRect,
                                                   isInterlaced });
     if (NS_FAILED(rv)) {
-      png_longjmp(decoder->mPNG, 5); // NS_ERROR_OUT_OF_MEMORY
+      png_error(decoder->mPNG, "CreateFrame failed");
     }
     MOZ_ASSERT(decoder->mImageData, "Should have a buffer now");
 #ifdef PNG_APNG_SUPPORTED
@@ -728,7 +737,7 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
     decoder->mCMSLine =
       static_cast<uint8_t*>(malloc(bpp[channels] * frameRect.width));
     if (!decoder->mCMSLine) {
-      png_longjmp(decoder->mPNG, 5); // NS_ERROR_OUT_OF_MEMORY
+      png_error(decoder->mPNG, "malloc of mCMSLine failed");
     }
   }
 
@@ -738,7 +747,7 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
       decoder->interlacebuf = static_cast<uint8_t*>(malloc(bufferSize));
     }
     if (!decoder->interlacebuf) {
-      png_longjmp(decoder->mPNG, 5); // NS_ERROR_OUT_OF_MEMORY
+      png_error(decoder->mPNG, "malloc of interlacebuf failed");
     }
   }
 }
@@ -759,7 +768,8 @@ static NextPixel<uint32_t>
 PackRGBPixelAndAdvance(uint8_t*& aRawPixelInOut)
 {
   const uint32_t pixel =
-    gfxPackedPixel(0xFF, aRawPixelInOut[0], aRawPixelInOut[1], aRawPixelInOut[2]);
+    gfxPackedPixel(0xFF, aRawPixelInOut[0], aRawPixelInOut[1],
+                   aRawPixelInOut[2]);
   aRawPixelInOut += 3;
   return AsVariant(pixel);
 }
@@ -833,7 +843,8 @@ nsPNGDecoder::row_callback(png_structp png_ptr, png_bytep new_row,
     decoder->mPass++;
   }
 
-  const png_uint_32 height = static_cast<png_uint_32>(decoder->mFrameRect.height);
+  const png_uint_32 height =
+    static_cast<png_uint_32>(decoder->mFrameRect.height);
 
   if (row_num >= height) {
     // Bail if we receive extra rows. This is especially important because if we
@@ -908,7 +919,7 @@ nsPNGDecoder::WriteRow(uint8_t* aRow)
       break;
 
     default:
-      png_longjmp(mPNG, 1);  // Abort the decode.
+      png_error(mPNG, "Invalid SurfaceFormat");
   }
 
   MOZ_ASSERT(WriteState(result) != WriteState::FAILURE);
@@ -938,7 +949,8 @@ nsPNGDecoder::DoYield(png_structp aPNGStruct)
   // the data that was passed to png_process_data() have not been consumed yet.
   // We use this information to tell StreamingLexer where to place us in the
   // input stream when we come back from the yield.
-  png_size_t pendingBytes = png_process_data_pause(aPNGStruct, /* save = */ false);
+  png_size_t pendingBytes = png_process_data_pause(aPNGStruct,
+                                                   /* save = */ false);
 
   MOZ_ASSERT(pendingBytes < mLastChunkLength);
   size_t consumedBytes = mLastChunkLength - min(pendingBytes, mLastChunkLength);
@@ -958,7 +970,9 @@ nsPNGDecoder::frame_info_callback(png_structp png_ptr, png_uint_32 frame_num)
   // old frame is done
   decoder->EndImageFrame();
 
-  if (!decoder->mFrameIsHidden && decoder->IsFirstFrameDecode()) {
+  const bool previousFrameWasHidden = decoder->mFrameIsHidden;
+
+  if (!previousFrameWasHidden && decoder->IsFirstFrameDecode()) {
     // We're about to get a second non-hidden frame, but we only want the first.
     // Stop decoding now. (And avoid allocating the unnecessary buffers below.)
     decoder->PostDecodeDone();
@@ -974,14 +988,34 @@ nsPNGDecoder::frame_info_callback(png_structp png_ptr, png_uint_32 frame_num)
                           png_get_next_frame_y_offset(png_ptr, decoder->mInfo),
                           png_get_next_frame_width(png_ptr, decoder->mInfo),
                           png_get_next_frame_height(png_ptr, decoder->mInfo));
-
   const bool isInterlaced = bool(decoder->interlacebuf);
 
-  decoder->mNextFrameInfo = Some(FrameInfo{ decoder->format,
-                                            frameRect,
-                                            isInterlaced });
+#ifndef MOZ_EMBEDDED_LIBPNG
+  // if using system library, check frame_width and height against 0
+  if (frameRect.width == 0) {
+    png_error(png_ptr, "Frame width must not be 0");
+  }
+  if (frameRect.height == 0) {
+    png_error(png_ptr, "Frame height must not be 0");
+  }
+#endif
+
+  const FrameInfo info { decoder->format, frameRect, isInterlaced };
+
+  // If the previous frame was hidden, skip the yield (which will mislead the
+  // caller, who will think the previous frame was real) and just allocate the
+  // new frame here.
+  if (previousFrameWasHidden) {
+    if (NS_FAILED(decoder->CreateFrame(info))) {
+      return decoder->DoTerminate(png_ptr, TerminalState::FAILURE);
+    }
+
+    MOZ_ASSERT(decoder->mImageData, "Should have a buffer now");
+    return;  // No yield, so we'll just keep decoding.
+  }
 
   // Yield to the caller to notify them that the previous frame is now complete.
+  decoder->mNextFrameInfo = Some(info);
   return decoder->DoYield(png_ptr);
 }
 #endif
@@ -1036,10 +1070,10 @@ nsPNGDecoder::warning_callback(png_structp png_ptr, png_const_charp warning_msg)
   MOZ_LOG(sPNGLog, LogLevel::Warning, ("libpng warning: %s\n", warning_msg));
 }
 
-Telemetry::ID
-nsPNGDecoder::SpeedHistogram()
+Maybe<Telemetry::ID>
+nsPNGDecoder::SpeedHistogram() const
 {
-  return Telemetry::IMAGE_DECODE_SPEED_PNG;
+  return Some(Telemetry::IMAGE_DECODE_SPEED_PNG);
 }
 
 bool
@@ -1050,7 +1084,7 @@ nsPNGDecoder::IsValidICO() const
 
   // If there are errors in the call to png_get_IHDR, the error_callback in
   // nsPNGDecoder.cpp is called.  In this error callback we do a longjmp, so
-  // we need to save the jump buffer here. Oterwise we'll end up without a
+  // we need to save the jump buffer here. Otherwise we'll end up without a
   // proper callstack.
   if (setjmp(png_jmpbuf(mPNG))) {
     // We got here from a longjmp call indirectly from png_get_IHDR

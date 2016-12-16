@@ -291,13 +291,6 @@ ImageDocument::OnPageShow(bool aPersisted,
 }
 
 NS_IMETHODIMP
-ImageDocument::GetImageResizingEnabled(bool* aImageResizingEnabled)
-{
-  *aImageResizingEnabled = ImageResizingEnabled();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 ImageDocument::GetImageIsOverflowing(bool* aImageIsOverflowing)
 {
   *aImageIsOverflowing = ImageIsOverflowing();
@@ -361,7 +354,7 @@ ImageDocument::ShrinkToFit()
 
   // Keep image content alive while changing the attributes.
   nsCOMPtr<Element> imageContent = mImageContent;
-  nsCOMPtr<nsIDOMHTMLImageElement> image = do_QueryInterface(mImageContent);
+  nsCOMPtr<nsIDOMHTMLImageElement> image = do_QueryInterface(imageContent);
   image->SetWidth(std::max(1, NSToCoordFloor(GetRatio() * mImageWidth)));
   image->SetHeight(std::max(1, NSToCoordFloor(GetRatio() * mImageHeight)));
   

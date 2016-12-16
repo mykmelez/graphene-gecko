@@ -30,9 +30,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/HashFunctions.h"
 
-#include "nsIAppsService.h"
-#include "mozIApplication.h"
-
 using namespace mozilla;
 
 static bool gIsWhitelistingTestDomains = false;
@@ -77,7 +74,7 @@ nsPrincipal::nsPrincipal()
 { }
 
 nsPrincipal::~nsPrincipal()
-{ 
+{
   // let's clear the principal within the csp to avoid a tangling pointer
   if (mCSP) {
     static_cast<nsCSPContext*>(mCSP.get())->clearLoadingPrincipal();
@@ -99,20 +96,20 @@ nsPrincipal::Init(nsIURI *aCodebase, const PrincipalOriginAttributes& aOriginAtt
   return NS_OK;
 }
 
-void
+nsresult
 nsPrincipal::GetScriptLocation(nsACString &aStr)
 {
-  mCodebase->GetSpec(aStr);
+  return mCodebase->GetSpec(aStr);
 }
 
-/* static */ nsresult
-nsPrincipal::GetOriginForURI(nsIURI* aURI, nsACString& aOrigin)
+nsresult
+nsPrincipal::GetOriginInternal(nsACString& aOrigin)
 {
-  if (!aURI) {
+  if (!mCodebase) {
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIURI> origin = NS_GetInnermostURI(aURI);
+  nsCOMPtr<nsIURI> origin = NS_GetInnermostURI(mCodebase);
   if (!origin) {
     return NS_ERROR_FAILURE;
   }
@@ -164,27 +161,32 @@ nsPrincipal::GetOriginForURI(nsIURI* aURI, nsACString& aOrigin)
     NS_ENSURE_SUCCESS(rv, rv);
     aOrigin.AppendLiteral("://");
     aOrigin.Append(hostPort);
+    return NS_OK;
   }
-  else {
-    // If we reached this branch, we can only create an origin if we have a nsIStandardURL.
-    // So, we query to a nsIStandardURL, and fail if we aren't an instance of an nsIStandardURL
-    // nsIStandardURLs have the good property of escaping the '^' character in their specs,
-    // which means that we can be sure that the caret character (which is reserved for delimiting
-    // the end of the spec, and the beginning of the origin attributes) is not present in the
-    // origin string
-    nsCOMPtr<nsIStandardURL> standardURL = do_QueryInterface(origin);
-    NS_ENSURE_TRUE(standardURL, NS_ERROR_FAILURE);
-    rv = origin->GetAsciiSpec(aOrigin);
-    NS_ENSURE_SUCCESS(rv, rv);
+
+  // This URL can be a blobURL. In this case, we should use the 'parent'
+  // principal instead.
+  nsCOMPtr<nsIURIWithPrincipal> uriWithPrincipal = do_QueryInterface(origin);
+  if (uriWithPrincipal) {
+    nsCOMPtr<nsIPrincipal> uriPrincipal;
+    if (uriWithPrincipal) {
+      return uriPrincipal->GetOriginNoSuffix(aOrigin);
+    }
   }
+
+  // If we reached this branch, we can only create an origin if we have a
+  // nsIStandardURL.  So, we query to a nsIStandardURL, and fail if we aren't
+  // an instance of an nsIStandardURL nsIStandardURLs have the good property
+  // of escaping the '^' character in their specs, which means that we can be
+  // sure that the caret character (which is reserved for delimiting the end
+  // of the spec, and the beginning of the origin attributes) is not present
+  // in the origin string
+  nsCOMPtr<nsIStandardURL> standardURL = do_QueryInterface(origin);
+  NS_ENSURE_TRUE(standardURL, NS_ERROR_FAILURE);
+  rv = origin->GetAsciiSpec(aOrigin);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
-}
-
-nsresult
-nsPrincipal::GetOriginInternal(nsACString& aOrigin)
-{
-  return GetOriginForURI(mCodebase, aOrigin);
 }
 
 bool
@@ -196,10 +198,6 @@ nsPrincipal::SubsumesInternal(nsIPrincipal* aOther,
   // For nsPrincipal, Subsumes is equivalent to Equals.
   if (aOther == this) {
     return true;
-  }
-
-  if (OriginAttributesRef() != Cast(aOther)->OriginAttributesRef()) {
-    return false;
   }
 
   // If either the subject or the object has changed its principal by
@@ -220,9 +218,9 @@ nsPrincipal::SubsumesInternal(nsIPrincipal* aOther,
     }
   }
 
-    nsCOMPtr<nsIURI> otherURI;
-    rv = aOther->GetURI(getter_AddRefs(otherURI));
-    NS_ENSURE_SUCCESS(rv, false);
+  nsCOMPtr<nsIURI> otherURI;
+  rv = aOther->GetURI(getter_AddRefs(otherURI));
+  NS_ENSURE_SUCCESS(rv, false);
 
   // Compare codebases.
   return nsScriptSecurityManager::SecurityCompareURIs(mCodebase, otherURI);
@@ -674,7 +672,8 @@ struct OriginComparator
   }
 };
 
-nsExpandedPrincipal::nsExpandedPrincipal(nsTArray<nsCOMPtr <nsIPrincipal> > &aWhiteList)
+nsExpandedPrincipal::nsExpandedPrincipal(nsTArray<nsCOMPtr<nsIPrincipal>> &aWhiteList,
+                                         const PrincipalOriginAttributes& aAttrs)
 {
   // We force the principals to be sorted by origin so that nsExpandedPrincipal
   // origins can have a canonical form.
@@ -682,6 +681,7 @@ nsExpandedPrincipal::nsExpandedPrincipal(nsTArray<nsCOMPtr <nsIPrincipal> > &aWh
   for (size_t i = 0; i < aWhiteList.Length(); ++i) {
     mPrincipals.InsertElementSorted(aWhiteList[i], c);
   }
+  mOriginAttributes = aAttrs;
 }
 
 nsExpandedPrincipal::~nsExpandedPrincipal()
@@ -730,6 +730,9 @@ nsExpandedPrincipal::SubsumesInternal(nsIPrincipal* aOther,
     nsTArray< nsCOMPtr<nsIPrincipal> >* otherList;
     expanded->GetWhiteList(&otherList);
     for (uint32_t i = 0; i < otherList->Length(); ++i){
+      // Use SubsumesInternal rather than Subsumes here, since OriginAttribute
+      // checks are only done between non-expanded sub-principals, and we don't
+      // need to incur the extra virtual call overhead.
       if (!SubsumesInternal((*otherList)[i], aConsideration)) {
         return false;
       }
@@ -787,6 +790,17 @@ nsExpandedPrincipal::GetBaseDomain(nsACString& aBaseDomain)
 }
 
 bool
+nsExpandedPrincipal::AddonHasPermission(const nsAString& aPerm)
+{
+  for (size_t i = 0; i < mPrincipals.Length(); ++i) {
+    if (BasePrincipal::Cast(mPrincipals[i])->AddonHasPermission(aPerm)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
 nsExpandedPrincipal::IsOnCSSUnprefixingWhitelist()
 {
   // CSS Unprefixing Whitelist is a per-origin thing; doesn't really make sense
@@ -795,7 +809,7 @@ nsExpandedPrincipal::IsOnCSSUnprefixingWhitelist()
 }
 
 
-void
+nsresult
 nsExpandedPrincipal::GetScriptLocation(nsACString& aStr)
 {
   aStr.Assign("[Expanded Principal [");
@@ -805,12 +819,14 @@ nsExpandedPrincipal::GetScriptLocation(nsACString& aStr)
     }
 
     nsAutoCString spec;
-    nsJSPrincipals::get(mPrincipals.ElementAt(i))->GetScriptLocation(spec);
+    nsresult rv =
+      nsJSPrincipals::get(mPrincipals.ElementAt(i))->GetScriptLocation(spec);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     aStr.Append(spec);
-
   }
   aStr.Append("]]");
+  return NS_OK;
 }
 
 //////////////////////////////////////////
