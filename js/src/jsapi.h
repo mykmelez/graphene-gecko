@@ -649,6 +649,7 @@ typedef enum JSExnType {
         JSEXN_URIERR,
         JSEXN_DEBUGGEEWOULDRUN,
         JSEXN_WASMCOMPILEERROR,
+        JSEXN_WASMLINKERROR,
         JSEXN_WASMRUNTIMEERROR,
     JSEXN_ERROR_LIMIT,
     JSEXN_WARN = JSEXN_ERROR_LIMIT,
@@ -726,6 +727,17 @@ typedef void
 typedef void
 (* JSCompartmentNameCallback)(JSContext* cx, JSCompartment* compartment,
                               char* buf, size_t bufsize);
+
+/**
+ * Callback used by memory reporting to ask the embedder how much memory an
+ * external string is keeping alive.  The embedder is expected to return a value
+ * that corresponds to the size of the allocation that will be released by the
+ * JSStringFinalizer passed to JS_NewExternalString for this string.
+ *
+ * Implementations of this callback MUST NOT do anything that can cause GC.
+ */
+using JSExternalStringSizeofCallback =
+    size_t (*)(JSString* str, mozilla::MallocSizeOf mallocSizeOf);
 
 /************************************************************************/
 
@@ -1234,6 +1246,14 @@ class JS_PUBLIC_API(ContextOptions) {
         return *this;
     }
 
+#ifdef FUZZING
+    bool fuzzing() const { return fuzzing_; }
+    ContextOptions& setFuzzing(bool flag) {
+        fuzzing_ = flag;
+        return *this;
+    }
+#endif
+
   private:
     bool baseline_ : 1;
     bool ion_ : 1;
@@ -1250,6 +1270,10 @@ class JS_PUBLIC_API(ContextOptions) {
     bool strictMode_ : 1;
     bool extraWarnings_ : 1;
     bool forEachStatement_: 1;
+#ifdef FUZZING
+    bool fuzzing_ : 1;
+#endif
+
 };
 
 JS_PUBLIC_API(ContextOptions&)
@@ -1293,6 +1317,9 @@ JS_SetCompartmentNameCallback(JSContext* cx, JSCompartmentNameCallback callback)
 
 extern JS_PUBLIC_API(void)
 JS_SetWrapObjectCallbacks(JSContext* cx, const JSWrapObjectCallbacks* callbacks);
+
+extern JS_PUBLIC_API(void)
+JS_SetExternalStringSizeofCallback(JSContext* cx, JSExternalStringSizeofCallback callback);
 
 extern JS_PUBLIC_API(void)
 JS_SetCompartmentPrivate(JSCompartment* compartment, void* data);
@@ -1396,6 +1423,22 @@ typedef void (*JSIterateCompartmentCallback)(JSContext* cx, void* data, JSCompar
 extern JS_PUBLIC_API(void)
 JS_IterateCompartments(JSContext* cx, void* data,
                        JSIterateCompartmentCallback compartmentCallback);
+
+/**
+ * Mark a jsid after entering a new compartment. Different zones separately
+ * mark the ids in a runtime, and this must be used any time an id is obtained
+ * from one compartment and then used in another compartment, unless the two
+ * compartments are guaranteed to be in the same zone.
+ */
+extern JS_PUBLIC_API(void)
+JS_MarkCrossZoneId(JSContext* cx, jsid id);
+
+/**
+ * If value stores a jsid (an atomized string or symbol), mark that id as for
+ * JS_MarkCrossZoneId.
+ */
+extern JS_PUBLIC_API(void)
+JS_MarkCrossZoneIdValue(JSContext* cx, const JS::Value& value);
 
 /**
  * Initialize standard JS class constructors, prototypes, and any top-level
@@ -2195,6 +2238,7 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         mergeable_(false),
         preserveJitCode_(false),
         cloneSingletons_(false),
+        experimentalNumberFormatFormatToPartsEnabled_(false),
         sharedMemoryAndAtomics_(false),
         secureContext_(false)
     {
@@ -2259,6 +2303,23 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         return *this;
     }
 
+    // ECMA-402 is considering adding a "formatToParts" NumberFormat method,
+    // that exposes not just a formatted string but its subcomponents.  The
+    // method, its semantics, and its name aren't finalized, so for now it's
+    // exposed *only* if requested.
+    //
+    // Until "formatToParts" is included in a final specification edition, it's
+    // subject to change or removal at any time.  Do *not* rely on it in
+    // mission-critical code that can't be changed if ECMA-402 decides not to
+    // accept the method in its current form.
+    bool experimentalNumberFormatFormatToPartsEnabled() const {
+        return experimentalNumberFormatFormatToPartsEnabled_;
+    }
+    CompartmentCreationOptions& setExperimentalNumberFormatFormatToPartsEnabled(bool flag) {
+        experimentalNumberFormatFormatToPartsEnabled_ = flag;
+        return *this;
+    }
+
     bool getSharedMemoryAndAtomicsEnabled() const;
     CompartmentCreationOptions& setSharedMemoryAndAtomicsEnabled(bool flag);
 
@@ -2283,6 +2344,7 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     bool mergeable_;
     bool preserveJitCode_;
     bool cloneSingletons_;
+    bool experimentalNumberFormatFormatToPartsEnabled_;
     bool sharedMemoryAndAtomics_;
     bool secureContext_;
 };
@@ -2535,10 +2597,14 @@ struct JS_PUBLIC_API(PropertyDescriptor) {
     void trace(JSTracer* trc);
 };
 
-template <typename Outer>
-class PropertyDescriptorOperations
+} // namespace JS
+
+namespace js {
+
+template <typename Wrapper>
+class WrappedPtrOperations<JS::PropertyDescriptor, Wrapper>
 {
-    const PropertyDescriptor& desc() const { return static_cast<const Outer*>(this)->get(); }
+    const JS::PropertyDescriptor& desc() const { return static_cast<const Wrapper*>(this)->get(); }
 
     bool has(unsigned bit) const {
         MOZ_ASSERT(bit != 0);
@@ -2667,10 +2733,11 @@ class PropertyDescriptorOperations
     }
 };
 
-template <typename Outer>
-class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<Outer>
+template <typename Wrapper>
+class MutableWrappedPtrOperations<JS::PropertyDescriptor, Wrapper>
+    : public js::WrappedPtrOperations<JS::PropertyDescriptor, Wrapper>
 {
-    PropertyDescriptor& desc() { return static_cast<Outer*>(this)->get(); }
+    JS::PropertyDescriptor& desc() { return static_cast<Wrapper*>(this)->get(); }
 
   public:
     void clear() {
@@ -2681,7 +2748,7 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
         value().setUndefined();
     }
 
-    void initFields(HandleObject obj, HandleValue v, unsigned attrs,
+    void initFields(JS::HandleObject obj, JS::HandleValue v, unsigned attrs,
                     JSGetterOp getterOp, JSSetterOp setterOp) {
         MOZ_ASSERT(getterOp != JS_PropertyStub);
         MOZ_ASSERT(setterOp != JS_StrictPropertyStub);
@@ -2693,7 +2760,7 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
         setSetter(setterOp);
     }
 
-    void assign(PropertyDescriptor& other) {
+    void assign(JS::PropertyDescriptor& other) {
         object().set(other.obj);
         setAttributes(other.attrs);
         setGetter(other.getter);
@@ -2701,7 +2768,7 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
         value().set(other.value);
     }
 
-    void setDataDescriptor(HandleValue v, unsigned attrs) {
+    void setDataDescriptor(JS::HandleValue v, unsigned attrs) {
         MOZ_ASSERT((attrs & ~(JSPROP_ENUMERATE |
                               JSPROP_PERMANENT |
                               JSPROP_READONLY |
@@ -2776,26 +2843,7 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
     }
 };
 
-} /* namespace JS */
-
-namespace js {
-
-template <>
-class RootedBase<JS::PropertyDescriptor>
-  : public JS::MutablePropertyDescriptorOperations<JS::Rooted<JS::PropertyDescriptor>>
-{};
-
-template <>
-class HandleBase<JS::PropertyDescriptor>
-  : public JS::PropertyDescriptorOperations<JS::Handle<JS::PropertyDescriptor>>
-{};
-
-template <>
-class MutableHandleBase<JS::PropertyDescriptor>
-  : public JS::MutablePropertyDescriptorOperations<JS::MutableHandle<JS::PropertyDescriptor>>
-{};
-
-} /* namespace js */
+} // namespace js
 
 namespace JS {
 
@@ -3724,7 +3772,7 @@ namespace JS {
  * addrefs/copies/tracing/etc.
  *
  * Furthermore, in some cases compile options are propagated from one entity to
- * another (e.g. from a scriipt to a function defined in that script).  This
+ * another (e.g. from a script to a function defined in that script).  This
  * involves copying over some, but not all, of the options.
  *
  * So, we have a class hierarchy that reflects these four use cases:
@@ -4164,6 +4212,17 @@ FinishOffThreadModule(JSContext* cx, void* token);
 extern JS_PUBLIC_API(void)
 CancelOffThreadModule(JSContext* cx, void* token);
 
+extern JS_PUBLIC_API(bool)
+DecodeOffThreadScript(JSContext* cx, const ReadOnlyCompileOptions& options,
+                      mozilla::Vector<uint8_t>& buffer /* TranscodeBuffer& */, size_t cursor,
+                      OffThreadCompileCallback callback, void* callbackData);
+
+extern JS_PUBLIC_API(JSScript*)
+FinishOffThreadScriptDecoder(JSContext* cx, void* token);
+
+extern JS_PUBLIC_API(void)
+CancelOffThreadScriptDecoder(JSContext* cx, void* token);
+
 /**
  * Compile a function with envChain plus the global as its scope chain.
  * envChain must contain objects in the current compartment of cx.  The actual
@@ -4539,7 +4598,7 @@ CallOriginalPromiseReject(JSContext* cx, JS::HandleValue rejectionValue);
  * the Promise was created.
  */
 extern JS_PUBLIC_API(bool)
-ResolvePromise(JSContext* cx, JS::HandleObject promise, JS::HandleValue resolutionValue);
+ResolvePromise(JSContext* cx, JS::HandleObject promiseObj, JS::HandleValue resolutionValue);
 
 /**
  * Rejects the given `promise` with the given `rejectionValue`.
@@ -4548,7 +4607,7 @@ ResolvePromise(JSContext* cx, JS::HandleObject promise, JS::HandleValue resoluti
  * the Promise was created.
  */
 extern JS_PUBLIC_API(bool)
-RejectPromise(JSContext* cx, JS::HandleObject promise, JS::HandleValue rejectionValue);
+RejectPromise(JSContext* cx, JS::HandleObject promiseObj, JS::HandleValue rejectionValue);
 
 /**
  * Calls the current compartment's original Promise.prototype.then on the
@@ -5939,8 +5998,10 @@ enum TranscodeResult
     TranscodeResult_Failure_RunOnceNotSupported = TranscodeResult_Failure | 0x2,
     TranscodeResult_Failure_AsmJSNotSupported =   TranscodeResult_Failure | 0x3,
     TranscodeResult_Failure_UnknownClassKind =    TranscodeResult_Failure | 0x4,
+    TranscodeResult_Failure_WrongCompileOption =  TranscodeResult_Failure | 0x5,
+    TranscodeResult_Failure_NotInterpretedFun =   TranscodeResult_Failure | 0x6,
 
-    // A error, the JSContext has a pending exception.
+    // There is a pending exception on the context.
     TranscodeResult_Throw = 0x200
 };
 
@@ -5957,6 +6018,25 @@ DecodeScript(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleScript scr
 extern JS_PUBLIC_API(TranscodeResult)
 DecodeInterpretedFunction(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleFunction funp,
                           size_t cursorIndex = 0);
+
+// Register an encoder on the given script source, such that all functions can
+// be encoded as they are parsed. This strategy is used to avoid blocking the
+// main thread in a non-interruptible way.
+//
+// The |script| argument of |StartIncrementalEncoding| and
+// |FinishIncrementalEncoding| should be the top-level script returned either as
+// an out-param of any of the |Compile| functions, or the result of
+// |FinishOffThreadScript|.
+//
+// The |buffer| argument should not be used before until
+// |FinishIncrementalEncoding| is called on the same script, and returns
+// successfully. If any of these functions failed, the |buffer| content is
+// undefined.
+extern JS_PUBLIC_API(bool)
+StartIncrementalEncoding(JSContext* cx, TranscodeBuffer& buffer, JS::HandleScript script);
+
+extern JS_PUBLIC_API(bool)
+FinishIncrementalEncoding(JSContext* cx, JS::HandleScript script);
 
 } /* namespace JS */
 
@@ -6089,7 +6169,6 @@ SetBuildIdOp(JSContext* cx, BuildIdOp buildIdOp);
 
 struct WasmModule : js::AtomicRefCounted<WasmModule>
 {
-    MOZ_DECLARE_REFCOUNTED_TYPENAME(WasmModule)
     virtual ~WasmModule() {}
 
     virtual void serializedSize(size_t* maybeBytecodeSize, size_t* maybeCompiledSize) const = 0;

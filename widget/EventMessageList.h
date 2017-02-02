@@ -47,11 +47,6 @@ NS_EVENT_MESSAGE(eKeyDown)
 NS_EVENT_MESSAGE(eKeyDownOnPlugin)
 NS_EVENT_MESSAGE(eKeyUpOnPlugin)
 
-NS_EVENT_MESSAGE(eBeforeKeyDown)
-NS_EVENT_MESSAGE(eAfterKeyDown)
-NS_EVENT_MESSAGE(eBeforeKeyUp)
-NS_EVENT_MESSAGE(eAfterKeyUp)
-
 // This message is sent after a content process handles a key event or accesskey
 // to indicate that an potential accesskey was not found. The parent process may
 // then respond by, for example, opening menus and processing other shortcuts.
@@ -92,6 +87,7 @@ NS_EVENT_MESSAGE(eMouseOut)
 NS_EVENT_MESSAGE(eMouseHitTest)
 NS_EVENT_MESSAGE(eMouseEnter)
 NS_EVENT_MESSAGE(eMouseLeave)
+NS_EVENT_MESSAGE(eMouseTouchDrag)
 NS_EVENT_MESSAGE(eMouseLongTap)
 NS_EVENT_MESSAGE_FIRST_LAST(eMouseEvent, eMouseMove, eMouseLongTap)
 
@@ -340,6 +336,7 @@ NS_EVENT_MESSAGE(eScrolledAreaChanged)
 NS_EVENT_MESSAGE(eTransitionStart)
 NS_EVENT_MESSAGE(eTransitionRun)
 NS_EVENT_MESSAGE(eTransitionEnd)
+NS_EVENT_MESSAGE(eTransitionCancel)
 NS_EVENT_MESSAGE(eAnimationStart)
 NS_EVENT_MESSAGE(eAnimationEnd)
 NS_EVENT_MESSAGE(eAnimationIteration)
@@ -427,7 +424,6 @@ NS_EVENT_MESSAGE(eMediaRecorderDataAvailable)
 NS_EVENT_MESSAGE(eMediaRecorderWarning)
 NS_EVENT_MESSAGE(eMediaRecorderStop)
 
-#ifdef MOZ_GAMEPAD
 // Gamepad input events
 NS_EVENT_MESSAGE(eGamepadButtonDown)
 NS_EVENT_MESSAGE(eGamepadButtonUp)
@@ -436,7 +432,6 @@ NS_EVENT_MESSAGE(eGamepadConnected)
 NS_EVENT_MESSAGE(eGamepadDisconnected)
 NS_EVENT_MESSAGE_FIRST_LAST(eGamepadEvent,
                             eGamepadButtonDown, eGamepadDisconnected)
-#endif
 
 // input and beforeinput events.
 NS_EVENT_MESSAGE(eEditorInput)
@@ -447,6 +442,9 @@ NS_EVENT_MESSAGE(eSelectionChange)
 
 // Details element events.
 NS_EVENT_MESSAGE(eToggle)
+
+// Dialog element events.
+NS_EVENT_MESSAGE(eClose)
 
 #ifdef UNDEF_NS_EVENT_MESSAGE_FIRST_LAST
 #undef UNDEF_NS_EVENT_MESSAGE_FIRST_LAST

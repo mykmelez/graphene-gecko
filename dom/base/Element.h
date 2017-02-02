@@ -23,7 +23,7 @@
 #include "nsINodeList.h"
 #include "nsNodeUtils.h"
 #include "nsAttrAndChildArray.h"
-#include "mozFlushType.h"
+#include "mozilla/FlushType.h"
 #include "nsDOMAttributeMap.h"
 #include "nsPresContext.h"
 #include "mozilla/CORSMode.h"
@@ -245,14 +245,26 @@ public:
   }
 
   /**
+   * StyleStateLocks is used to specify which event states should be locked,
+   * and whether they should be locked to on or off.
+   */
+  struct StyleStateLocks {
+    // mLocks tracks which event states should be locked.
+    EventStates mLocks;
+    // mValues tracks if the locked state should be on or off.
+    EventStates mValues;
+  };
+
+  /**
    * The style state locks applied to this element.
    */
-  EventStates LockedStyleStates() const;
+  StyleStateLocks LockedStyleStates() const;
 
   /**
    * Add a style state lock on this element.
+   * aEnabled is the value to lock the given state bits to.
    */
-  void LockStyleStates(EventStates aStates);
+  void LockStyleStates(EventStates aStates, bool aEnabled);
 
   /**
    * Remove a style state lock on this element.
@@ -267,7 +279,7 @@ public:
   /**
    * Get the inline style declaration, if any, for this element.
    */
-  virtual DeclarationBlock* GetInlineStyleDeclaration();
+  DeclarationBlock* GetInlineStyleDeclaration() const;
 
   /**
    * Set the inline style declaration for this element. This will send
@@ -387,7 +399,7 @@ public:
     }
   }
 
-  bool GetBindingURL(nsIDocument *aDocument, css::URLValue **aResult);
+  bool GetBindingURL(nsIDocument* aDocument, css::URLValue **aResult);
 
   // The bdi element defaults to dir=auto if it has no dir attribute set.
   // Other elements will only have dir=auto if they have an explicit dir=auto,
@@ -1010,11 +1022,11 @@ public:
   /**
    * Get the primary frame for this content with flushing
    *
-   * @param aType the kind of flush to do, typically Flush_Frames or
-   *              Flush_Layout
+   * @param aType the kind of flush to do, typically FlushType::Frames or
+   *              FlushType::Layout
    * @return the primary frame
    */
-  nsIFrame* GetPrimaryFrame(mozFlushType aType);
+  nsIFrame* GetPrimaryFrame(FlushType aType);
   // Work around silly C++ name hiding stuff
   nsIFrame* GetPrimaryFrame() const { return nsIContent::GetPrimaryFrame(); }
 

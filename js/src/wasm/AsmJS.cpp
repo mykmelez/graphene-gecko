@@ -34,6 +34,7 @@
 #include "frontend/Parser.h"
 #include "gc/Policy.h"
 #include "js/MemoryMetrics.h"
+#include "vm/SelfHosting.h"
 #include "vm/StringBuffer.h"
 #include "vm/Time.h"
 #include "vm/TypedArrayObject.h"
@@ -59,6 +60,7 @@ using mozilla::Compression::LZ4;
 using mozilla::HashGeneric;
 using mozilla::IsNaN;
 using mozilla::IsNegativeZero;
+using mozilla::IsPositiveZero;
 using mozilla::IsPowerOfTwo;
 using mozilla::Maybe;
 using mozilla::Move;
@@ -360,25 +362,11 @@ struct js::AsmJSMetadata : Metadata, AsmJSMetadataCacheablePod
     ScriptSource* maybeScriptSource() const override {
         return scriptSource.get();
     }
-    bool getFuncName(JSContext* cx, const Bytes*, uint32_t funcIndex,
-                     TwoByteName* name) const override
-    {
+    bool getFuncName(const Bytes* maybeBytecode, uint32_t funcIndex, UTF8Bytes* name) const override {
         // asm.js doesn't allow exporting imports or putting imports in tables
         MOZ_ASSERT(funcIndex >= AsmJSFirstDefFuncIndex);
-
         const char* p = asmJSFuncNames[funcIndex - AsmJSFirstDefFuncIndex].get();
-        UTF8Chars utf8(p, strlen(p));
-
-        size_t twoByteLength;
-        UniqueTwoByteChars chars(JS::UTF8CharsToNewTwoByteCharsZ(cx, utf8, &twoByteLength).get());
-        if (!chars)
-            return false;
-
-        if (!name->growByUninitialized(twoByteLength))
-            return false;
-
-        PodCopy(name->begin(), chars.get(), twoByteLength);
-        return true;
+        return name->append(p, strlen(p));
     }
 
     AsmJSMetadataCacheablePod& pod() { return *this; }
@@ -888,14 +876,14 @@ class NumLit
         return (uint32_t)toInt32();
     }
 
-    RawF64 toDouble() const {
+    double toDouble() const {
         MOZ_ASSERT(which_ == Double);
-        return RawF64(u.scalar_.toDouble());
+        return u.scalar_.toDouble();
     }
 
-    RawF32 toFloat() const {
+    float toFloat() const {
         MOZ_ASSERT(which_ == Float);
-        return RawF32(float(u.scalar_.toDouble()));
+        return float(u.scalar_.toDouble());
     }
 
     Value scalarValue() const {
@@ -928,9 +916,9 @@ class NumLit
           case NumLit::BigUnsigned:
             return toInt32() == 0;
           case NumLit::Double:
-            return toDouble().bits() == 0;
+            return IsPositiveZero(toDouble());
           case NumLit::Float:
-            return toFloat().bits() == 0;
+            return IsPositiveZero(toFloat());
           case NumLit::Int8x16:
           case NumLit::Uint8x16:
           case NumLit::Bool8x16:
@@ -1696,7 +1684,7 @@ class MOZ_STACK_CLASS ModuleValidator
     }
     bool newSig(Sig&& sig, uint32_t* sigIndex) {
         *sigIndex = 0;
-        if (mg_.numSigs() >= MaxSigs)
+        if (mg_.numSigs() >= AsmJSMaxTypes)
             return failCurrentOffset("too many signatures");
 
         *sigIndex = mg_.numSigs();
@@ -1737,6 +1725,7 @@ class MOZ_STACK_CLASS ModuleValidator
         arrayViews_(cx),
         atomicsPresent_(false),
         simdPresent_(false),
+        mg_(nullptr),
         errorString_(nullptr),
         errorOffset_(UINT32_MAX),
         errorOverRecursed_(false)
@@ -1843,11 +1832,11 @@ class MOZ_STACK_CLASS ModuleValidator
 
         auto env = MakeUnique<ModuleEnvironment>(ModuleKind::AsmJS);
         if (!env ||
-            !env->sigs.resize(MaxSigs) ||
-            !env->funcSigs.resize(MaxFuncs) ||
+            !env->sigs.resize(AsmJSMaxTypes) ||
+            !env->funcSigs.resize(AsmJSMaxFuncs) ||
             !env->funcImportGlobalDataOffsets.resize(AsmJSMaxImports) ||
-            !env->tables.resize(MaxTables) ||
-            !env->asmJSSigToTableIndex.resize(MaxSigs))
+            !env->tables.resize(AsmJSMaxTables) ||
+            !env->asmJSSigToTableIndex.resize(AsmJSMaxTypes))
         {
             return false;
         }
@@ -2156,7 +2145,7 @@ class MOZ_STACK_CLASS ModuleValidator
         if (!declareSig(Move(sig), &sigIndex))
             return false;
         uint32_t funcIndex = AsmJSFirstDefFuncIndex + numFunctions();
-        if (funcIndex >= MaxFuncs)
+        if (funcIndex >= AsmJSMaxFuncs)
             return failCurrentOffset("too many functions");
         mg_.initFuncSig(funcIndex, sigIndex);
         Global* global = validationLifo_.new_<Global>(Global::Function);
@@ -2171,7 +2160,7 @@ class MOZ_STACK_CLASS ModuleValidator
     bool declareFuncPtrTable(Sig&& sig, PropertyName* name, uint32_t firstUse, uint32_t mask,
                              uint32_t* index)
     {
-        if (mask > MaxTableElems)
+        if (mask > MaxTableInitialLength)
             return failCurrentOffset("function pointer table too big");
         uint32_t sigIndex;
         if (!newSig(Move(sig), &sigIndex))
@@ -2380,9 +2369,7 @@ class MOZ_STACK_CLASS ModuleValidator
         if (!bytes)
             return nullptr;
 
-        return mg_.finish(*bytes,
-                          DataSegmentVector(),
-                          NameInBytecodeVector());
+        return mg_.finish(*bytes);
     }
 };
 
@@ -7464,6 +7451,20 @@ GetDataProperty(JSContext* cx, HandleValue objVal, ImmutablePropertyNamePtr fiel
 }
 
 static bool
+HasObjectValueOfMethodPure(JSObject* obj, JSContext* cx)
+{
+    Value v;
+    if (!GetPropertyPure(cx, obj, NameToId(cx->names().valueOf), &v))
+        return false;
+
+    JSFunction* fun;
+    if (!IsFunctionObject(v, &fun))
+        return false;
+
+    return IsSelfHostedFunctionWithName(fun, cx->names().Object_valueOf);
+}
+
+static bool
 HasPureCoercion(JSContext* cx, HandleValue v)
 {
     // Unsigned SIMD types are not allowed in function signatures.
@@ -7477,10 +7478,10 @@ HasPureCoercion(JSContext* cx, HandleValue v)
     // coercions are not observable and coercion via ToNumber/ToInt32
     // definitely produces NaN/0. We should remove this special case later once
     // most apps have been built with newer Emscripten.
-    jsid toString = NameToId(cx->names().toString);
     if (v.toObject().is<JSFunction>() &&
-        HasObjectValueOf(&v.toObject(), cx) &&
-        ClassMethodIsNative(cx, &v.toObject().as<JSFunction>(), &JSFunction::class_, toString, fun_toString))
+        HasNoToPrimitiveMethodPure(&v.toObject(), cx) &&
+        HasObjectValueOfMethodPure(&v.toObject(), cx) &&
+        HasNativeMethodPure(&v.toObject(), cx->names().toString, fun_toString, cx))
     {
         return true;
     }
@@ -7518,14 +7519,14 @@ ValidateGlobalVariable(JSContext* cx, const AsmJSGlobal& global, HandleValue imp
             float f;
             if (!RoundFloat32(cx, v, &f))
                 return false;
-            *val = Val(RawF32(f));
+            *val = Val(f);
             return true;
           }
           case ValType::F64: {
             double d;
             if (!ToNumber(cx, v, &d))
                 return false;
-            *val = Val(RawF64(d));
+            *val = Val(d);
             return true;
           }
           case ValType::I8x16: {
@@ -8437,9 +8438,11 @@ StoreAsmJSModuleInCache(AsmJSParser& parser, Module& module, ExclusiveContext* c
 
     size_t bytecodeSize, compiledSize;
     module.serializedSize(&bytecodeSize, &compiledSize);
+    MOZ_RELEASE_ASSERT(bytecodeSize == 0);
+    MOZ_RELEASE_ASSERT(compiledSize <= UINT32_MAX);
 
-    size_t serializedSize = 2 * sizeof(uint32_t) +
-                            bytecodeSize + compiledSize +
+    size_t serializedSize = sizeof(uint32_t) +
+                            compiledSize +
                             moduleChars.serializedSize();
 
     JS::OpenAsmJSCacheEntryForWriteOp open = cx->asmJSCacheOps().openEntryForWrite;
@@ -8462,16 +8465,10 @@ StoreAsmJSModuleInCache(AsmJSParser& parser, Module& module, ExclusiveContext* c
     // between any two builds (regardless of platform, architecture, ...).
     // (The Module::assumptionsMatch() guard everything in the Module and
     // afterwards.)
-    MOZ_RELEASE_ASSERT(bytecodeSize <= UINT32_MAX);
-    MOZ_RELEASE_ASSERT(compiledSize <= UINT32_MAX);
-    cursor = WriteScalar<uint32_t>(cursor, bytecodeSize);
     cursor = WriteScalar<uint32_t>(cursor, compiledSize);
 
-    uint8_t* compiledBegin = cursor;
-    uint8_t* bytecodeBegin = compiledBegin + compiledSize;;
-
-    module.serialize(bytecodeBegin, bytecodeSize, compiledBegin, compiledSize);
-    cursor = bytecodeBegin + bytecodeSize;
+    module.serialize(/* bytecodeBegin = */ nullptr, /* bytecodeSize = */ 0, cursor, compiledSize);
+    cursor += compiledSize;
 
     cursor = moduleChars.serialize(cursor);
 
@@ -8502,33 +8499,29 @@ LookupAsmJSModuleInCache(ExclusiveContext* cx, AsmJSParser& parser, bool* loaded
     size_t remain = entry.serializedSize;
     const uint8_t* cursor = entry.memory;
 
-    uint32_t bytecodeSize, compiledSize;
-    (cursor = ReadScalarChecked<uint32_t>(cursor, &remain, &bytecodeSize)) &&
-    (cursor = ReadScalarChecked<uint32_t>(cursor, &remain, &compiledSize));
+    uint32_t compiledSize;
+    cursor = ReadScalarChecked<uint32_t>(cursor, &remain, &compiledSize);
     if (!cursor)
         return true;
-
-    const uint8_t* compiledBegin = cursor;
-    const uint8_t* bytecodeBegin = compiledBegin + compiledSize;
 
     Assumptions assumptions;
     if (!assumptions.initBuildIdFromContext(cx))
         return false;
 
-    if (!Module::assumptionsMatch(assumptions, compiledBegin, remain))
+    if (!Module::assumptionsMatch(assumptions, cursor, remain))
         return true;
 
     MutableAsmJSMetadata asmJSMetadata = cx->new_<AsmJSMetadata>();
     if (!asmJSMetadata)
         return false;
 
-    *module = Module::deserialize(bytecodeBegin, bytecodeSize, compiledBegin, compiledSize,
-                                  asmJSMetadata.get());
+    *module = Module::deserialize(/* bytecodeBegin = */ nullptr, /* bytecodeSize = */ 0,
+                                  cursor, compiledSize, asmJSMetadata.get());
     if (!*module) {
         ReportOutOfMemory(cx);
         return false;
     }
-    cursor = bytecodeBegin + bytecodeSize;
+    cursor += compiledSize;
 
     // Due to the hash comparison made by openEntryForRead, this should succeed
     // with high probability.

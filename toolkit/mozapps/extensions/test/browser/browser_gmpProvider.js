@@ -6,7 +6,7 @@
 
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/AppConstants.jsm");
-var GMPScope = Cu.import("resource://gre/modules/addons/GMPProvider.jsm");
+var GMPScope = Cu.import("resource://gre/modules/addons/GMPProvider.jsm", {});
 
 const TEST_DATE = new Date(2013, 0, 1, 12);
 
@@ -49,7 +49,7 @@ MockGMPInstallManager.prototype = {
 
 var gOptionsObserver = {
   lastDisplayed: null,
-  observe: function(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic, aData) {
     if (aTopic == AddonManager.OPTIONS_NOTIFICATION_DISPLAYED) {
       this.lastDisplayed = aData;
     }
@@ -247,10 +247,10 @@ add_task(function* testInstalledDetails() {
     let contextMenu = doc.getElementById("addonitem-popup");
     let deferred = Promise.defer();
     let listener = () => {
-      contextMenu.removeEventListener("popupshown", listener, false);
+      contextMenu.removeEventListener("popupshown", listener);
       deferred.resolve();
     };
-    contextMenu.addEventListener("popupshown", listener, false);
+    contextMenu.addEventListener("popupshown", listener);
     el = doc.getElementsByClassName("detail-view-container")[0];
     EventUtils.synthesizeMouse(el, 4, 4, { }, gManagerWindow);
     EventUtils.synthesizeMouse(el, 4, 4, { type: "contextmenu", button: 2 }, gManagerWindow);

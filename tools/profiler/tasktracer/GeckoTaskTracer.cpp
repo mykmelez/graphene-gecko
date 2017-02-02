@@ -367,9 +367,9 @@ LogVirtualTablePtr(uint64_t aTaskId, uint64_t aSourceEventId, uintptr_t* aVptr)
   // [4 taskId address]
   TraceInfoLogType* log = info->AppendLog();
   if (log) {
-    // Since addr2line used by SPS addon can not solve non-function
-    // addresses, we use the first entry of vtable as the symbol to
-    // solve.  We should find a better solution later.
+    // Since addr2line used by the Gecko Profiler addon can not solve
+    // non-function addresses, we use the first entry of vtable as the symbol
+    // to solve. We should find a better solution later.
     log->mVPtr.mType = ACTION_GET_VTABLE;
     log->mVPtr.mTaskId = aTaskId;
     log->mVPtr.mVPtr = reinterpret_cast<uintptr_t>(aVptr);
@@ -385,6 +385,29 @@ AutoSourceEvent::AutoSourceEvent(SourceEventType aType)
 AutoSourceEvent::~AutoSourceEvent()
 {
   DestroySourceEvent();
+}
+
+AutoScopedLabel::AutoScopedLabel(const char* aFormat, ...)
+  : mLabel(nullptr)
+{
+  if (IsStartLogging()) {
+    // Optimization for when it is disabled.
+    nsCString label;
+    va_list args;
+    va_start(args, aFormat);
+    label.AppendPrintf(aFormat, args);
+    va_end(args);
+    mLabel = strdup(label.get());
+    AddLabel("Begin %s", mLabel);
+  }
+}
+
+AutoScopedLabel::~AutoScopedLabel()
+{
+  if (mLabel) {
+    AddLabel("End %s", mLabel);
+    free(mLabel);
+  }
 }
 
 void AddLabel(const char* aFormat, ...)

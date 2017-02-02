@@ -26,13 +26,35 @@ function createHiddenBrowser(url) {
 
 let extension;
 let dummy = "http://mochi.test:8888/browser/browser/components/extensions/test/browser/file_dummy.html";
+let headers = {
+  request: {
+    add: {
+      "X-WebRequest-request": "text",
+      "X-WebRequest-request-binary": "binary",
+    },
+    modify: {
+      "user-agent": "WebRequest",
+    },
+    remove: [
+      "accept-encoding",
+    ],
+  },
+  response: {
+    add: {
+      "X-WebRequest-response": "text",
+      "X-WebRequest-response-binary": "binary",
+    },
+    modify: {
+      "server": "WebRequest",
+      "content-type": "text/html; charset=utf-8",
+    },
+    remove: [
+      "connection",
+    ],
+  },
+};
 
 add_task(function* setup() {
-  // SelfSupport has a tendency to fire when running this test alone, without
-  // a good way to turn it off we just set the url to ""
-  yield SpecialPowers.pushPrefEnv({
-    set: [["browser.selfsupport.url", ""]],
-  });
   extension = makeExtension();
   yield extension.startup();
 });
@@ -41,6 +63,7 @@ add_task(function* test_newWindow() {
   let expect = {
     "file_dummy.html": {
       type: "main_frame",
+      headers,
     },
   };
   // NOTE: When running solo, favicon will be loaded at some point during
@@ -63,6 +86,7 @@ add_task(function* test_newTab() {
   let expect = {
     "file_dummy.html": {
       type: "main_frame",
+      headers,
     },
   };
   extension.sendMessage("set-expected", {expect, ignore: ["favicon.ico"]});
@@ -77,6 +101,7 @@ add_task(function* test_subframe() {
   let expect = {
     "file_dummy.html": {
       type: "main_frame",
+      headers,
     },
   };
   // test a content subframe attached to hidden window

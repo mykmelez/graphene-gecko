@@ -596,8 +596,11 @@ void
 nsHtml5TreeOperation::PreventScriptExecution(nsIContent* aNode)
 {
   nsCOMPtr<nsIScriptElement> sele = do_QueryInterface(aNode);
-  MOZ_ASSERT(sele);
-  sele->PreventExecution();
+  if (sele) {
+    sele->PreventExecution();
+  } else {
+    MOZ_ASSERT(nsNameSpaceManager::GetInstance()->mSVGDisabled, "Node didn't QI to script, but SVG wasn't disabled.");
+  }
 }
 
 void
@@ -616,7 +619,9 @@ void
 nsHtml5TreeOperation::SvgLoad(nsIContent* aNode)
 {
   nsCOMPtr<nsIRunnable> event = new nsHtml5SVGLoadDispatcher(aNode);
-  if (NS_FAILED(NS_DispatchToMainThread(event))) {
+  if (NS_FAILED(aNode->OwnerDoc()->Dispatch("nsHtml5SVGLoadDispatcher",
+                                            TaskCategory::Other,
+                                            event.forget()))) {
     NS_WARNING("failed to dispatch svg load dispatcher");
   }
 }
@@ -824,16 +829,22 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
     case eTreeOpSetStyleLineNumber: {
       nsIContent* node = *(mOne.node);
       nsCOMPtr<nsIStyleSheetLinkingElement> ssle = do_QueryInterface(node);
-      NS_ASSERTION(ssle, "Node didn't QI to style.");
-      ssle->SetLineNumber(mFour.integer);
+      if (ssle) {
+        ssle->SetLineNumber(mFour.integer);
+      } else {
+        MOZ_ASSERT(nsNameSpaceManager::GetInstance()->mSVGDisabled, "Node didn't QI to style, but SVG wasn't disabled.");
+      }
       return NS_OK;
     }
     case eTreeOpSetScriptLineNumberAndFreeze: {
       nsIContent* node = *(mOne.node);
       nsCOMPtr<nsIScriptElement> sele = do_QueryInterface(node);
-      NS_ASSERTION(sele, "Node didn't QI to script.");
-      sele->SetScriptLineNumber(mFour.integer);
-      sele->FreezeUriAsyncDefer();
+      if (sele) {
+        sele->SetScriptLineNumber(mFour.integer);
+        sele->FreezeUriAsyncDefer();
+      } else {
+        MOZ_ASSERT(nsNameSpaceManager::GetInstance()->mSVGDisabled, "Node didn't QI to script, but SVG wasn't disabled.");
+      }
       return NS_OK;
     }
     case eTreeOpSvgLoad: {

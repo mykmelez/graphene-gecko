@@ -46,10 +46,6 @@
 #include "MP4Decoder.h"
 #include "mozilla/dom/RemoteVideoDecoder.h"
 
-#ifdef XP_WIN
-#include "mozilla/WindowsVersion.h"
-#endif
-
 #include "mp4_demuxer/H264.h"
 
 #include <functional>
@@ -129,12 +125,15 @@ public:
           // do not support YUV444 format.
           // For consistency, all decoders should be checked.
           if (mp4_demuxer::H264::DecodeSPSFromExtraData(extraData, spsdata) &&
-              spsdata.chroma_format_idc == PDMFactory::kYUV444) {
-            return CheckResult(SupportChecker::Reason::kVideoFormatNotSupported,
-                               MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                                           RESULT_DETAIL("Decoder may not have the capability to handle"
-                                                         " the requested video format"
-                                                         " with YUV444 chroma subsampling.")));
+              (spsdata.profile_idc == 244 /* Hi444PP */ ||
+               spsdata.chroma_format_idc == PDMFactory::kYUV444)) {
+            return CheckResult(
+              SupportChecker::Reason::kVideoFormatNotSupported,
+              MediaResult(
+                NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                RESULT_DETAIL("Decoder may not have the capability to handle"
+                              " the requested video format"
+                              " with YUV444 chroma subsampling.")));
           }
         }
         return CheckResult(SupportChecker::Reason::kSupported);
@@ -365,14 +364,7 @@ PDMFactory::CreatePDMs()
   }
 #endif
 #ifdef XP_WIN
-  if (MediaPrefs::PDMWMFEnabled() && IsVistaOrLater()) {
-    // *Only* use WMF on Vista and later, as if Firefox is run in Windows 95
-    // compatibility mode on Windows 7 (it does happen!) we may crash trying
-    // to startup WMF. So we need to detect the OS version here, as in
-    // compatibility mode IsVistaOrLater() and friends behave as if we're on
-    // the emulated version of Windows. See bug 1279171.
-    // Additionally, we don't want to start the RemoteDecoderModule if we
-    // expect it's not going to work (i.e. on Windows older than Vista).
+  if (MediaPrefs::PDMWMFEnabled()) {
     m = new WMFDecoderModule();
     RefPtr<PlatformDecoderModule> remote = new dom::RemoteDecoderModule(m);
     StartupPDM(remote);

@@ -35,8 +35,7 @@ var tests = [
       try {
         validateObject(snapshot, SNAPSHOT_SCHEMA);
         ok(true, "The snapshot should conform to the schema.");
-      }
-      catch (err) {
+      } catch (err) {
         ok(false, "Schema mismatch, " + err);
       }
       done();
@@ -225,9 +224,6 @@ const SNAPSHOT_SCHEMA = {
         },
         windowLayerManagerRemote: {
           type: "boolean",
-        },
-        supportsHardwareH264: {
-          type: "string",
         },
         currentAudioBackend: {
           type: "string",

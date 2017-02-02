@@ -6,11 +6,12 @@ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 Cu.import("resource://gre/modules/MatchPattern.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 var {
-  EventManager,
   ExtensionError,
   IconDetails,
+  SingletonEventManager,
 } = ExtensionUtils;
 
 const ACTION_MENU_TOP_LEVEL_LIMIT = 6;
@@ -38,6 +39,7 @@ var gMenuBuilder = {
   // to be displayed. We always clear all the items again when
   // popuphidden fires.
   build(contextData) {
+    let firstItem = true;
     let xulMenu = contextData.menu;
     xulMenu.addEventListener("popuphidden", this);
     this.xulMenu = xulMenu;
@@ -70,6 +72,13 @@ var gMenuBuilder = {
           rootElement.setAttribute("class", "menuitem-iconic");
         }
         rootElement.setAttribute("image", resolvedURL);
+      }
+
+      if (firstItem) {
+        firstItem = false;
+        const separator = xulMenu.ownerDocument.createElement("menuseparator");
+        this.itemsToCleanUp.add(separator);
+        xulMenu.append(separator);
       }
 
       xulMenu.appendChild(rootElement);
@@ -224,6 +233,13 @@ var gMenuBuilder = {
 
       let tab = item.tabManager.convert(contextData.tab);
       let info = item.getClickInfo(contextData, wasChecked);
+
+      const map = {shiftKey: "Shift", altKey: "Alt", metaKey: "Command", ctrlKey: "Ctrl"};
+      info.modifiers = Object.keys(map).filter(key => event[key]).map(key => map[key]);
+      if (event.ctrlKey && AppConstants.platform === "macosx") {
+        info.modifiers.push("MacCtrl");
+      }
+
       item.extension.emit("webext-contextmenu-menuitem-click", info, tab);
     });
 
@@ -252,13 +268,8 @@ global.actionContextMenu = function(contextData) {
   gMenuBuilder.buildActionContextMenu(contextData);
 };
 
-function contextMenuObserver(subject, topic, data) {
-  subject = subject.wrappedJSObject;
-  gMenuBuilder.build(subject);
-}
-
 function getContexts(contextData) {
-  let contexts = new Set(["all"]);
+  let contexts = new Set();
 
   if (contextData.inFrame) {
     contexts.add("frame");
@@ -300,8 +311,14 @@ function getContexts(contextData) {
     contexts.add("browser_action");
   }
 
-  if (contexts.size == 1) {
+  if (contexts.size === 0) {
     contexts.add("page");
+  }
+
+  if (contextData.onTab) {
+    contexts.add("tab");
+  } else {
+    contexts.add("all");
   }
 
   return contexts;
@@ -315,6 +332,7 @@ function MenuItem(extension, createProperties, isRoot = false) {
 
   this.setDefaults();
   this.setProps(createProperties);
+
   if (!this.hasOwnProperty("_id")) {
     this.id = gNextMenuItemID++;
   }
@@ -341,6 +359,12 @@ MenuItem.prototype = {
 
     if (createProperties.targetUrlPatterns != null) {
       this.targetUrlMatchPattern = new MatchPattern(this.targetUrlPatterns);
+    }
+
+    // If a child MenuItem does not specify any contexts, then it should
+    // inherit the contexts specified from its parent.
+    if (createProperties.parentId && !createProperties.contexts) {
+      this.contexts = this.parent.contexts;
     }
   },
 
@@ -493,7 +517,7 @@ MenuItem.prototype = {
     }
 
     let docPattern = this.documentUrlMatchPattern;
-    let pageURI = Services.io.newURI(contextData.pageUrl, null, null);
+    let pageURI = Services.io.newURI(contextData.pageUrl);
     if (docPattern && !docPattern.matches(pageURI)) {
       return false;
     }
@@ -517,14 +541,53 @@ MenuItem.prototype = {
   },
 };
 
+// While any extensions are active, this Tracker registers to observe/listen
+// for contex-menu events from both content and chrome.
+const contextMenuTracker = {
+  register() {
+    Services.obs.addObserver(this, "on-build-contextmenu", false);
+    for (const window of WindowListManager.browserWindows()) {
+      this.onWindowOpen(window);
+    }
+    WindowListManager.addOpenListener(this.onWindowOpen);
+  },
+
+  unregister() {
+    Services.obs.removeObserver(this, "on-build-contextmenu");
+    for (const window of WindowListManager.browserWindows()) {
+      const menu = window.document.getElementById("tabContextMenu");
+      menu.removeEventListener("popupshowing", this);
+    }
+    WindowListManager.removeOpenListener(this.onWindowOpen);
+  },
+
+  observe(subject, topic, data) {
+    subject = subject.wrappedJSObject;
+    gMenuBuilder.build(subject);
+  },
+
+  onWindowOpen(window) {
+    const menu = window.document.getElementById("tabContextMenu");
+    menu.addEventListener("popupshowing", contextMenuTracker);
+  },
+
+  handleEvent(event) {
+    const menu = event.target;
+    if (menu.id === "tabContextMenu") {
+      const trigger = menu.triggerNode;
+      const tab = trigger.localName === "tab" ? trigger : TabManager.activeTab;
+      const pageUrl = tab.linkedBrowser.currentURI.spec;
+      gMenuBuilder.build({menu, tab, pageUrl, onTab: true});
+    }
+  },
+};
+
 var gExtensionCount = 0;
 /* eslint-disable mozilla/balanced-listeners */
 extensions.on("startup", (type, extension) => {
   gContextMenuMap.set(extension, new Map());
   if (++gExtensionCount == 1) {
-    Services.obs.addObserver(contextMenuObserver,
-                             "on-build-contextmenu",
-                             false);
+    contextMenuTracker.register();
   }
 });
 
@@ -532,8 +595,7 @@ extensions.on("shutdown", (type, extension) => {
   gContextMenuMap.delete(extension);
   gRootItems.delete(extension);
   if (--gExtensionCount == 0) {
-    Services.obs.removeObserver(contextMenuObserver,
-                                "on-build-contextmenu");
+    contextMenuTracker.unregister();
   }
 });
 /* eslint-enable mozilla/balanced-listeners */
@@ -571,9 +633,9 @@ extensions.registerSchemaAPI("contextMenus", "addon_parent", context => {
         }
       },
 
-      onClicked: new EventManager(context, "contextMenus.onClicked", fire => {
+      onClicked: new SingletonEventManager(context, "contextMenus.onClicked", fire => {
         let listener = (event, info, tab) => {
-          fire(info, tab);
+          fire.async(info, tab);
         };
 
         extension.on("webext-contextmenu-menuitem-click", listener);

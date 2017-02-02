@@ -62,15 +62,6 @@ namespace jit {
     _(In_Dense)                                  \
                                                  \
     _(GetName_Fallback)                          \
-    _(GetName_GlobalLexical)                     \
-    _(GetName_Global)                            \
-    _(GetName_Env0)                              \
-    _(GetName_Env1)                              \
-    _(GetName_Env2)                              \
-    _(GetName_Env3)                              \
-    _(GetName_Env4)                              \
-    _(GetName_Env5)                              \
-    _(GetName_Env6)                              \
                                                  \
     _(BindName_Fallback)                         \
                                                  \
@@ -78,12 +69,6 @@ namespace jit {
     _(GetIntrinsic_Constant)                     \
                                                  \
     _(SetProp_Fallback)                          \
-    _(SetProp_Native)                            \
-    _(SetProp_NativeAdd)                         \
-    _(SetProp_Unboxed)                           \
-    _(SetProp_TypedObject)                       \
-    _(SetProp_CallScripted)                      \
-    _(SetProp_CallNative)                        \
                                                  \
     _(TableSwitch)                               \
                                                  \

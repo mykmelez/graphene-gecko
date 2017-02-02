@@ -46,11 +46,10 @@ add_test(function() {
 
     var browser = gBrowser.selectedBrowser;
     browser.addEventListener("DOMContentLoaded", function() {
-      browser.removeEventListener("DOMContentLoaded", arguments.callee, false);
       is(browser.currentURI.spec, addon.mAddon.optionsURL, "New tab should have loaded the options URL");
       browser.contentWindow.close();
       run_next_test();
-    }, false);
+    }, {once: true});
     return;
   }
 

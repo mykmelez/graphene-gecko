@@ -73,6 +73,7 @@ ErrorObject::protoClasses[JSEXN_ERROR_LIMIT] = {
 
     IMPLEMENT_ERROR_PROTO_CLASS(DebuggeeWouldRun),
     IMPLEMENT_ERROR_PROTO_CLASS(CompileError),
+    IMPLEMENT_ERROR_PROTO_CLASS(LinkError),
     IMPLEMENT_ERROR_PROTO_CLASS(RuntimeError)
 };
 
@@ -109,6 +110,7 @@ static const JSPropertySpec other_error_properties[JSEXN_ERROR_LIMIT - 1][3] = {
     IMPLEMENT_ERROR_PROPERTIES(URIError),
     IMPLEMENT_ERROR_PROPERTIES(DebuggeeWouldRun),
     IMPLEMENT_ERROR_PROPERTIES(CompileError),
+    IMPLEMENT_ERROR_PROPERTIES(LinkError),
     IMPLEMENT_ERROR_PROPERTIES(RuntimeError)
 };
 
@@ -157,6 +159,7 @@ ErrorObject::classSpecs[JSEXN_ERROR_LIMIT] = {
 
     IMPLEMENT_NONGLOBAL_ERROR_SPEC(DebuggeeWouldRun),
     IMPLEMENT_NONGLOBAL_ERROR_SPEC(CompileError),
+    IMPLEMENT_NONGLOBAL_ERROR_SPEC(LinkError),
     IMPLEMENT_NONGLOBAL_ERROR_SPEC(RuntimeError)
 };
 
@@ -198,6 +201,7 @@ ErrorObject::classes[JSEXN_ERROR_LIMIT] = {
     // These Error subclasses are not accessible via the global object:
     IMPLEMENT_ERROR_CLASS(DebuggeeWouldRun),
     IMPLEMENT_ERROR_CLASS(CompileError),
+    IMPLEMENT_ERROR_CLASS(LinkError),
     IMPLEMENT_ERROR_CLASS(RuntimeError)
 };
 
@@ -512,14 +516,17 @@ ErrorObject::createProto(JSContext* cx, JSProtoKey key)
 {
     JSExnType type = ExnTypeFromProtoKey(key);
 
-    if (type == JSEXN_ERR)
-        return cx->global()->createBlankPrototype(cx, &ErrorObject::protoClasses[JSEXN_ERR]);
+    if (type == JSEXN_ERR) {
+        return GlobalObject::createBlankPrototype(cx, cx->global(),
+                                                  &ErrorObject::protoClasses[JSEXN_ERR]);
+    }
 
     RootedObject protoProto(cx, GlobalObject::getOrCreateErrorPrototype(cx, cx->global()));
     if (!protoProto)
         return nullptr;
 
-    return cx->global()->createBlankPrototypeInheriting(cx, &ErrorObject::protoClasses[type],
+    return GlobalObject::createBlankPrototypeInheriting(cx, cx->global(),
+                                                        &ErrorObject::protoClasses[type],
                                                         protoProto);
 }
 

@@ -7,21 +7,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
-function whenDelayedStartupFinished(aWindow, aCallback) {
-  return new Promise(resolve => {
-    info("Waiting for delayed startup to finish");
-    Services.obs.addObserver(function observer(aSubject, aTopic) {
-      if (aWindow == aSubject) {
-        Services.obs.removeObserver(observer, aTopic);
-        if (aCallback) {
-          executeSoon(aCallback);
-        }
-        resolve();
-      }
-    }, "browser-delayed-startup-finished", false);
-  });
-}
-
 /**
  * Allows waiting for an observer notification once.
  *
@@ -32,8 +17,7 @@ function whenDelayedStartupFinished(aWindow, aCallback) {
  * @resolves The array [subject, data] from the observed notification.
  * @rejects Never.
  */
-function promiseTopicObserved(topic)
-{
+function promiseTopicObserved(topic) {
   let deferred = Promise.defer();
   info("Waiting for observer topic " + topic);
   Services.obs.addObserver(function PTO_observe(obsSubject, obsTopic, obsData) {
@@ -43,6 +27,22 @@ function promiseTopicObserved(topic)
   return deferred.promise;
 }
 
+/**
+ * Called after opening a new window or switching windows, this will wait until
+ * we are sure that an attempt to display a notification will not fail.
+ */
+function* waitForWindowReadyForPopupNotifications(win) {
+  // These are the same checks that PopupNotifications.jsm makes before it
+  // allows a notification to open.
+  yield BrowserTestUtils.waitForCondition(
+    () => win.gBrowser.selectedBrowser.docShellIsActive,
+    "The browser should be active"
+  );
+  yield BrowserTestUtils.waitForCondition(
+    () => Services.focus.activeWindow == win,
+    "The window should be active"
+  );
+}
 
 /**
  * Waits for a load (or custom) event to finish in a given tab. If provided
@@ -56,8 +56,7 @@ function promiseTopicObserved(topic)
  * @resolves to the received event
  * @rejects if a valid load event is not received within a meaningful interval
  */
-function promiseTabLoadEvent(tab, url)
-{
+function promiseTabLoadEvent(tab, url) {
   let browser = tab.linkedBrowser;
 
   if (url) {
@@ -70,10 +69,10 @@ function promiseTabLoadEvent(tab, url)
 const PREF_SECURITY_DELAY_INITIAL = Services.prefs.getIntPref("security.notification_enable_delay");
 
 function setup() {
-  // Disable transitions as they slow the test down and we want to click the
-  // mouse buttons in a predictable location.
-
+  BrowserTestUtils.openNewForegroundTab(gBrowser, "http://example.com/")
+                  .then(goNext);
   registerCleanupFunction(() => {
+    gBrowser.removeTab(gBrowser.selectedTab);
     PopupNotifications.buttonDelay = PREF_SECURITY_DELAY_INITIAL;
   });
 }
@@ -173,7 +172,8 @@ BasicNotification.prototype.addOptions = function(options) {
     this.options[name] = value;
 };
 
-function ErrorNotification() {
+function ErrorNotification(testId) {
+  BasicNotification.call(this, testId);
   this.mainAction.callback = () => {
     this.mainActionClicked = true;
     throw new Error("Oops!");
@@ -184,8 +184,7 @@ function ErrorNotification() {
   };
 }
 
-ErrorNotification.prototype = new BasicNotification();
-ErrorNotification.prototype.constructor = ErrorNotification;
+ErrorNotification.prototype = BasicNotification.prototype;
 
 function checkPopup(popup, notifyObj) {
   info("Checking notification " + notifyObj.id);
@@ -238,7 +237,7 @@ XPCOMUtils.defineLazyGetter(this, "gActiveListeners", () => {
   let listeners = new Map();
   registerCleanupFunction(() => {
     for (let [listener, eventName] of listeners) {
-      PopupNotifications.panel.removeEventListener(eventName, listener, false);
+      PopupNotifications.panel.removeEventListener(eventName, listener);
     }
   });
   return listeners;
@@ -249,12 +248,20 @@ function onPopupEvent(eventName, callback, condition) {
     if (event.target != PopupNotifications.panel ||
         (condition && !condition()))
       return;
-    PopupNotifications.panel.removeEventListener(eventName, listener, false);
+    PopupNotifications.panel.removeEventListener(eventName, listener);
     gActiveListeners.delete(listener);
     executeSoon(() => callback.call(PopupNotifications.panel));
   }
   gActiveListeners.set(listener, eventName);
-  PopupNotifications.panel.addEventListener(eventName, listener, false);
+  PopupNotifications.panel.addEventListener(eventName, listener);
+}
+
+function waitForNotificationPanel() {
+  return new Promise(resolve => {
+    onPopupEvent("popupshown", function() {
+      resolve(this);
+    });
+  });
 }
 
 function triggerMainCommand(popup) {
@@ -279,8 +286,7 @@ function triggerSecondaryCommand(popup, index) {
   // Extra secondary actions appear in a menu.
   notification.secondaryButton.nextSibling.nextSibling.focus();
 
-  popup.addEventListener("popupshown", function handle() {
-    popup.removeEventListener("popupshown", handle, false);
+  popup.addEventListener("popupshown", function() {
     info("Command popup open for notification " + notification.id);
     // Press down until the desired command is selected. Decrease index by one
     // since the secondary action was handled above.
@@ -289,7 +295,7 @@ function triggerSecondaryCommand(popup, index) {
     }
     // Activate
     EventUtils.synthesizeKey("VK_RETURN", {});
-  }, false);
+  }, {once: true});
 
   // One down event to open the popup
   info("Open the popup to trigger secondary command for notification " + notification.id);

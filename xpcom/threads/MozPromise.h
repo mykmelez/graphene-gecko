@@ -116,6 +116,7 @@ protected:
 };
 
 template<typename T> class MozPromiseHolder;
+template<typename T> class MozPromiseRequestHolder;
 template<typename ResolveValueT, typename RejectValueT, bool IsExclusive>
 class MozPromise : public MozPromiseRefcountable
 {
@@ -219,35 +220,35 @@ private:
       mResolveValues.SetLength(aDependentPromises);
     }
 
-    void Resolve(size_t aIndex, const ResolveValueType& aResolveValue)
+    void Resolve(size_t aIndex, ResolveValueType&& aResolveValue)
     {
       if (!mPromise) {
         // Already rejected.
         return;
       }
 
-      mResolveValues[aIndex].emplace(aResolveValue);
+      mResolveValues[aIndex].emplace(Move(aResolveValue));
       if (--mOutstandingPromises == 0) {
         nsTArray<ResolveValueType> resolveValues;
         resolveValues.SetCapacity(mResolveValues.Length());
         for (size_t i = 0; i < mResolveValues.Length(); ++i) {
-          resolveValues.AppendElement(mResolveValues[i].ref());
+          resolveValues.AppendElement(Move(mResolveValues[i].ref()));
         }
 
-        mPromise->Resolve(resolveValues, __func__);
+        mPromise->Resolve(Move(resolveValues), __func__);
         mPromise = nullptr;
         mResolveValues.Clear();
       }
     }
 
-    void Reject(const RejectValueType& aRejectValue)
+    void Reject(RejectValueType&& aRejectValue)
     {
       if (!mPromise) {
         // Already rejected.
         return;
       }
 
-      mPromise->Reject(aRejectValue, __func__);
+      mPromise->Reject(Move(aRejectValue), __func__);
       mPromise = nullptr;
       mResolveValues.Clear();
     }
@@ -266,8 +267,8 @@ public:
     RefPtr<AllPromiseHolder> holder = new AllPromiseHolder(aPromises.Length());
     for (size_t i = 0; i < aPromises.Length(); ++i) {
       aPromises[i]->Then(aProcessingThread, __func__,
-        [holder, i] (ResolveValueType aResolveValue) -> void { holder->Resolve(i, aResolveValue); },
-        [holder] (RejectValueType aRejectValue) -> void { holder->Reject(aRejectValue); }
+        [holder, i] (ResolveValueType aResolveValue) -> void { holder->Resolve(i, Move(aResolveValue)); },
+        [holder] (RejectValueType aRejectValue) -> void { holder->Reject(Move(aRejectValue)); }
       );
     }
     return holder->Promise();
@@ -376,7 +377,7 @@ protected:
       mResponseTarget->Dispatch(runnable.forget(), AbstractThread::DontAssertDispatchSuccess);
     }
 
-    virtual void Disconnect() override
+    void Disconnect() override
     {
       MOZ_ASSERT(ThenValueBase::mResponseTarget->IsCurrentThreadIn());
       MOZ_DIAGNOSTIC_ASSERT(!Request::mComplete);
@@ -401,33 +402,21 @@ protected:
       }
 
       // Invoke the resolve or reject method.
-      RefPtr<MozPromise> p = DoResolveOrRejectInternal(aValue);
+      RefPtr<MozPromise> result = DoResolveOrRejectInternal(aValue);
 
       // If there's a completion promise, resolve it appropriately with the
       // result of the method.
-      //
-      // We jump through some hoops to cast to MozPromise::Private here. This
-      // can go away when we can just declare mCompletionPromise as
-      // MozPromise::Private. See the declaration below.
-      RefPtr<MozPromise::Private> completionPromise =
-        dont_AddRef(static_cast<MozPromise::Private*>(mCompletionPromise.forget().take()));
-      if (completionPromise) {
-        if (p) {
-          p->ChainTo(completionPromise.forget(), "<chained completion promise>");
+      if (RefPtr<Private> p = mCompletionPromise.forget()) {
+        if (result) {
+          result->ChainTo(p.forget(), "<chained completion promise>");
         } else {
-          completionPromise->ResolveOrReject(aValue, "<completion of non-promise-returning method>");
+          p->ResolveOrReject(aValue, "<completion of non-promise-returning method>");
         }
       }
     }
 
     RefPtr<AbstractThread> mResponseTarget; // May be released on any thread.
-
-    // Declaring RefPtr<MozPromise::Private> here causes build failures
-    // on MSVC because MozPromise::Private is only forward-declared at this
-    // point. This hack can go away when we inline-declare MozPromise::Private,
-    // which is blocked on the B2G ICS compiler being too old.
-    RefPtr<MozPromise> mCompletionPromise;
-
+    RefPtr<Private> mCompletionPromise;
     const char* mCallSite;
   };
 
@@ -486,18 +475,18 @@ protected:
       , mResolveMethod(aResolveMethod)
       , mRejectMethod(aRejectMethod) {}
 
-  virtual void Disconnect() override
-  {
-    ThenValueBase::Disconnect();
+    void Disconnect() override
+    {
+      ThenValueBase::Disconnect();
 
-    // If a Request has been disconnected, we don't guarantee that the
-    // resolve/reject runnable will be dispatched. Null out our refcounted
-    // this-value now so that it's released predictably on the dispatch thread.
-    mThisVal = nullptr;
-  }
+      // If a Request has been disconnected, we don't guarantee that the
+      // resolve/reject runnable will be dispatched. Null out our refcounted
+      // this-value now so that it's released predictably on the dispatch thread.
+      mThisVal = nullptr;
+    }
 
   protected:
-    virtual already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
+    already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
     {
       RefPtr<MozPromise> completion;
       if (aValue.IsResolve()) {
@@ -521,6 +510,50 @@ protected:
     RejectMethodType mRejectMethod;
   };
 
+  // Specialization of MethodThenValue (with 3rd template arg being 'void')
+  // that only takes one method, to be called with a ResolveOrRejectValue.
+  template<typename ThisType, typename ResolveRejectMethodType>
+  class MethodThenValue<ThisType, ResolveRejectMethodType, void> : public ThenValueBase
+  {
+  public:
+    MethodThenValue(AbstractThread* aResponseTarget, ThisType* aThisVal,
+                    ResolveRejectMethodType aResolveRejectMethod,
+                    const char* aCallSite)
+      : ThenValueBase(aResponseTarget, aCallSite)
+      , mThisVal(aThisVal)
+      , mResolveRejectMethod(aResolveRejectMethod)
+    {}
+
+    void Disconnect() override
+    {
+      ThenValueBase::Disconnect();
+
+      // If a Request has been disconnected, we don't guarantee that the
+      // resolve/reject runnable will be dispatched. Null out our refcounted
+      // this-value now so that it's released predictably on the dispatch thread.
+      mThisVal = nullptr;
+    }
+
+  protected:
+    already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
+    {
+      RefPtr<MozPromise> completion =
+        InvokeCallbackMethod(mThisVal.get(), mResolveRejectMethod, aValue);
+
+      // Null out mThisVal after invoking the callback so that any references are
+      // released predictably on the dispatch thread. Otherwise, it would be
+      // released on whatever thread last drops its reference to the ThenValue,
+      // which may or may not be ok.
+      mThisVal = nullptr;
+
+      return completion.forget();
+    }
+
+  private:
+    RefPtr<ThisType> mThisVal; // Only accessed and refcounted on dispatch thread.
+    ResolveRejectMethodType mResolveRejectMethod;
+  };
+
   // NB: We could use std::function here instead of a template if it were supported. :-(
   template<typename ResolveFunction, typename RejectFunction>
   class FunctionThenValue : public ThenValueBase
@@ -536,20 +569,20 @@ protected:
       mRejectFunction.emplace(Move(aRejectFunction));
     }
 
-  virtual void Disconnect() override
-  {
-    ThenValueBase::Disconnect();
+    void Disconnect() override
+    {
+      ThenValueBase::Disconnect();
 
-    // If a Request has been disconnected, we don't guarantee that the
-    // resolve/reject runnable will be dispatched. Destroy our callbacks
-    // now so that any references in closures are released predictable on
-    // the dispatch thread.
-    mResolveFunction.reset();
-    mRejectFunction.reset();
-  }
+      // If a Request has been disconnected, we don't guarantee that the
+      // resolve/reject runnable will be dispatched. Destroy our callbacks
+      // now so that any references in closures are released predictable on
+      // the dispatch thread.
+      mResolveFunction.reset();
+      mRejectFunction.reset();
+    }
 
   protected:
-    virtual already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
+    already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
     {
       // Note: The usage of InvokeCallbackMethod here requires that
       // ResolveFunction/RejectFunction are capture-lambdas (i.e. anonymous
@@ -578,6 +611,57 @@ protected:
     Maybe<RejectFunction> mRejectFunction; // Only accessed and deleted on dispatch thread.
   };
 
+  // Specialization of FunctionThenValue (with 2nd template arg being 'void')
+  // that only takes one function, to be called with a ResolveOrRejectValue.
+  template<typename ResolveRejectFunction>
+  class FunctionThenValue<ResolveRejectFunction, void> : public ThenValueBase
+  {
+  public:
+    FunctionThenValue(AbstractThread* aResponseTarget,
+                      ResolveRejectFunction&& aResolveRejectFunction,
+                      const char* aCallSite)
+      : ThenValueBase(aResponseTarget, aCallSite)
+    {
+      mResolveRejectFunction.emplace(Move(aResolveRejectFunction));
+    }
+
+    void Disconnect() override
+    {
+      ThenValueBase::Disconnect();
+
+      // If a Request has been disconnected, we don't guarantee that the
+      // resolve/reject runnable will be dispatched. Destroy our callbacks
+      // now so that any references in closures are released predictable on
+      // the dispatch thread.
+      mResolveRejectFunction.reset();
+    }
+
+  protected:
+    already_AddRefed<MozPromise> DoResolveOrRejectInternal(const ResolveOrRejectValue& aValue) override
+    {
+      // Note: The usage of InvokeCallbackMethod here requires that
+      // ResolveRejectFunction is capture-lambdas (i.e. anonymous
+      // classes with ::operator()), since it allows us to share code more easily.
+      // We could fix this if need be, though it's quite easy to work around by
+      // just capturing something.
+      RefPtr<MozPromise> completion =
+        InvokeCallbackMethod(mResolveRejectFunction.ptr(),
+                             &ResolveRejectFunction::operator(),
+                             aValue);
+
+      // Destroy callbacks after invocation so that any references in closures are
+      // released predictably on the dispatch thread. Otherwise, they would be
+      // released on whatever thread last drops its reference to the ThenValue,
+      // which may or may not be ok.
+      mResolveRejectFunction.reset();
+
+      return completion.forget();
+    }
+
+  private:
+    Maybe<ResolveRejectFunction> mResolveRejectFunction; // Only accessed and deleted on dispatch thread.
+  };
+
 public:
   void ThenInternal(AbstractThread* aResponseThread, ThenValueBase* aThenValue,
                     const char* aCallSite)
@@ -599,9 +683,8 @@ private:
   /*
    * A command object to store all information needed to make a request to
    * the promise. This allows us to delay the request until further use is
-   * known (whether it is ->Then() again for more promise chaining or passed
-   * to MozPromiseRequestHolder::Begin() to terminate chaining and issue
-   * the request).
+   * known (whether it is ->Then() again for more promise chaining or ->Track()
+   * to terminate chaining and issue the request).
    *
    * This allows a unified syntax for promise chaining and disconnection
    * and feels more like its JS counterpart.
@@ -630,14 +713,6 @@ private:
       }
     }
 
-    // Allow passing Then() to MozPromiseRequestHolder::Begin().
-    operator RefPtr<Request>()
-    {
-      RefPtr<ThenValueBase> thenValue = mThenValue.forget();
-      mReceiver->ThenInternal(mResponseThread, thenValue, mCallSite);
-      return thenValue.forget();
-    }
-
     // Allow RefPtr<MozPromise> p = somePromise->Then();
     //       p->Then(thread1, ...);
     //       p->Then(thread2, ...);
@@ -645,7 +720,7 @@ private:
     {
       RefPtr<ThenValueBase> thenValue = mThenValue.forget();
       // mCompletionPromise must be created before ThenInternal() to avoid race.
-      RefPtr<MozPromise> p = new MozPromise::Private(
+      RefPtr<MozPromise::Private> p = new MozPromise::Private(
         "<completion promise>", true /* aIsCompletionPromise */);
       thenValue->mCompletionPromise = p;
       // Note ThenInternal() might nullify mCompletionPromise before return.
@@ -654,10 +729,25 @@ private:
       return p;
     }
 
-    // Allow calling ->Then() again for more promise chaining.
-    RefPtr<MozPromise> operator->()
+    template <typename... Ts>
+    auto Then(Ts&&... aArgs)
+      -> decltype(DeclVal<MozPromise>().Then(Forward<Ts>(aArgs)...))
     {
-      return *this;
+      return static_cast<RefPtr<MozPromise>>(*this)->Then(Forward<Ts>(aArgs)...);
+    }
+
+    void Track(MozPromiseRequestHolder<MozPromise>& aRequestHolder)
+    {
+      RefPtr<ThenValueBase> thenValue = mThenValue.forget();
+      mReceiver->ThenInternal(mResponseThread, thenValue, mCallSite);
+      aRequestHolder.Track(thenValue.forget());
+    }
+
+    // Allow calling ->Then() again for more promise chaining or ->Track() to
+    // end chaining and track the request for future disconnection.
+    ThenCommand* operator->()
+    {
+      return this;
     }
 
   private:
@@ -667,7 +757,7 @@ private:
     MozPromise* mReceiver;
   };
 
-  public:
+public:
   template<typename ThisType, typename ResolveMethodType, typename RejectMethodType>
   ThenCommand Then(AbstractThread* aResponseThread, const char* aCallSite,
     ThisType* aThisVal, ResolveMethodType aResolveMethod, RejectMethodType aRejectMethod)
@@ -678,6 +768,16 @@ private:
     return ThenCommand(aResponseThread, aCallSite, thenValue.forget(), this);
   }
 
+  template<typename ThisType, typename ResolveRejectMethodType>
+  ThenCommand Then(AbstractThread* aResponseThread, const char* aCallSite,
+    ThisType* aThisVal, ResolveRejectMethodType aResolveRejectMethod)
+  {
+    using ThenType = MethodThenValue<ThisType, ResolveRejectMethodType, void>;
+    RefPtr<ThenValueBase> thenValue = new ThenType(aResponseThread,
+       aThisVal, aResolveRejectMethod, aCallSite);
+    return ThenCommand(aResponseThread, aCallSite, thenValue.forget(), this);
+  }
+
   template<typename ResolveFunction, typename RejectFunction>
   ThenCommand Then(AbstractThread* aResponseThread, const char* aCallSite,
     ResolveFunction&& aResolveFunction, RejectFunction&& aRejectFunction)
@@ -685,6 +785,16 @@ private:
     using ThenType = FunctionThenValue<ResolveFunction, RejectFunction>;
     RefPtr<ThenValueBase> thenValue = new ThenType(aResponseThread,
       Move(aResolveFunction), Move(aRejectFunction), aCallSite);
+    return ThenCommand(aResponseThread, aCallSite, thenValue.forget(), this);
+  }
+
+  template<typename ResolveRejectFunction>
+  ThenCommand Then(AbstractThread* aResponseThread, const char* aCallSite,
+                   ResolveRejectFunction&& aResolveRejectFunction)
+  {
+    using ThenType = FunctionThenValue<ResolveRejectFunction, void>;
+    RefPtr<ThenValueBase> thenValue = new ThenType(aResponseThread,
+      Move(aResolveRejectFunction), aCallSite);
     return ThenCommand(aResponseThread, aCallSite, thenValue.forget(), this);
   }
 
@@ -827,6 +937,9 @@ public:
   MozPromiseHolder()
     : mMonitor(nullptr) {}
 
+  MozPromiseHolder(MozPromiseHolder&& aOther)
+    : mMonitor(nullptr), mPromise(aOther.mPromise.forget()) {}
+
   // Move semantics.
   MozPromiseHolder& operator=(MozPromiseHolder&& aOther)
   {
@@ -872,7 +985,7 @@ public:
     return p.forget();
   }
 
-  void Resolve(typename PromiseType::ResolveValueType aResolveValue,
+  void Resolve(const typename PromiseType::ResolveValueType& aResolveValue,
                const char* aMethodName)
   {
     if (mMonitor) {
@@ -882,17 +995,33 @@ public:
     mPromise->Resolve(aResolveValue, aMethodName);
     mPromise = nullptr;
   }
+  void Resolve(typename PromiseType::ResolveValueType&& aResolveValue,
+               const char* aMethodName)
+  {
+    if (mMonitor) {
+      mMonitor->AssertCurrentThreadOwns();
+    }
+    MOZ_ASSERT(mPromise);
+    mPromise->Resolve(Move(aResolveValue), aMethodName);
+    mPromise = nullptr;
+  }
 
-
-  void ResolveIfExists(typename PromiseType::ResolveValueType aResolveValue,
+  void ResolveIfExists(const typename PromiseType::ResolveValueType& aResolveValue,
                        const char* aMethodName)
   {
     if (!IsEmpty()) {
       Resolve(aResolveValue, aMethodName);
     }
   }
+  void ResolveIfExists(typename PromiseType::ResolveValueType&& aResolveValue,
+                       const char* aMethodName)
+  {
+    if (!IsEmpty()) {
+      Resolve(Move(aResolveValue), aMethodName);
+    }
+  }
 
-  void Reject(typename PromiseType::RejectValueType aRejectValue,
+  void Reject(const typename PromiseType::RejectValueType& aRejectValue,
               const char* aMethodName)
   {
     if (mMonitor) {
@@ -902,13 +1031,29 @@ public:
     mPromise->Reject(aRejectValue, aMethodName);
     mPromise = nullptr;
   }
+  void Reject(typename PromiseType::RejectValueType&& aRejectValue,
+              const char* aMethodName)
+  {
+    if (mMonitor) {
+      mMonitor->AssertCurrentThreadOwns();
+    }
+    MOZ_ASSERT(mPromise);
+    mPromise->Reject(Move(aRejectValue), aMethodName);
+    mPromise = nullptr;
+  }
 
-
-  void RejectIfExists(typename PromiseType::RejectValueType aRejectValue,
+  void RejectIfExists(const typename PromiseType::RejectValueType& aRejectValue,
                       const char* aMethodName)
   {
     if (!IsEmpty()) {
       Reject(aRejectValue, aMethodName);
+    }
+  }
+  void RejectIfExists(typename PromiseType::RejectValueType&& aRejectValue,
+                      const char* aMethodName)
+  {
+    if (!IsEmpty()) {
+      Reject(Move(aRejectValue), aMethodName);
     }
   }
 
@@ -928,16 +1073,10 @@ public:
   MozPromiseRequestHolder() {}
   ~MozPromiseRequestHolder() { MOZ_ASSERT(!mRequest); }
 
-  void Begin(RefPtr<typename PromiseType::Request>&& aRequest)
+  void Track(RefPtr<typename PromiseType::Request>&& aRequest)
   {
     MOZ_DIAGNOSTIC_ASSERT(!Exists());
     mRequest = Move(aRequest);
-  }
-
-  void Begin(typename PromiseType::Request* aRequest)
-  {
-    MOZ_DIAGNOSTIC_ASSERT(!Exists());
-    mRequest = aRequest;
   }
 
   void Complete()
@@ -1003,7 +1142,7 @@ class MethodCall : public MethodCallBase
 {
 public:
   template<typename... Args>
-  MethodCall(MethodType aMethod, ThisType* aThisVal, Args... aArgs)
+  MethodCall(MethodType aMethod, ThisType* aThisVal, Args&&... aArgs)
     : mMethod(aMethod)
     , mThisVal(aThisVal)
     , mArgs(Forward<Args>(aArgs)...)

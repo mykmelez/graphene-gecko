@@ -18,7 +18,6 @@ const promise = require("promise");
 const defer = require("devtools/shared/defer");
 const Telemetry = require("devtools/client/shared/telemetry");
 const { gDevTools } = require("./devtools");
-const { when: unload } = require("sdk/system/unload");
 
 // Load target and toolbox lazily as they need gDevTools to be fully initialized
 loader.lazyRequireGetter(this, "TargetFactory", "devtools/client/framework/target", true);
@@ -30,6 +29,7 @@ loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css
 
 loader.lazyImporter(this, "CustomizableUI", "resource:///modules/CustomizableUI.jsm");
 loader.lazyImporter(this, "AppConstants", "resource://gre/modules/AppConstants.jsm");
+loader.lazyImporter(this, "LightweightThemeManager", "resource://gre/modules/LightweightThemeManager.jsm");
 
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties");
@@ -38,6 +38,9 @@ const TABS_OPEN_PEAK_HISTOGRAM = "DEVTOOLS_TABS_OPEN_PEAK_LINEAR";
 const TABS_OPEN_AVG_HISTOGRAM = "DEVTOOLS_TABS_OPEN_AVERAGE_LINEAR";
 const TABS_PINNED_PEAK_HISTOGRAM = "DEVTOOLS_TABS_PINNED_PEAK_LINEAR";
 const TABS_PINNED_AVG_HISTOGRAM = "DEVTOOLS_TABS_PINNED_AVERAGE_LINEAR";
+
+const COMPACT_LIGHT_ID = "firefox-compact-light@mozilla.org";
+const COMPACT_DARK_ID = "firefox-compact-dark@mozilla.org";
 
 /**
  * gDevToolsBrowser exposes functions to connect the gDevTools instance with a
@@ -73,7 +76,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     // - should close a docked toolbox
     // - should focus a windowed toolbox
     let isDocked = toolbox && toolbox.hostType != Toolbox.HostType.WINDOW;
-    isDocked ? toolbox.destroy() : gDevTools.showToolbox(target);
+    isDocked ? gDevTools.closeToolbox(target) : gDevTools.showToolbox(target);
   },
 
   /**
@@ -130,6 +133,41 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     toggleMenuItem("menu_devtools_connect", devtoolsRemoteEnabled);
   },
 
+  /**
+   * This function makes sure that the "devtoolstheme" attribute is set on the browser
+   * window to make it possible to change colors on elements in the browser (like gcli,
+   * or the splitter between the toolbox and web content).
+   */
+  updateDevtoolsThemeAttribute: function(win) {
+    // Set an attribute on root element of each window to make it possible
+    // to change colors based on the selected devtools theme.
+    let devtoolsTheme = Services.prefs.getCharPref("devtools.theme");
+    if (devtoolsTheme != "dark") {
+      devtoolsTheme = "light";
+    }
+
+    // Style gcli and the splitter between the toolbox and page content.  This used to
+    // set the attribute on the browser's root node but that regressed tpaint: bug 1331449.
+    win.document.getElementById("browser-bottombox").setAttribute("devtoolstheme", devtoolsTheme);
+    win.document.getElementById("content").setAttribute("devtoolstheme", devtoolsTheme);
+
+    // If the toolbox color changes and we have the opposite compact theme applied,
+    // change it to match.  For example:
+    // 1) toolbox changes to dark, and the light compact theme was applied.
+    //    Switch to the dark compact theme.
+    // 2) toolbox changes to light or firebug, and the dark compact theme was applied.
+    //    Switch to the light compact theme.
+    // 3) No compact theme was applied. Do nothing.
+    let currentTheme = LightweightThemeManager.currentTheme;
+    let currentThemeID = currentTheme && currentTheme.id;
+    if (currentThemeID == COMPACT_LIGHT_ID && devtoolsTheme == "dark") {
+      LightweightThemeManager.currentTheme = LightweightThemeManager.getUsedTheme(COMPACT_DARK_ID);
+    }
+    if (currentThemeID == COMPACT_DARK_ID && devtoolsTheme == "light") {
+      LightweightThemeManager.currentTheme = LightweightThemeManager.getUsedTheme(COMPACT_LIGHT_ID);
+    }
+  },
+
   observe: function (subject, topic, prefName) {
     switch (topic) {
       case "browser-delayed-startup-finished":
@@ -140,6 +178,35 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
           for (let win of this._trackedBrowserWindows) {
             this.updateCommandAvailability(win);
           }
+        }
+        if (prefName === "devtools.theme") {
+          for (let win of this._trackedBrowserWindows) {
+            this.updateDevtoolsThemeAttribute(win);
+          }
+        }
+        break;
+      case "quit-application":
+        gDevToolsBrowser.destroy({ shuttingDown: true });
+        break;
+      case "sdk:loader:destroy":
+        // This event is fired when the devtools loader unloads, which happens
+        // only when the add-on workflow ask devtools to be reloaded.
+        if (subject.wrappedJSObject == require('@loader/unload')) {
+          gDevToolsBrowser.destroy({ shuttingDown: false });
+        }
+        break;
+      case "lightweight-theme-changed":
+        let currentTheme = LightweightThemeManager.currentTheme;
+        let currentThemeID = currentTheme && currentTheme.id;
+        let devtoolsTheme = Services.prefs.getCharPref("devtools.theme");
+
+        // If the current lightweight theme changes to one of the compact themes, then
+        // keep the devtools color in sync.
+        if (currentThemeID == COMPACT_LIGHT_ID && devtoolsTheme == "dark") {
+          Services.prefs.setCharPref("devtools.theme", "light");
+        }
+        if (currentThemeID == COMPACT_DARK_ID && devtoolsTheme == "light") {
+            Services.prefs.setCharPref("devtools.theme", "dark");
         }
         break;
     }
@@ -184,7 +251,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       if (toolDefinition.preventClosingOnKey || toolbox.hostType == Toolbox.HostType.WINDOW) {
         toolbox.raise();
       } else {
-        toolbox.destroy();
+        gDevTools.closeToolbox(target);
       }
       gDevTools.emit("select-tool-command", toolId);
     } else {
@@ -231,7 +298,13 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
   inspectNode: function (tab, node) {
     let target = TargetFactory.forTab(tab);
-    let selector = findCssSelector(node);
+
+    // Generate a cross iframes query selector
+    let selectors = [];
+    while(node) {
+      selectors.push(findCssSelector(node));
+      node = node.ownerDocument.defaultView.frameElement;
+    }
 
     return gDevTools.showToolbox(target, "inspector").then(toolbox => {
       let inspector = toolbox.getCurrentPanel();
@@ -240,11 +313,28 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       // browser is remote or not.
       let onNewNode = inspector.selection.once("new-node-front");
 
-      inspector.walker.getRootNode().then(rootNode => {
-        return inspector.walker.querySelector(rootNode, selector);
-      }).then(node => {
-        inspector.selection.setNodeFront(node, "browser-context-menu");
-      });
+      // Evaluate the cross iframes query selectors
+      function querySelectors(nodeFront) {
+        let selector = selectors.pop();
+        if (!selector) {
+          return Promise.resolve(nodeFront);
+        }
+        return inspector.walker.querySelector(nodeFront, selector)
+          .then(node => {
+            if (selectors.length > 0) {
+              return inspector.walker.children(node).then(({ nodes }) => {
+                return nodes[0]; // This is the NodeFront for the document node inside the iframe
+              });
+            }
+            return node;
+          }).then(querySelectors);
+      }
+      inspector.walker.getRootNode()
+        .then(querySelectors)
+        .then(node =>  {
+          // Select the final node
+          inspector.selection.setNodeFront(node, "browser-context-menu");
+        });
 
       return onNewNode.then(() => {
         // Now that the node has been selected, wait until the inspector is
@@ -452,15 +542,16 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     });
 
     this.updateCommandAvailability(win);
+    this.updateDevtoolsThemeAttribute(win);
     this.ensurePrefObserver();
     win.addEventListener("unload", this);
 
     let tabContainer = win.gBrowser.tabContainer;
-    tabContainer.addEventListener("TabSelect", this, false);
-    tabContainer.addEventListener("TabOpen", this, false);
-    tabContainer.addEventListener("TabClose", this, false);
-    tabContainer.addEventListener("TabPinned", this, false);
-    tabContainer.addEventListener("TabUnpinned", this, false);
+    tabContainer.addEventListener("TabSelect", this);
+    tabContainer.addEventListener("TabOpen", this);
+    tabContainer.addEventListener("TabClose", this);
+    tabContainer.addEventListener("TabPinned", this);
+    tabContainer.addEventListener("TabUnpinned", this);
   },
 
   /**
@@ -672,11 +763,11 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     }
 
     let tabContainer = win.gBrowser.tabContainer;
-    tabContainer.removeEventListener("TabSelect", this, false);
-    tabContainer.removeEventListener("TabOpen", this, false);
-    tabContainer.removeEventListener("TabClose", this, false);
-    tabContainer.removeEventListener("TabPinned", this, false);
-    tabContainer.removeEventListener("TabUnpinned", this, false);
+    tabContainer.removeEventListener("TabSelect", this);
+    tabContainer.removeEventListener("TabOpen", this);
+    tabContainer.removeEventListener("TabClose", this);
+    tabContainer.removeEventListener("TabPinned", this);
+    tabContainer.removeEventListener("TabUnpinned", this);
   },
 
   handleEvent: function (event) {
@@ -730,12 +821,20 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   },
 
   /**
-   * All browser windows have been closed, tidy up remaining objects.
+   * Either the SDK Loader has been destroyed by the add-on contribution
+   * workflow, or firefox is shutting down.
+
+   * @param {boolean} shuttingDown
+   *        True if firefox is currently shutting down. We may prevent doing
+   *        some cleanups to speed it up. Otherwise everything need to be
+   *        cleaned up in order to be able to load devtools again.
    */
-  destroy: function () {
+  destroy: function ({ shuttingDown }) {
     Services.prefs.removeObserver("devtools.", gDevToolsBrowser);
+    Services.obs.removeObserver(gDevToolsBrowser, "lightweight-theme-changed", false);
     Services.obs.removeObserver(gDevToolsBrowser, "browser-delayed-startup-finished");
-    Services.obs.removeObserver(gDevToolsBrowser.destroy, "quit-application");
+    Services.obs.removeObserver(gDevToolsBrowser, "quit-application");
+    Services.obs.removeObserver(gDevToolsBrowser, "sdk:loader:destroy");
 
     gDevToolsBrowser._pingTelemetry();
     gDevToolsBrowser._telemetry = null;
@@ -743,6 +842,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     for (let win of gDevToolsBrowser._trackedBrowserWindows) {
       gDevToolsBrowser._forgetBrowserWindow(win);
     }
+
+    gDevTools.destroy({ shuttingDown });
   },
 };
 
@@ -766,8 +867,11 @@ gDevTools.on("tool-unregistered", function (ev, toolId) {
 gDevTools.on("toolbox-ready", gDevToolsBrowser._updateMenuCheckbox);
 gDevTools.on("toolbox-destroyed", gDevToolsBrowser._updateMenuCheckbox);
 
-Services.obs.addObserver(gDevToolsBrowser.destroy, "quit-application", false);
+Services.obs.addObserver(gDevToolsBrowser, "quit-application", false);
 Services.obs.addObserver(gDevToolsBrowser, "browser-delayed-startup-finished", false);
+// Watch for module loader unload. Fires when the tools are reloaded.
+Services.obs.addObserver(gDevToolsBrowser, "sdk:loader:destroy", false);
+Services.obs.addObserver(gDevToolsBrowser, "lightweight-theme-changed", false);
 
 // Fake end of browser window load event for all already opened windows
 // that is already fully loaded.
@@ -778,8 +882,3 @@ while (enumerator.hasMoreElements()) {
     gDevToolsBrowser._registerBrowserWindow(win);
   }
 }
-
-// Watch for module loader unload. Fires when the tools are reloaded.
-unload(function () {
-  gDevToolsBrowser.destroy();
-});

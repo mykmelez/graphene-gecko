@@ -8,18 +8,18 @@
 
 const { createClass, PropTypes, DOM } = require("devtools/client/shared/vendor/react");
 const { div, button } = DOM;
+const { findDOMNode } = require("devtools/client/shared/vendor/react-dom");
 const { connect } = require("devtools/client/shared/vendor/react-redux");
 const { L10N } = require("../l10n");
 const { getWaterfallScale } = require("../selectors/index");
 const Actions = require("../actions/index");
 const WaterfallBackground = require("../waterfall-background");
+const { getFormattedTime } = require("../utils/format-utils");
 
 // ms
 const REQUESTS_WATERFALL_HEADER_TICKS_MULTIPLE = 5;
 // px
 const REQUESTS_WATERFALL_HEADER_TICKS_SPACING_MIN = 60;
-
-const REQUEST_TIME_DECIMALS = 2;
 
 const HEADERS = [
   { name: "status", label: "status3" },
@@ -46,9 +46,21 @@ const RequestListHeader = createClass({
     scale: PropTypes.number,
     waterfallWidth: PropTypes.number,
     onHeaderClick: PropTypes.func.isRequired,
+    resizeWaterfall: PropTypes.func.isRequired,
   },
 
   componentDidMount() {
+    // This is the first time the waterfall column header is actually rendered.
+    // Measure its width and update the 'waterfallWidth' property in the store.
+    // The 'waterfallWidth' will be further updated on every window resize.
+    const waterfallHeaderEl = findDOMNode(this)
+      .querySelector("#requests-menu-waterfall-header-box");
+    if (waterfallHeaderEl) {
+      const { width } = waterfallHeaderEl.getBoundingClientRect();
+      this.props.resizeWaterfall(width);
+    }
+
+    // Create the object that takes care of drawing the waterfall canvas background
     this.background = new WaterfallBackground(document);
     this.background.draw(this.props);
   },
@@ -127,25 +139,14 @@ function waterfallDivisionLabels(waterfallWidth, scale) {
   // Insert one label for each division on the current scale.
   for (let x = 0; x < waterfallWidth; x += scaledStep) {
     let millisecondTime = x / scale;
-
-    let normalizedTime = millisecondTime;
     let divisionScale = "millisecond";
 
     // If the division is greater than 1 minute.
-    if (normalizedTime > 60000) {
-      normalizedTime /= 60000;
+    if (millisecondTime > 60000) {
       divisionScale = "minute";
-    } else if (normalizedTime > 1000) {
+    } else if (millisecondTime > 1000) {
       // If the division is greater than 1 second.
-      normalizedTime /= 1000;
       divisionScale = "second";
-    }
-
-    // Showing too many decimals is bad UX.
-    if (divisionScale == "millisecond") {
-      normalizedTime |= 0;
-    } else {
-      normalizedTime = L10N.numberWithDecimals(normalizedTime, REQUEST_TIME_DECIMALS);
     }
 
     let width = (x + scaledStep | 0) - (x | 0);
@@ -165,7 +166,7 @@ function waterfallDivisionLabels(waterfallWidth, scale) {
         "data-division-scale": divisionScale,
         style: { width }
       },
-      L10N.getFormatStr("networkMenu." + divisionScale, normalizedTime)
+      getFormattedTime(millisecondTime)
     ));
   }
 
@@ -175,7 +176,7 @@ function waterfallDivisionLabels(waterfallWidth, scale) {
 function WaterfallLabel(waterfallWidth, scale, label) {
   let className = "button-text requests-menu-waterfall-label-wrapper";
 
-  if (scale != null) {
+  if (waterfallWidth != null && scale != null) {
     label = waterfallDivisionLabels(waterfallWidth, scale);
     className += " requests-menu-waterfall-visible";
   }
@@ -193,5 +194,6 @@ module.exports = connect(
   }),
   dispatch => ({
     onHeaderClick: type => dispatch(Actions.sortBy(type)),
+    resizeWaterfall: width => dispatch(Actions.resizeWaterfall(width)),
   })
 )(RequestListHeader);

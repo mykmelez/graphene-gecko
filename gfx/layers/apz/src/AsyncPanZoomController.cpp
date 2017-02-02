@@ -898,6 +898,10 @@ nsEventStatus AsyncPanZoomController::HandleDragEvent(const MouseInput& aEvent,
     return nsEventStatus_eConsumeNoDefault;
   }
 
+  if (aEvent.mType == MouseInput::MouseType::MOUSE_UP) {
+    ScrollSnap();
+  }
+
   if (aEvent.mType != MouseInput::MouseType::MOUSE_MOVE) {
     return nsEventStatus_eConsumeNoDefault;
   }
@@ -1652,12 +1656,12 @@ AsyncPanZoomController::CanScrollWithWheel(const ParentLayerPoint& aDelta) const
 }
 
 bool
-AsyncPanZoomController::CanScroll(Layer::ScrollDirection aDirection) const
+AsyncPanZoomController::CanScroll(ScrollDirection aDirection) const
 {
   ReentrantMonitorAutoEnter lock(mMonitor);
   switch (aDirection) {
-  case Layer::HORIZONTAL: return mX.CanScroll();
-  case Layer::VERTICAL:   return mY.CanScroll();
+  case ScrollDirection::HORIZONTAL: return mX.CanScroll();
+  case ScrollDirection::VERTICAL:   return mY.CanScroll();
   default:                MOZ_ASSERT(false); return false;
   }
 }
@@ -1970,10 +1974,10 @@ nsEventStatus AsyncPanZoomController::OnPanEnd(const PanGestureInput& aEvent) {
   MOZ_ASSERT(GetCurrentPanGestureBlock());
   RefPtr<const OverscrollHandoffChain> overscrollHandoffChain =
     GetCurrentPanGestureBlock()->GetOverscrollHandoffChain();
-  if (!overscrollHandoffChain->CanScrollInDirection(this, Layer::HORIZONTAL)) {
+  if (!overscrollHandoffChain->CanScrollInDirection(this, ScrollDirection::HORIZONTAL)) {
     mX.SetVelocity(0);
   }
-  if (!overscrollHandoffChain->CanScrollInDirection(this, Layer::VERTICAL)) {
+  if (!overscrollHandoffChain->CanScrollInDirection(this, ScrollDirection::VERTICAL)) {
     mY.SetVelocity(0);
   }
 
@@ -2260,9 +2264,9 @@ void AsyncPanZoomController::HandlePanning(double aAngle) {
   RefPtr<const OverscrollHandoffChain> overscrollHandoffChain =
     GetCurrentInputBlock()->GetOverscrollHandoffChain();
   bool canScrollHorizontal = !mX.IsAxisLocked() &&
-    overscrollHandoffChain->CanScrollInDirection(this, Layer::HORIZONTAL);
+    overscrollHandoffChain->CanScrollInDirection(this, ScrollDirection::HORIZONTAL);
   bool canScrollVertical = !mY.IsAxisLocked() &&
-    overscrollHandoffChain->CanScrollInDirection(this, Layer::VERTICAL);
+    overscrollHandoffChain->CanScrollInDirection(this, ScrollDirection::VERTICAL);
 
   if (!canScrollHorizontal || !canScrollVertical) {
     SetState(PANNING);
@@ -2622,7 +2626,12 @@ void AsyncPanZoomController::StartAnimation(AsyncPanZoomAnimation* aAnimation)
 
 void AsyncPanZoomController::CancelAnimation(CancelAnimationFlags aFlags) {
   ReentrantMonitorAutoEnter lock(mMonitor);
-  APZC_LOG("%p running CancelAnimation in state %d\n", this, mState);
+  APZC_LOG("%p running CancelAnimation(0x%x) in state %d\n", this, aFlags, mState);
+
+  if ((aFlags & ExcludeWheel) && mState == WHEEL_SCROLL) {
+    return;
+  }
+
   SetState(NOTHING);
   mAnimation = nullptr;
   // Since there is no animation in progress now the axes should
@@ -3137,6 +3146,17 @@ AsyncPanZoomController::GetCurrentAsyncScrollOffset(AsyncMode aMode) const
 
   return (mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset)
       * mFrameMetrics.GetZoom() * mTestAsyncZoom.scale;
+}
+
+CSSPoint
+AsyncPanZoomController::GetCurrentAsyncScrollOffsetInCssPixels(AsyncMode aMode) const {
+  ReentrantMonitorAutoEnter lock(mMonitor);
+
+  if (aMode == RESPECT_FORCE_DISABLE && mScrollMetadata.IsApzForceDisabled()) {
+    return mLastContentPaintMetrics.GetScrollOffset();
+  }
+
+  return mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset;
 }
 
 AsyncTransform

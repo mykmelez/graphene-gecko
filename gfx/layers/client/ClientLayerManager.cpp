@@ -13,14 +13,11 @@
 #include "mozilla/hal_sandbox/PHal.h"   // for ScreenConfiguration
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositorBridgeChild.h" // for CompositorBridgeChild
-#include "mozilla/layers/ContentClient.h"
 #include "mozilla/layers/FrameUniformityData.h"
 #include "mozilla/layers/ISurfaceAllocator.h"
 #include "mozilla/layers/LayersMessages.h"  // for EditReply, etc
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
-#include "mozilla/layers/PLayerChild.h"  // for PLayerChild
 #include "mozilla/layers/LayerTransactionChild.h"
-#include "mozilla/layers/ShadowLayerChild.h"
 #include "mozilla/layers/PersistentBufferProvider.h"
 #include "ClientReadbackLayer.h"        // for ClientReadbackLayer
 #include "nsAString.h"
@@ -29,7 +26,6 @@
 #include "nsTArray.h"                   // for AutoTArray
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
 #include "TiledLayerBuffer.h"
-#include "mozilla/dom/WindowBinding.h"  // for Overfill Callback
 #include "FrameLayerBuilder.h"          // for FrameLayerbuilder
 #ifdef MOZ_WIDGET_ANDROID
 #include "AndroidBridge.h"
@@ -37,6 +33,7 @@
 #endif
 #ifdef XP_WIN
 #include "mozilla/gfx/DeviceManagerDx.h"
+#include "gfxDWriteFonts.h"
 #endif
 
 namespace mozilla {
@@ -102,11 +99,15 @@ ClientLayerManager::ClientLayerManager(nsIWidget* aWidget)
   , mCompositorMightResample(false)
   , mNeedsComposite(false)
   , mPaintSequenceNumber(0)
+  , mDeviceResetSequenceNumber(0)
   , mForwarder(new ShadowLayerForwarder(this))
-  , mDeviceCounter(gfxPlatform::GetPlatform()->GetDeviceCounter())
 {
   MOZ_COUNT_CTOR(ClientLayerManager);
   mMemoryPressureObserver = new MemoryPressureObserver(this);
+
+  if (XRE_IsContentProcess()) {
+    mDeviceResetSequenceNumber = CompositorBridgeChild::Get()->DeviceResetSequenceNumber();
+  }
 }
 
 
@@ -192,6 +193,15 @@ ClientLayerManager::Mutated(Layer* aLayer)
   mForwarder->Mutated(Hold(aLayer));
 }
 
+void
+ClientLayerManager::MutatedSimple(Layer* aLayer)
+{
+  LayerManager::MutatedSimple(aLayer);
+
+  NS_ASSERTION(InConstruction() || InDrawing(), "wrong phase");
+  mForwarder->MutatedSimple(Hold(aLayer));
+}
+
 already_AddRefed<ReadbackLayer>
 ClientLayerManager::CreateReadbackLayer()
 {
@@ -208,6 +218,23 @@ ClientLayerManager::BeginTransactionWithTarget(gfxContext* aTarget)
     return false;
   }
 
+  if (XRE_IsContentProcess() &&
+      mForwarder->DeviceCanReset() &&
+      mDeviceResetSequenceNumber != CompositorBridgeChild::Get()->DeviceResetSequenceNumber())
+  {
+    // The compositor has informed this process that a device reset occurred,
+    // but it has not finished informing each TabChild of its new
+    // TextureFactoryIdentifier. Until then, it's illegal to paint. Note that
+    // it is also illegal to request a new TIF synchronously, because we're
+    // not guaranteed the UI process has finished acquiring new compositors
+    // for each widget.
+    //
+    // Note that we only do this for accelerated backends, since we do not
+    // perform resets on basic compositors.
+    gfxCriticalNote << "Discarding a paint since a device reset has not yet been acknowledged.";
+    return false;
+  }
+
   mInTransaction = true;
   mTransactionStart = TimeStamp::Now();
 
@@ -218,11 +245,6 @@ ClientLayerManager::BeginTransactionWithTarget(gfxContext* aTarget)
 
   NS_ASSERTION(!InTransaction(), "Nested transactions not allowed");
   mPhase = PHASE_CONSTRUCTION;
-
-  if (DependsOnStaleDevice()) {
-    FrameLayerBuilder::InvalidateAllLayers(this);
-    mDeviceCounter = gfxPlatform::GetPlatform()->GetDeviceCounter();
-  }
 
   MOZ_ASSERT(mKeepAlive.IsEmpty(), "uncommitted txn?");
 
@@ -290,6 +312,14 @@ ClientLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
                                            EndTransactionFlags)
 {
   PaintTelemetry::AutoRecord record(PaintTelemetry::Metric::Rasterization);
+
+#ifdef WIN32
+  if (aCallbackData) {
+    // Content processes don't get OnPaint called. So update here whenever we
+    // may do Thebes drawing.
+    gfxDWriteFont::UpdateClearTypeUsage();
+  }
+#endif
 
   PROFILER_LABEL("ClientLayerManager", "EndTransactionInternal",
     js::ProfileEntry::Category::GRAPHICS);
@@ -514,35 +544,6 @@ ClientLayerManager::GetFrameUniformity(FrameUniformityData* aOutData)
   return LayerManager::GetFrameUniformity(aOutData);
 }
 
-bool
-ClientLayerManager::RequestOverfill(mozilla::dom::OverfillCallback* aCallback)
-{
-  MOZ_ASSERT(aCallback != nullptr);
-  MOZ_ASSERT(HasShadowManager(), "Request Overfill only supported on b2g for now");
-
-  if (HasShadowManager()) {
-    CompositorBridgeChild* child = GetRemoteRenderer();
-    NS_ASSERTION(child, "Could not get CompositorBridgeChild");
-
-    child->AddOverfillObserver(this);
-    child->SendRequestOverfill();
-    mOverfillCallbacks.AppendElement(aCallback);
-  }
-
-  return true;
-}
-
-void
-ClientLayerManager::RunOverfillCallback(const uint32_t aOverfill)
-{
-  for (size_t i = 0; i < mOverfillCallbacks.Length(); i++) {
-    ErrorResult error;
-    mOverfillCallbacks[i]->Call(aOverfill, error);
-  }
-
-  mOverfillCallbacks.Clear();
-}
-
 void
 ClientLayerManager::MakeSnapshotIfRequired()
 {
@@ -608,9 +609,14 @@ ClientLayerManager::FlushRendering()
 }
 
 void
-ClientLayerManager::UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier)
+ClientLayerManager::UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
+                                                   uint64_t aDeviceResetSeqNo)
 {
+  MOZ_ASSERT_IF(XRE_IsContentProcess(),
+                aDeviceResetSeqNo == CompositorBridgeChild::Get()->DeviceResetSequenceNumber());
+
   mForwarder->IdentifyTextureHost(aNewIdentifier);
+  mDeviceResetSequenceNumber = aDeviceResetSeqNo;
 }
 
 void
@@ -653,7 +659,8 @@ ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
   // Skip the synchronization for buffer since we also skip the painting during
   // device-reset status.
   if (!gfxPlatform::GetPlatform()->DidRenderingDeviceReset()) {
-    if (mForwarder->GetSyncObject()) {
+    if (mForwarder->GetSyncObject() &&
+        mForwarder->GetSyncObject()->IsSyncObjectValid()) {
       mForwarder->GetSyncObject()->FinalizeFrame();
     }
   }
@@ -673,35 +680,12 @@ ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
   }
 
   // forward this transaction's changeset to our LayerManagerComposite
-  bool sent;
-  AutoTArray<EditReply, 10> replies;
-  if (mForwarder->EndTransaction(&replies, mRegionToClear,
-        mLatestTransactionId, aScheduleComposite, mPaintSequenceNumber,
-        mIsRepeatTransaction, transactionStart, &sent)) {
-    for (nsTArray<EditReply>::size_type i = 0; i < replies.Length(); ++i) {
-      const EditReply& reply = replies[i];
-
-      switch (reply.type()) {
-      case EditReply::TOpContentBufferSwap: {
-        MOZ_LAYERS_LOG(("[LayersForwarder] DoubleBufferSwap"));
-
-        const OpContentBufferSwap& obs = reply.get_OpContentBufferSwap();
-
-        RefPtr<CompositableClient> compositable =
-          CompositableClient::FromIPDLActor(obs.compositableChild());
-        ContentClientRemote* contentClient =
-          static_cast<ContentClientRemote*>(compositable.get());
-        MOZ_ASSERT(contentClient);
-
-        contentClient->SwapBuffers(obs.frontUpdatedRegion());
-
-        break;
-      }
-      default:
-        MOZ_CRASH("not reached");
-      }
-    }
-
+  bool sent = false;
+  bool ok = mForwarder->EndTransaction(
+    mRegionToClear, mLatestTransactionId, aScheduleComposite,
+    mPaintSequenceNumber, mIsRepeatTransaction, transactionStart,
+    &sent);
+  if (ok) {
     if (sent) {
       mNeedsComposite = false;
     }
@@ -866,13 +850,6 @@ ClientLayerManager::RemoveDidCompositeObserver(DidCompositeObserver* aObserver)
   mDidCompositeObservers.RemoveElement(aObserver);
 }
 
-bool
-ClientLayerManager::DependsOnStaleDevice() const
-{
-  return gfxPlatform::GetPlatform()->GetDeviceCounter() != mDeviceCounter;
-}
-
-
 already_AddRefed<PersistentBufferProvider>
 ClientLayerManager::CreatePersistentBufferProvider(const gfx::IntSize& aSize,
                                                    gfx::SurfaceFormat aFormat)
@@ -896,9 +873,6 @@ ClientLayerManager::CreatePersistentBufferProvider(const gfx::IntSize& aSize,
 
 ClientLayer::~ClientLayer()
 {
-  if (HasShadow()) {
-    PLayerChild::Send__delete__(GetShadow());
-  }
   MOZ_COUNT_DTOR(ClientLayer);
 }
 

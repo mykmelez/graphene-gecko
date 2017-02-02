@@ -1,4 +1,5 @@
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource:///modules/SitePermissions.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
@@ -7,7 +8,7 @@ const PREF_PERMISSION_FAKE = "media.navigator.permission.fake";
 const CONTENT_SCRIPT_HELPER = getRootDirectory(gTestPath) + "get_user_media_content_script.js";
 
 function waitForCondition(condition, nextTest, errorMsg, retryTimes) {
-  retryTimes = typeof retryTimes !== 'undefined' ?  retryTimes : 30;
+  retryTimes = typeof retryTimes !== "undefined" ? retryTimes : 30;
   var tries = 0;
   var interval = setInterval(function() {
     if (tries >= retryTimes) {
@@ -48,9 +49,7 @@ function promiseWindow(url) {
   return new Promise(resolve => {
     Services.obs.addObserver(function obs(win) {
       win.QueryInterface(Ci.nsIDOMWindow);
-      win.addEventListener("load", function loadHandler() {
-        win.removeEventListener("load", loadHandler);
-
+      win.addEventListener("load", function() {
         if (win.location.href !== url) {
           info("ignoring a window with this url: " + win.location.href);
           return;
@@ -58,7 +57,7 @@ function promiseWindow(url) {
 
         Services.obs.removeObserver(obs, "domwindowopened");
         resolve(win);
-      });
+      }, {once: true});
     }, "domwindowopened", false);
   });
 }
@@ -125,7 +124,7 @@ function* assertWebRTCIndicatorStatus(expected) {
               win.removeEventListener("unload", listener);
               resolve();
             }
-          }, false);
+          });
         });
       }
     }
@@ -168,10 +167,9 @@ function promisePopupEvent(popup, eventSuffix) {
 
   let eventType = "popup" + eventSuffix;
   let deferred = Promise.defer();
-  popup.addEventListener(eventType, function onPopupShown(event) {
-    popup.removeEventListener(eventType, onPopupShown);
+  popup.addEventListener(eventType, function(event) {
     deferred.resolve();
-  });
+  }, {once: true});
 
   return deferred.promise;
 }
@@ -274,15 +272,13 @@ function promiseMessage(aMessage, aAction) {
 function promisePopupNotificationShown(aName, aAction) {
   let deferred = Promise.defer();
 
-  PopupNotifications.panel.addEventListener("popupshown", function popupNotifShown() {
-    PopupNotifications.panel.removeEventListener("popupshown", popupNotifShown);
-
+  PopupNotifications.panel.addEventListener("popupshown", function() {
     ok(!!PopupNotifications.getNotification(aName), aName + " notification shown");
     ok(PopupNotifications.isPanelOpen, "notification panel open");
     ok(!!PopupNotifications.panel.firstChild, "notification panel populated");
 
     deferred.resolve();
-  });
+  }, {once: true});
 
   if (aAction)
     aAction();
@@ -370,9 +366,10 @@ function* stopSharing(aType = "camera", aShouldKeepSharing = false,
     yield* checkNotSharing();
 }
 
-function promiseRequestDevice(aRequestAudio, aRequestVideo, aFrameId, aType) {
+function promiseRequestDevice(aRequestAudio, aRequestVideo, aFrameId, aType,
+                              aBrowser = gBrowser.selectedBrowser) {
   info("requesting devices");
-  return ContentTask.spawn(gBrowser.selectedBrowser,
+  return ContentTask.spawn(aBrowser,
                            {aRequestAudio, aRequestVideo, aFrameId, aType},
                            function*(args) {
     let global = content.wrappedJSObject;
@@ -382,13 +379,16 @@ function promiseRequestDevice(aRequestAudio, aRequestVideo, aFrameId, aType) {
   });
 }
 
-function* closeStream(aAlreadyClosed, aFrameId) {
+function* closeStream(aAlreadyClosed, aFrameId, aStreamCount = 1) {
   yield expectNoObserverCalled();
 
   let promises;
   if (!aAlreadyClosed) {
-    promises = [promiseObserverCalled("recording-device-events"),
-                promiseObserverCalled("recording-window-ended")];
+    promises = [];
+    for (let i = 0; i < aStreamCount; i++) {
+      promises.push(promiseObserverCalled("recording-device-events"));
+    }
+    promises.push(promiseObserverCalled("recording-window-ended"));
   }
 
   info("closing the stream");
@@ -492,4 +492,15 @@ function* checkNotSharing() {
      "no sharing indicator on the control center icon");
 
   yield* assertWebRTCIndicatorStatus(null);
+}
+
+function promiseReloadFrame(aFrameId) {
+  return ContentTask.spawn(gBrowser.selectedBrowser, aFrameId, function*(contentFrameId) {
+    content.wrappedJSObject
+           .document
+           .getElementById(contentFrameId)
+           .contentWindow
+           .location
+           .reload();
+  });
 }

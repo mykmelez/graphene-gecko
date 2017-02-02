@@ -142,6 +142,7 @@ use std::fmt;
 use std::cmp;
 use std::str;
 use std::u32;
+use std::os::raw::c_void;
 
 //////////////////////////////////
 // Internal Implemenation Flags //
@@ -362,6 +363,9 @@ macro_rules! define_string_types {
                 let length = s.len() as u32;
                 let ptr = s.as_ptr();
                 mem::forget(s);
+                unsafe {
+                    Gecko_IncrementStringAdoptCount(ptr as *mut _);
+                }
                 $String {
                     hdr: $StringRepr {
                         data: ptr,
@@ -601,6 +605,12 @@ impl nsACString {
     pub unsafe fn as_str_unchecked(&self) -> &str {
         str::from_utf8_unchecked(self)
     }
+
+    pub fn truncate(&mut self) {
+        unsafe {
+            Gecko_TruncateCString(self);
+        }
+    }
 }
 
 impl<'a> From<&'a str> for nsCString<'a> {
@@ -704,6 +714,12 @@ impl nsAString {
             Gecko_AppendUTF8toString(self, &*s);
         }
     }
+
+    pub fn truncate(&mut self) {
+        unsafe {
+            Gecko_TruncateString(self);
+        }
+    }
 }
 
 // NOTE: The From impl for a string slice for nsString produces a <'static>
@@ -750,17 +766,26 @@ macro_rules! ns_auto_string {
     }
 }
 
+#[cfg(not(debug_assertions))]
+#[allow(non_snake_case)]
+unsafe fn Gecko_IncrementStringAdoptCount(_: *mut c_void) {}
+
 // NOTE: These bindings currently only expose infallible operations. Perhaps
 // consider allowing for fallible methods?
 extern "C" {
+    #[cfg(debug_assertions)]
+    fn Gecko_IncrementStringAdoptCount(data: *mut c_void);
+
     // Gecko implementation in nsSubstring.cpp
     fn Gecko_FinalizeCString(this: *mut nsACString);
     fn Gecko_AssignCString(this: *mut nsACString, other: *const nsACString);
     fn Gecko_AppendCString(this: *mut nsACString, other: *const nsACString);
+    fn Gecko_TruncateCString(this: *mut nsACString);
 
     fn Gecko_FinalizeString(this: *mut nsAString);
     fn Gecko_AssignString(this: *mut nsAString, other: *const nsAString);
     fn Gecko_AppendString(this: *mut nsAString, other: *const nsAString);
+    fn Gecko_TruncateString(this: *mut nsAString);
 
     // Gecko implementation in nsReadableUtils.cpp
     fn Gecko_AppendUTF16toCString(this: *mut nsACString, other: *const nsAString);

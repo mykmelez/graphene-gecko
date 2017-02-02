@@ -28,6 +28,7 @@
 #include "nsTArrayForwardDeclare.h"
 #include "Units.h"
 #include "mozilla/dom/AutocompleteInfoBinding.h"
+#include "mozilla/dom/BindingDeclarations.h" // For CallerType
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/net/ReferrerPolicy.h"
@@ -804,24 +805,14 @@ public:
   /**
    * Returns origin attributes of the document.
    **/
-  static mozilla::PrincipalOriginAttributes
+  static mozilla::OriginAttributes
   GetOriginAttributes(nsIDocument* aDoc);
 
   /**
    * Returns origin attributes of the load group.
    **/
-  static mozilla::PrincipalOriginAttributes
+  static mozilla::OriginAttributes
   GetOriginAttributes(nsILoadGroup* aLoadGroup);
-
-  /**
-   * Returns true if this document is in a Private Browsing window.
-   */
-  static bool IsInPrivateBrowsing(nsIDocument* aDoc);
-
-  /**
-   * Returns true if this loadGroup uses Private Browsing.
-   */
-  static bool IsInPrivateBrowsing(nsILoadGroup* aLoadGroup);
 
   /**
    * If aNode is not an element, return true exactly when aContent's binding
@@ -2082,13 +2073,14 @@ public:
   }
 
   /*
-   * Returns true if the browser should attempt to prevent content scripts
+   * Returns true if the browser should attempt to prevent the given caller type
    * from collecting distinctive information about the browser that could
    * be used to "fingerprint" and track the user across websites.
    */
-  static bool ResistFingerprinting()
+  static bool ResistFingerprinting(mozilla::dom::CallerType aCallerType)
   {
-    return sPrivacyResistFingerprinting;
+    return aCallerType != mozilla::dom::CallerType::System &&
+           sPrivacyResistFingerprinting;
   }
 
   /**
@@ -2584,6 +2576,7 @@ public:
                                  bool aIgnoreRootScrollFrame,
                                  float aPressure,
                                  unsigned short aInputSourceArg,
+                                 uint32_t aIdentifier,
                                  bool aToWindow,
                                  bool *aPreventDefault,
                                  bool aIsDOMEventSynthesized,
@@ -2739,6 +2732,16 @@ public:
   static void AppendDocumentLevelNativeAnonymousContentTo(
       nsIDocument* aDocument,
       nsTArray<nsIContent*>& aElements);
+
+  /**
+   * Returns the content policy type that should be used for loading images
+   * for displaying in the UI.  The sources of such images can be <xul:image>,
+   * <xul:menuitem> on OSX where we load the image through nsMenuItemIconX, etc.
+   */
+  static void
+  GetContentPolicyTypeForUIImageLoading(nsIContent* aLoadingNode,
+                                        nsIPrincipal** aLoadingPrincipal,
+                                        nsContentPolicyType& aContentPolicyType);
 
 private:
   static bool InitializeEventTable();

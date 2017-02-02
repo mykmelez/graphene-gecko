@@ -39,7 +39,7 @@ var gSyncUI = {
   _syncStartTime: 0,
   _syncAnimationTimer: 0,
 
-  init: function() {
+  init() {
     Cu.import("resource://services-common/stringbundle.js");
 
     // Proceed to set up the UI if Sync has already started up.
@@ -62,7 +62,7 @@ var gSyncUI = {
     // was triggered.
     window.addEventListener("unload", function onUnload() {
       gSyncUI._unloaded = true;
-      window.removeEventListener("unload", onUnload, false);
+      window.removeEventListener("unload", onUnload);
       Services.obs.removeObserver(gSyncUI, "weave:service:ready");
       Services.obs.removeObserver(gSyncUI, "quit-application");
 
@@ -71,7 +71,7 @@ var gSyncUI = {
           Services.obs.removeObserver(gSyncUI, topic);
         });
       }
-    }, false);
+    });
   },
 
   initUI: function SUI_initUI() {
@@ -97,55 +97,36 @@ var gSyncUI = {
   // Returns a promise that resolves with true if Sync needs to be configured,
   // false otherwise.
   _needsSetup() {
-    // If Sync is configured for FxAccounts then we do that promise-dance.
-    if (this.weaveService.fxAccountsEnabled) {
-      return fxAccounts.getSignedInUser().then(user => {
-        // We want to treat "account needs verification" as "needs setup".
-        return !(user && user.verified);
-      });
-    }
-    // We are using legacy sync - check that.
-    let firstSync = "";
-    try {
-      firstSync = Services.prefs.getCharPref("services.sync.firstSync");
-    } catch (e) { }
-
-    return Promise.resolve(Weave.Status.checkSetup() == Weave.CLIENT_NOT_CONFIGURED ||
-                           firstSync == "notReady");
+    return fxAccounts.getSignedInUser().then(user => {
+      // We want to treat "account needs verification" as "needs setup".
+      return !(user && user.verified);
+    });
   },
 
   // Returns a promise that resolves with true if the user currently signed in
   // to Sync needs to be verified, false otherwise.
   _needsVerification() {
-    // For callers who care about the distinction between "needs setup" and
-    // "needs verification"
-    if (this.weaveService.fxAccountsEnabled) {
-      return fxAccounts.getSignedInUser().then(user => {
-        // If there is no user, they can't be in a "needs verification" state.
-        if (!user) {
-          return false;
-        }
-        return !user.verified;
-      });
-    }
-
-    // Otherwise we are configured for legacy Sync, which has no verification
-    // concept.
-    return Promise.resolve(false);
+    return fxAccounts.getSignedInUser().then(user => {
+      // If there is no user, they can't be in a "needs verification" state.
+      if (!user) {
+        return false;
+      }
+      return !user.verified;
+    });
   },
 
   // Note that we don't show login errors in a notification bar here, but do
   // still need to track a login-failed state so the "Tools" menu updates
   // with the correct state.
-  _loginFailed: function() {
+  loginFailed() {
     // If Sync isn't already ready, we don't want to force it to initialize
     // by referencing Weave.Status - and it isn't going to be accurate before
     // Sync is ready anyway.
     if (!this.weaveService.ready) {
-      this.log.debug("_loginFailed has sync not ready, so returning false");
+      this.log.debug("loginFailed has sync not ready, so returning false");
       return false;
     }
-    this.log.debug("_loginFailed has sync state=${sync}",
+    this.log.debug("loginFailed has sync state=${sync}",
                    { sync: Weave.Status.login});
     return Weave.Status.login == Weave.LOGIN_FAILED_LOGIN_REJECTED;
   },
@@ -163,7 +144,7 @@ var gSyncUI = {
       if (!gBrowser)
         return Promise.resolve();
 
-      let loginFailed = this._loginFailed();
+      let loginFailed = this.loginFailed();
 
       // Start off with a clean slate
       document.getElementById("sync-reauth-state").hidden = true;
@@ -242,7 +223,7 @@ var gSyncUI = {
     this.updateUI();
   },
 
-  _getAppName: function() {
+  _getAppName() {
     let brand = new StringBundle("chrome://branding/locale/brand.properties");
     return brand.get("brandShortName");
   },
@@ -266,8 +247,8 @@ var gSyncUI = {
   // via the UI.
   handleToolbarButton() {
     this._needsSetup().then(needsSetup => {
-      if (needsSetup || this._loginFailed()) {
-        this.openSetup();
+      if (needsSetup || this.loginFailed()) {
+        this.openPrefs();
       } else {
         this.doSync();
       }
@@ -277,50 +258,16 @@ var gSyncUI = {
   },
 
   /**
-   * Invoke the Sync setup wizard.
+   * Open the Sync preferences.
    *
-   * @param wizardType
-   *        Indicates type of wizard to launch:
-   *          null    -- regular set up wizard
-   *          "pair"  -- pair a device first
-   *          "reset" -- reset sync
    * @param entryPoint
    *        Indicates the entrypoint from where this method was called.
    */
-
-  openSetup: function SUI_openSetup(wizardType, entryPoint = "syncbutton") {
-    if (this.weaveService.fxAccountsEnabled) {
-      this.openPrefs(entryPoint);
-    } else {
-      let win = Services.wm.getMostRecentWindow("Weave:AccountSetup");
-      if (win)
-        win.focus();
-      else {
-        window.openDialog("chrome://browser/content/sync/setup.xul",
-                          "weaveSetup", "centerscreen,chrome,resizable=no",
-                          wizardType);
-      }
-    }
-  },
-
-  // Open the legacy-sync device pairing UI. Note used for FxA Sync.
-  openAddDevice: function() {
-    if (!Weave.Utils.ensureMPUnlocked())
-      return;
-
-    let win = Services.wm.getMostRecentWindow("Sync:AddDevice");
-    if (win)
-      win.focus();
-    else
-      window.openDialog("chrome://browser/content/sync/addDevice.xul",
-                        "syncAddDevice", "centerscreen,chrome,resizable=no");
-  },
-
-  openPrefs: function(entryPoint) {
+  openPrefs(entryPoint = "syncbutton") {
     openPreferences("paneSync", { urlParams: { entrypoint: entryPoint } });
   },
 
-  openSignInAgainPage: function(entryPoint = "syncbutton") {
+  openSignInAgainPage(entryPoint = "syncbutton") {
     gFxAccounts.openSignInAgainPage(entryPoint);
   },
 
@@ -374,13 +321,14 @@ var gSyncUI = {
       return;
 
     let email;
-    try {
-      email = Services.prefs.getCharPref("services.sync.username");
-    } catch (ex) {}
+    let user = yield fxAccounts.getSignedInUser();
+    if (user) {
+      email = user.email;
+    }
 
     let needsSetup = yield this._needsSetup();
     let needsVerification = yield this._needsVerification();
-    let loginFailed = this._loginFailed();
+    let loginFailed = this.loginFailed();
     // This is a little messy as the Sync buttons are 1/2 Sync related and
     // 1/2 FxA related - so for some strings we use Sync strings, but for
     // others we reach into gFxAccounts for strings.
@@ -399,8 +347,7 @@ var gSyncUI = {
       try {
         let lastSync = new Date(Services.prefs.getCharPref("services.sync.lastSync"));
         tooltiptext = this.formatLastSyncDate(lastSync);
-      }
-      catch (e) {
+      } catch (e) {
         // pref doesn't exist (which will be the case until we've seen the
         // first successful sync) or is invalid (which should be impossible!)
         // Just leave tooltiptext as the empty string in these cases, which
@@ -423,7 +370,7 @@ var gSyncUI = {
     }
   }),
 
-  formatLastSyncDate: function(date) {
+  formatLastSyncDate(date) {
     let dateFormat;
     let sixDaysAgo = (() => {
       let tempDate = new Date();
@@ -433,15 +380,15 @@ var gSyncUI = {
     })();
     // It may be confusing for the user to see "Last Sync: Monday" when the last sync was a indeed a Monday but 3 weeks ago
     if (date < sixDaysAgo) {
-      dateFormat = {month: 'long', day: 'numeric'};
+      dateFormat = {month: "long", day: "numeric"};
     } else {
-      dateFormat = {weekday: 'long', hour: 'numeric', minute: 'numeric'};
+      dateFormat = {weekday: "long", hour: "numeric", minute: "numeric"};
     }
     let lastSyncDateString = date.toLocaleDateString(undefined, dateFormat);
     return this._stringBundle.formatStringFromName("lastSync2.label", [lastSyncDateString], 1);
   },
 
-  onClientsSynced: function() {
+  onClientsSynced() {
     let broadcaster = document.getElementById("sync-syncnow-state");
     if (broadcaster) {
       if (Weave.Service.clientsEngine.stats.numClients > 1) {

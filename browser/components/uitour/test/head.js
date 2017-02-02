@@ -252,9 +252,7 @@ function loadUITourTestPage(callback, host = "https://example.org/") {
   gTestTab = gBrowser.addTab(url);
   gBrowser.selectedTab = gTestTab;
 
-  gTestTab.linkedBrowser.addEventListener("load", function onLoad() {
-    gTestTab.linkedBrowser.removeEventListener("load", onLoad, true);
-
+  gTestTab.linkedBrowser.addEventListener("load", function() {
     if (gMultiProcessBrowser) {
       // When e10s is enabled, make gContentAPI and gContentWindow proxies which has every property
       // return a function which calls the method of the same name on
@@ -343,7 +341,7 @@ function loadUITourTestPage(callback, host = "https://example.org/") {
     }
 
     waitForFocus(callback, gTestTab.linkedBrowser);
-  }, true);
+  }, {capture: true, once: true});
 }
 
 // Wrapper for UITourTest to be used by add_task tests.
@@ -354,8 +352,8 @@ function* setup_UITourTest() {
 // Use `add_task(setup_UITourTest);` instead as we will fold this into `setup_UITourTest` once all tests are using `add_UITour_task`.
 function UITourTest(usingAddTask = false) {
   Services.prefs.setBoolPref("browser.uitour.enabled", true);
-  let testHttpsUri = Services.io.newURI("https://example.org", null, null);
-  let testHttpUri = Services.io.newURI("http://example.org", null, null);
+  let testHttpsUri = Services.io.newURI("https://example.org");
+  let testHttpUri = Services.io.newURI("http://example.org");
   Services.perms.add(testHttpsUri, "uitour", Services.perms.ALLOW_ACTION);
   Services.perms.add(testHttpUri, "uitour", Services.perms.ALLOW_ACTION);
 

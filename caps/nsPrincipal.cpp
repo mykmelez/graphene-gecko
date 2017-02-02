@@ -82,7 +82,7 @@ nsPrincipal::~nsPrincipal()
 }
 
 nsresult
-nsPrincipal::Init(nsIURI *aCodebase, const PrincipalOriginAttributes& aOriginAttributes)
+nsPrincipal::Init(nsIURI *aCodebase, const OriginAttributes& aOriginAttributes)
 {
   NS_ENSURE_STATE(!mInitialized);
   NS_ENSURE_ARG(aCodebase);
@@ -169,7 +169,10 @@ nsPrincipal::GetOriginInternal(nsACString& aOrigin)
   nsCOMPtr<nsIURIWithPrincipal> uriWithPrincipal = do_QueryInterface(origin);
   if (uriWithPrincipal) {
     nsCOMPtr<nsIPrincipal> uriPrincipal;
-    if (uriWithPrincipal) {
+    rv = uriWithPrincipal->GetPrincipal(getter_AddRefs(uriPrincipal));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (uriPrincipal) {
       return uriPrincipal->GetOriginNoSuffix(aOrigin);
     }
   }
@@ -183,8 +186,23 @@ nsPrincipal::GetOriginInternal(nsACString& aOrigin)
   // in the origin string
   nsCOMPtr<nsIStandardURL> standardURL = do_QueryInterface(origin);
   NS_ENSURE_TRUE(standardURL, NS_ERROR_FAILURE);
+
   rv = origin->GetAsciiSpec(aOrigin);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  // The origin, when taken from the spec, should not contain the ref part of
+  // the URL.
+
+  int32_t pos = aOrigin.FindChar('?');
+  int32_t hashPos = aOrigin.FindChar('#');
+
+  if (hashPos != kNotFound && (pos == kNotFound || hashPos < pos)) {
+    pos = hashPos;
+  }
+
+  if (pos != kNotFound) {
+    aOrigin.Truncate(pos);
+  }
 
   return NS_OK;
 }
@@ -389,7 +407,7 @@ nsPrincipal::Read(nsIObjectInputStream* aStream)
   rv = aStream->ReadCString(suffix);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  PrincipalOriginAttributes attrs;
+  OriginAttributes attrs;
   bool ok = attrs.PopulateFromSuffix(suffix);
   NS_ENSURE_TRUE(ok, NS_ERROR_FAILURE);
 
@@ -673,7 +691,7 @@ struct OriginComparator
 };
 
 nsExpandedPrincipal::nsExpandedPrincipal(nsTArray<nsCOMPtr<nsIPrincipal>> &aWhiteList,
-                                         const PrincipalOriginAttributes& aAttrs)
+                                         const OriginAttributes& aAttrs)
 {
   // We force the principals to be sorted by origin so that nsExpandedPrincipal
   // origins can have a canonical form.

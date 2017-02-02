@@ -16,6 +16,8 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
+Cu.importGlobalProperties(["URL"]);
+
 XPCOMUtils.defineLazyModuleGetter(this, "AutoMigrate",
                                   "resource:///modules/AutoMigrate.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
@@ -37,6 +39,9 @@ var gMigrators = null;
 var gProfileStartup = null;
 var gMigrationBundle = null;
 var gPreviousDefaultBrowserKey = "";
+
+let gKeepUndoData = false;
+let gUndoData = null;
 
 XPCOMUtils.defineLazyGetter(this, "gAvailableMigratorKeys", function() {
   if (AppConstants.platform == "win") {
@@ -289,21 +294,16 @@ this.MigratorPrototype = {
         MigrationUtils._importQuantities[resourceType] = 0;
       }
       notify("Migration:Started");
-      for (let [key, value] of resourcesGroupedByItems) {
-        // Workaround bug 449811.
-        let migrationType = key, itemResources = value;
-
+      for (let [migrationType, itemResources] of resourcesGroupedByItems) {
         notify("Migration:ItemBeforeMigrate", migrationType);
 
         let itemSuccess = false;
         for (let res of itemResources) {
-          // Workaround bug 449811.
-          let resource = res;
-          maybeStartTelemetryStopwatch(migrationType, resource);
+          maybeStartTelemetryStopwatch(migrationType, res);
           let completeDeferred = PromiseUtils.defer();
           let resourceDone = function(aSuccess) {
-            maybeStopTelemetryStopwatch(migrationType, resource);
-            itemResources.delete(resource);
+            maybeStopTelemetryStopwatch(migrationType, res);
+            itemResources.delete(res);
             itemSuccess |= aSuccess;
             if (itemResources.size == 0) {
               notify(itemSuccess ?
@@ -321,9 +321,8 @@ this.MigratorPrototype = {
           // If migrate throws, an error occurred, and the callback
           // (itemMayBeDone) might haven't been called.
           try {
-            resource.migrate(resourceDone);
-          }
-          catch (ex) {
+            res.migrate(resourceDone);
+          } catch (ex) {
             Cu.reportError(ex);
             resourceDone(false);
           }
@@ -395,12 +394,10 @@ this.MigratorPrototype = {
         let resources = this._getMaybeCachedResources("");
         if (resources && resources.length > 0)
           exists = true;
-      }
-      else {
+      } else {
         exists = profiles.length > 0;
       }
-    }
-    catch (ex) {
+    } catch (ex) {
       Cu.reportError(ex);
     }
     return exists;
@@ -412,8 +409,7 @@ this.MigratorPrototype = {
     if (this._resourcesByProfile) {
       if (profileKey in this._resourcesByProfile)
         return this._resourcesByProfile[profileKey];
-    }
-    else {
+    } else {
       this._resourcesByProfile = { };
     }
     this._resourcesByProfile[profileKey] = this.getResources(aProfile);
@@ -474,8 +470,7 @@ this.MigrationUtils = Object.freeze({
       try {
         aFunction.apply(null, arguments);
         success = true;
-      }
-      catch (ex) {
+      } catch (ex) {
         Cu.reportError(ex);
       }
       // Do not change this to call aCallback directly in try try & catch
@@ -663,13 +658,11 @@ this.MigrationUtils = Object.freeze({
     let migrator = null;
     if (this._migrators.has(aKey)) {
       migrator = this._migrators.get(aKey);
-    }
-    else {
+    } else {
       try {
         migrator = Cc["@mozilla.org/profile/migrator;1?app=browser&type=" +
                       aKey].createInstance(Ci.nsIBrowserProfileMigrator);
-      }
-      catch (ex) { Cu.reportError(ex) }
+      } catch (ex) { Cu.reportError(ex) }
       this._migrators.set(aKey, migrator);
     }
 
@@ -711,8 +704,7 @@ this.MigrationUtils = Object.freeze({
       if (!key && browserDesc.startsWith("Firefox")) {
         key = "firefox";
       }
-    }
-    catch (ex) {
+    } catch (ex) {
       Cu.reportError("Could not detect default browser: " + ex);
     }
 
@@ -889,8 +881,7 @@ this.MigrationUtils = Object.freeze({
       }
       migratorKey = aMigratorKey;
       skipSourcePage = true;
-    }
-    else {
+    } else {
       let defaultBrowserKey = this.getMigratorKeyForDefaultBrowser();
       if (defaultBrowserKey) {
         migrator = this.getMigrator(defaultBrowserKey);
@@ -948,17 +939,104 @@ this.MigrationUtils = Object.freeze({
 
   insertBookmarkWrapper(bookmark) {
     this._importQuantities.bookmarks++;
-    return PlacesUtils.bookmarks.insert(bookmark);
+    let insertionPromise = PlacesUtils.bookmarks.insert(bookmark);
+    if (!gKeepUndoData) {
+      return insertionPromise;
+    }
+    // If we keep undo data, add a promise handler that stores the undo data once
+    // the bookmark has been inserted in the DB, and then returns the bookmark.
+    let {parentGuid} = bookmark;
+    return insertionPromise.then(bm => {
+      let {guid, lastModified, type} = bm;
+      gUndoData.get("bookmarks").push({
+        parentGuid, guid, lastModified, type
+      });
+      return bm;
+    });
   },
 
   insertVisitsWrapper(places, options) {
     this._importQuantities.history += places.length;
+    if (gKeepUndoData) {
+      this._updateHistoryUndo(places);
+    }
     return PlacesUtils.asyncHistory.updatePlaces(places, options);
   },
 
   insertLoginWrapper(login) {
     this._importQuantities.logins++;
-    return LoginHelper.maybeImportLogin(login);
+    let insertedLogin = LoginHelper.maybeImportLogin(login);
+    // Note that this means that if we import a login that has a newer password
+    // than we know about, we will update the login, and an undo of the import
+    // will not revert this. This seems preferable over removing the login
+    // outright or storing the old password in the undo file.
+    if (insertedLogin && gKeepUndoData) {
+      let {guid, timePasswordChanged} = insertedLogin;
+      gUndoData.get("logins").push({guid, timePasswordChanged});
+    }
+  },
+
+  initializeUndoData() {
+    gKeepUndoData = true;
+    gUndoData = new Map([["bookmarks", []], ["visits", []], ["logins", []]]);
+  },
+
+  _postProcessUndoData: Task.async(function*(state) {
+    if (!state) {
+      return state;
+    }
+    let bookmarkFolders = state.get("bookmarks").filter(b => b.type == PlacesUtils.bookmarks.TYPE_FOLDER);
+
+    let bookmarkFolderData = [];
+    let bmPromises = bookmarkFolders.map(({guid}) => {
+      // Ignore bookmarks where the promise doesn't resolve (ie that are missing)
+      // Also check that the bookmark fetch returns isn't null before adding it.
+      return PlacesUtils.bookmarks.fetch(guid).then(bm => bm && bookmarkFolderData.push(bm), () => {});
+    });
+
+    yield Promise.all(bmPromises);
+    let folderLMMap = new Map(bookmarkFolderData.map(b => [b.guid, b.lastModified]));
+    for (let bookmark of bookmarkFolders) {
+      let lastModified = folderLMMap.get(bookmark.guid);
+      // If the bookmark was deleted, the map will be returning null, so check:
+      if (lastModified) {
+        bookmark.lastModified = lastModified;
+      }
+    }
+    return state;
+  }),
+
+  stopAndRetrieveUndoData() {
+    let undoData = gUndoData;
+    gUndoData = null;
+    gKeepUndoData = false;
+    return this._postProcessUndoData(undoData);
+  },
+
+  _updateHistoryUndo(places) {
+    let visits = gUndoData.get("visits");
+    let visitMap = new Map(visits.map(v => [v.url, v]));
+    for (let place of places) {
+      let visitCount = place.visits.length;
+      let first = Math.min.apply(Math, place.visits.map(v => v.visitDate));
+      let last = Math.max.apply(Math, place.visits.map(v => v.visitDate));
+      let url = place.uri.spec;
+      try {
+        new URL(url);
+      } catch (ex) {
+        // This won't save and we won't need to 'undo' it, so ignore this URL.
+        continue;
+      }
+      if (!visitMap.has(url)) {
+        visitMap.set(url, {url, visitCount, first, last});
+      } else {
+        let currentData = visitMap.get(url);
+        currentData.visitCount += visitCount;
+        currentData.first = Math.min(currentData.first, first);
+        currentData.last = Math.max(currentData.last, last);
+      }
+    }
+    gUndoData.set("visits", Array.from(visitMap.values()));
   },
 
   /**

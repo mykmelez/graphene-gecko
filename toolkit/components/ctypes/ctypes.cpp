@@ -12,6 +12,7 @@
 #include "mozilla/Preferences.h"
 #include "mozJSComponentLoader.h"
 #include "nsZipArchive.h"
+#include "xpc_make_class.h"
 
 #define JSCTYPES_CONTRACTID \
   "@mozilla.org/jsctypes;1"
@@ -56,8 +57,7 @@ Module::~Module() = default;
 
 #define XPC_MAP_CLASSNAME Module
 #define XPC_MAP_QUOTED_CLASSNAME "Module"
-#define XPC_MAP_WANT_CALL
-#define XPC_MAP_FLAGS nsIXPCScriptable::WANT_CALL
+#define XPC_MAP_FLAGS XPC_SCRIPTABLE_WANT_CALL
 #include "xpc_map_end.h"
 
 static bool

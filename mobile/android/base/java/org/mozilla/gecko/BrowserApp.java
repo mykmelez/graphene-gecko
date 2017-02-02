@@ -35,7 +35,9 @@ import org.mozilla.gecko.distribution.Distribution;
 import org.mozilla.gecko.distribution.DistributionStoreCallback;
 import org.mozilla.gecko.distribution.PartnerBrowserCustomizationsClient;
 import org.mozilla.gecko.dlc.DownloadContentService;
+import org.mozilla.gecko.icons.IconsHelper;
 import org.mozilla.gecko.icons.decoders.IconDirectoryEntry;
+import org.mozilla.gecko.icons.decoders.FaviconDecoder;
 import org.mozilla.gecko.feeds.ContentNotificationsDelegate;
 import org.mozilla.gecko.feeds.FeedService;
 import org.mozilla.gecko.firstrun.FirstrunAnimationContainer;
@@ -54,8 +56,6 @@ import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.HomePanelsManager;
 import org.mozilla.gecko.home.HomeScreen;
 import org.mozilla.gecko.home.SearchEngine;
-import org.mozilla.gecko.icons.IconCallback;
-import org.mozilla.gecko.icons.IconResponse;
 import org.mozilla.gecko.icons.Icons;
 import org.mozilla.gecko.javaaddons.JavaAddonManager;
 import org.mozilla.gecko.media.VideoPlayer;
@@ -75,7 +75,6 @@ import org.mozilla.gecko.reader.SavedReaderViewHelper;
 import org.mozilla.gecko.reader.ReaderModeUtils;
 import org.mozilla.gecko.reader.ReadingListHelper;
 import org.mozilla.gecko.restrictions.Restrictable;
-import org.mozilla.gecko.restrictions.RestrictedProfileConfiguration;
 import org.mozilla.gecko.restrictions.Restrictions;
 import org.mozilla.gecko.search.SearchEngineManager;
 import org.mozilla.gecko.sync.repositories.android.FennecTabsRepository;
@@ -98,7 +97,7 @@ import org.mozilla.gecko.updater.PostUpdateHandler;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.util.Clipboard;
-import org.mozilla.gecko.util.BundleEventListener;
+import org.mozilla.gecko.util.ContextUtils;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GamepadUtils;
@@ -143,8 +142,6 @@ import android.support.v4.app.NotificationCompat;
 import android.support.v4.view.MenuItemCompat;
 import android.text.TextUtils;
 import android.util.AttributeSet;
-import android.util.Base64;
-import android.util.Base64OutputStream;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
@@ -165,14 +162,13 @@ import android.widget.Button;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.ViewFlipper;
-import com.keepsafe.switchboard.AsyncConfigLoader;
-import com.keepsafe.switchboard.SwitchBoard;
+import org.mozilla.gecko.switchboard.AsyncConfigLoader;
+import org.mozilla.gecko.switchboard.SwitchBoard;
 import android.animation.Animator;
 import android.animation.ObjectAnimator;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -181,7 +177,6 @@ import java.net.URLEncoder;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -603,6 +598,12 @@ public class BrowserApp extends GeckoApp
         final SafeIntent intent = new SafeIntent(getIntent());
         final boolean isInAutomation = IntentUtils.getIsInAutomationFromEnvironment(intent);
 
+        if (!isInAutomation && AppConstants.MOZ_ANDROID_DOWNLOAD_CONTENT_SERVICE) {
+            // Kick off download of app content as early as possible so that in the best case it's
+            // available before the user starts using the browser.
+            DownloadContentService.startStudy(this);
+        }
+
         // This has to be prepared prior to calling GeckoApp.onCreate, because
         // widget code and BrowserToolbar need it, and they're created by the
         // layout, which GeckoApp takes care of.
@@ -653,9 +654,20 @@ public class BrowserApp extends GeckoApp
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        if (BrowserApp.this.isFinishing()) {
+                            // TabHistoryController is rather slow - and involves calling into Gecko
+                            // to retrieve tab history. That means there can be a significant
+                            // delay between the back-button long-press, and onShowHistory()
+                            // being called. Hence we need to guard against the Activity being
+                            // shut down (in which case trying to perform UI changes, such as showing
+                            // fragments below, will crash).
+                            return;
+                        }
+
                         final TabHistoryFragment fragment = TabHistoryFragment.newInstance(historyPageList, toIndex);
                         final FragmentManager fragmentManager = getSupportFragmentManager();
                         GeckoAppShell.vibrateOnHapticFeedbackEnabled(getResources().getIntArray(R.array.long_press_vibrate_msec));
+                        if (BrowserApp.this.isForegrounded())
                         fragment.show(R.id.tab_history_panel, fragmentManager.beginTransaction(), TAB_HISTORY_FRAGMENT_TAG);
                     }
                 });
@@ -724,7 +736,6 @@ public class BrowserApp extends GeckoApp
 
         EventDispatcher.getInstance().registerGeckoThreadListener(this,
             "Search:Keyword",
-            "Favicon:CacheLoad",
             null);
 
         EventDispatcher.getInstance().registerUiThreadListener(this,
@@ -739,17 +750,20 @@ public class BrowserApp extends GeckoApp
             "CharEncoding:State",
             "Settings:Show",
             "Updater:Launch",
+            "Sanitize:OpenTabs",
             null);
 
         EventDispatcher.getInstance().registerBackgroundThreadListener(this,
             "Experiments:GetActive",
             "Experiments:SetOverride",
             "Experiments:ClearOverride",
+            "Favicon:Request",
             "Feedback:MaybeLater",
             "Sanitize:ClearHistory",
             "Sanitize:ClearSyncedTabs",
             "Telemetry:Gather",
             "Download:AndroidDownloadManager",
+            "Website:AppInstalled",
             "Website:Metadata",
             null);
 
@@ -918,6 +932,11 @@ public class BrowserApp extends GeckoApp
      * @param intent Intent that launched this activity
      */
     private void checkFirstrun(Context context, SafeIntent intent) {
+        if (getProfile().inGuestMode()) {
+            // We do not want to show any first run tour for guest profiles.
+            return;
+        }
+
         if (intent.getBooleanExtra(EXTRA_SKIP_STARTPANE, false)) {
             // Note that we don't set the pref, so subsequent launches can result
             // in the firstrun pane being shown.
@@ -1059,6 +1078,7 @@ public class BrowserApp extends GeckoApp
     @Override
     public void onResume() {
         super.onResume();
+
         if (mIsAbortingAppLaunch) {
             return;
         }
@@ -1369,7 +1389,6 @@ public class BrowserApp extends GeckoApp
                 @Override
                 public void run() {
                     GeckoAppShell.createShortcut(title, url);
-
                 }
             });
 
@@ -1432,7 +1451,6 @@ public class BrowserApp extends GeckoApp
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener(this,
             "Search:Keyword",
-            "Favicon:CacheLoad",
             null);
 
         EventDispatcher.getInstance().unregisterUiThreadListener(this,
@@ -1447,17 +1465,20 @@ public class BrowserApp extends GeckoApp
             "CharEncoding:State",
             "Settings:Show",
             "Updater:Launch",
+            "Sanitize:OpenTabs",
             null);
 
         EventDispatcher.getInstance().unregisterBackgroundThreadListener(this,
             "Experiments:GetActive",
             "Experiments:SetOverride",
             "Experiments:ClearOverride",
+            "Favicon:Request",
             "Feedback:MaybeLater",
             "Sanitize:ClearHistory",
             "Sanitize:ClearSyncedTabs",
             "Telemetry:Gather",
             "Download:AndroidDownloadManager",
+            "Website:AppInstalled",
             "Website:Metadata",
             null);
 
@@ -1477,7 +1498,7 @@ public class BrowserApp extends GeckoApp
             delegate.onDestroy(this);
         }
 
-        deleteTempFiles();
+        deleteTempFiles(getApplicationContext());
 
         if (mDoorHangerPopup != null)
             mDoorHangerPopup.destroy();
@@ -1755,8 +1776,9 @@ public class BrowserApp extends GeckoApp
                     GeckoPreferences.broadcastStumblerPref(BrowserApp.this);
                 }
 
-                if (AppConstants.MOZ_ANDROID_DOWNLOAD_CONTENT_SERVICE) {
-                    // TODO: Better scheduling of sync action (Bug 1257492)
+                if (AppConstants.MOZ_ANDROID_DOWNLOAD_CONTENT_SERVICE &&
+                        !IntentUtils.getIsInAutomationFromEnvironment(new SafeIntent(getIntent()))) {
+                    // TODO: Better scheduling of DLC actions (Bug 1257492)
                     DownloadContentService.startSync(this);
                     DownloadContentService.startVerification(this);
                 }
@@ -1882,14 +1904,32 @@ public class BrowserApp extends GeckoApp
                 Experiments.clearOverride(getContext(), message.getString("name"));
                 break;
 
-            case "Favicon:CacheLoad":
+            case "Favicon:Request":
                 final String url = message.getString("url");
-                getFaviconFromCache(callback, url);
+                final boolean shouldSkipNetwork = message.getBoolean("skipNetwork");
+
+                if (TextUtils.isEmpty(url)) {
+                    callback.sendError(null);
+                    break;
+                }
+
+                Icons.with(this)
+                        .pageUrl(url)
+                        .privileged(false)
+                        .skipNetworkIf(shouldSkipNetwork)
+                        .executeCallbackOnBackgroundThread()
+                        .build()
+                        .execute(IconsHelper.createBase64EventCallback(callback));
                 break;
 
             case "Feedback:MaybeLater":
                 SharedPreferences settings = getPreferences(Activity.MODE_PRIVATE);
                 settings.edit().putInt(getPackageName() + ".feedback_launch_count", 0).apply();
+                break;
+
+            case "Sanitize:OpenTabs":
+                Tabs.getInstance().closeAll();
+                callback.sendSuccess(null);
                 break;
 
             case "Sanitize:ClearHistory":
@@ -1943,6 +1983,18 @@ public class BrowserApp extends GeckoApp
                     Telemetry.addToHistogram("BROWSER_IS_ASSIST_DEFAULT",
                             (isDefaultBrowser(Intent.ACTION_ASSIST) ? 1 : 0));
                 }
+
+                Telemetry.addToHistogram("FENNEC_ORBOT_INSTALLED",
+                    ContextUtils.isPackageInstalled(getContext(), "org.torproject.android") ? 1 : 0);
+                break;
+
+            case "Website:AppInstalled":
+                final String name = message.getString("name");
+                final String startUrl = message.getString("start_url");
+                final Bitmap icon = FaviconDecoder
+                    .decodeDataURI(getContext(), message.getString("icon"))
+                    .getBestBitmap(GeckoAppShell.getPreferredIconSize());
+                createShortcut(name, startUrl, icon);
                 break;
 
             case "Updater:Launch":
@@ -2030,43 +2082,6 @@ public class BrowserApp extends GeckoApp
                 super.handleMessage(event, message, callback);
                 break;
         }
-    }
-
-    private void getFaviconFromCache(final EventCallback callback, final String url) {
-        Icons.with(this)
-                .pageUrl(url)
-                .skipNetwork()
-                .executeCallbackOnBackgroundThread()
-                .build()
-                .execute(new IconCallback() {
-                    @Override
-                    public void onIconResponse(IconResponse response) {
-                        ByteArrayOutputStream out = null;
-                        Base64OutputStream b64 = null;
-
-                        try {
-                            out = new ByteArrayOutputStream();
-                            out.write("data:image/png;base64,".getBytes());
-                            b64 = new Base64OutputStream(out, Base64.NO_WRAP);
-                            response.getBitmap().compress(Bitmap.CompressFormat.PNG, 100, b64);
-                            callback.sendSuccess(new String(out.toByteArray()));
-                        } catch (IOException e) {
-                            Log.w(LOGTAG, "Failed to convert to base64 data URI");
-                            callback.sendError("Failed to convert favicon to a base64 data URI");
-                        } finally {
-                            try {
-                                if (out != null) {
-                                    out.close();
-                                }
-                                if (b64 != null) {
-                                    b64.close();
-                                }
-                            } catch (IOException e) {
-                                Log.w(LOGTAG, "Failed to close the streams");
-                            }
-                        }
-                    }
-                });
     }
 
     /**
@@ -3348,8 +3363,10 @@ public class BrowserApp extends GeckoApp
         // or if the user has explicitly enabled the clear on shutdown pref.
         // (We check the pref last to save the pref read.)
         // In ICS+, it's easy to kill an app through the task switcher.
+        final SharedPreferences prefs = GeckoSharedPrefs.forProfile(this);
         final boolean visible = HardwareUtils.isTelevision() ||
-                                !PrefUtils.getStringSet(GeckoSharedPrefs.forProfile(this),
+                                prefs.getBoolean(GeckoPreferences.PREFS_SHOW_QUIT_MENU, false) ||
+                                !PrefUtils.getStringSet(prefs,
                                                         ClearOnShutdownPref.PREF,
                                                         new HashSet<String>()).isEmpty();
         aMenu.findItem(R.id.quit).setVisible(visible);
@@ -3532,7 +3549,6 @@ public class BrowserApp extends GeckoApp
 
         // Hide panel menu items if the panels themselves are hidden.
         // If we don't know whether the panels are hidden, just show the menu items.
-        final SharedPreferences prefs = GeckoSharedPrefs.forProfile(getContext());
         bookmarksList.setVisible(prefs.getBoolean(HomeConfig.PREF_KEY_BOOKMARKS_PANEL_ENABLED, true));
         historyList.setVisible(prefs.getBoolean(HomeConfig.PREF_KEY_HISTORY_PANEL_ENABLED, true));
 

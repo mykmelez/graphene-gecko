@@ -10,8 +10,8 @@
 #include "NSSCertDBTrustDomain.h"
 #include "SharedSSLState.h"
 #include "certdb.h"
-#include "mozilla/Base64.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Base64.h"
 #include "mozilla/Casting.h"
 #include "mozilla/Unused.h"
 #include "nsArray.h"
@@ -32,7 +32,6 @@
 #include "nsNSSComponent.h"
 #include "nsNSSHelper.h"
 #include "nsNSSShutDown.h"
-#include "nsPK11TokenDB.h"
 #include "nsPKCS12Blob.h"
 #include "nsPromiseFlatString.h"
 #include "nsProxyRelease.h"
@@ -249,7 +248,7 @@ nsNSSCertificateDB::handleCACertDownload(NotNull<nsIArray*> x509Certs,
   uint32_t numCerts;
 
   x509Certs->GetLength(&numCerts);
-  NS_ASSERTION(numCerts > 0, "Didn't get any certs to import.");
+  MOZ_ASSERT(numCerts > 0, "Didn't get any certs to import.");
   if (numCerts == 0)
     return NS_OK; // Nothing to import, so nothing to do.
 
@@ -345,9 +344,17 @@ nsNSSCertificateDB::handleCACertDownload(NotNull<nsIArray*> x509Certs,
                    !!(trustBits & nsIX509CertDB::TRUSTED_EMAIL),
                    !!(trustBits & nsIX509CertDB::TRUSTED_OBJSIGN));
 
-  if (CERT_AddTempCertToPerm(tmpCert.get(), nickname.get(),
-                             trust.GetTrust()) != SECSuccess) {
-    return NS_ERROR_FAILURE;
+  UniquePK11SlotInfo slot(PK11_GetInternalKeySlot());
+  SECStatus srv = PK11_ImportCert(slot.get(), tmpCert.get(), CK_INVALID_HANDLE,
+                                  nickname.get(),
+                                  false); // this parameter is ignored by NSS
+  if (srv != SECSuccess) {
+    return MapSECStatus(srv);
+  }
+  // NSS ignores the first argument to CERT_ChangeCertTrust
+  srv = CERT_ChangeCertTrust(nullptr, tmpCert.get(), trust.GetTrust());
+  if (srv != SECSuccess) {
+    return MapSECStatus(srv);
   }
 
   // Import additional delivered certificates that can be verified.
@@ -507,34 +514,30 @@ ImportCertsIntoTempStorage(int numcerts, SECItem* certs,
   return NS_OK;
 }
 
-static SECStatus
-ImportCertsIntoPermanentStorage(const UniqueCERTCertList& certChain,
-                                const SECCertUsage usage, const bool caOnly)
+static nsresult
+ImportCertsIntoPermanentStorage(const UniqueCERTCertList& certChain)
 {
-  int chainLen = 0;
-  for (CERTCertListNode *chainNode = CERT_LIST_HEAD(certChain);
+  bool encounteredFailure = false;
+  PRErrorCode savedErrorCode = 0;
+  UniquePK11SlotInfo slot(PK11_GetInternalKeySlot());
+  for (CERTCertListNode* chainNode = CERT_LIST_HEAD(certChain);
        !CERT_LIST_END(chainNode, certChain);
        chainNode = CERT_LIST_NEXT(chainNode)) {
-    chainLen++;
+    UniquePORTString nickname(CERT_MakeCANickname(chainNode->cert));
+    SECStatus srv = PK11_ImportCert(slot.get(), chainNode->cert,
+                                    CK_INVALID_HANDLE, nickname.get(),
+                                    false); // this parameter is ignored by NSS
+    if (srv != SECSuccess) {
+      encounteredFailure = true;
+      savedErrorCode = PR_GetError();
+    }
   }
 
-  SECItem **rawArray;
-  rawArray = (SECItem **) PORT_Alloc(chainLen * sizeof(SECItem *));
-  if (!rawArray) {
-    return SECFailure;
+  if (encounteredFailure) {
+    return GetXPCOMFromNSSError(savedErrorCode);
   }
 
-  int i = 0;
-  for (CERTCertListNode *chainNode = CERT_LIST_HEAD(certChain);
-       !CERT_LIST_END(chainNode, certChain);
-       chainNode = CERT_LIST_NEXT(chainNode), i++) {
-    rawArray[i] = &chainNode->cert->derCert;
-  }
-  SECStatus srv = CERT_ImportCerts(CERT_GetDefaultCertDB(), usage, chainLen,
-                                   rawArray, nullptr, true, caOnly, nullptr);
-
-  PORT_Free(rawArray);
-  return srv;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -593,11 +596,9 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t* data, uint32_t length,
       DisplayCertificateAlert(ctx, "NotImportingUnverifiedCert", certToShow, locker);
       continue;
     }
-    SECStatus srv = ImportCertsIntoPermanentStorage(certChain,
-                                                    certUsageEmailRecipient,
-                                                    false);
-    if (srv != SECSuccess) {
-      return NS_ERROR_FAILURE;
+    rv = ImportCertsIntoPermanentStorage(certChain);
+    if (NS_FAILED(rv)) {
+      return rv;
     }
     CERT_SaveSMimeProfile(node->cert, nullptr, nullptr);
   }
@@ -650,10 +651,9 @@ nsNSSCertificateDB::ImportValidCACertsInList(const UniqueCERTCertList& filteredC
       continue;
     }
 
-    SECStatus srv = ImportCertsIntoPermanentStorage(certChain, certUsageAnyCA,
-                                                    true);
-    if (srv != SECSuccess) {
-      return NS_ERROR_FAILURE;
+    nsresult rv = ImportCertsIntoPermanentStorage(certChain);
+    if (NS_FAILED(rv)) {
+      return rv;
     }
   }
 
@@ -964,7 +964,7 @@ nsNSSCertificateDB::ImportCertsFromFile(nsIFile* aFile, uint32_t aType)
 }
 
 NS_IMETHODIMP
-nsNSSCertificateDB::ImportPKCS12File(nsISupports* aToken, nsIFile* aFile)
+nsNSSCertificateDB::ImportPKCS12File(nsIFile* aFile)
 {
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
@@ -973,17 +973,11 @@ nsNSSCertificateDB::ImportPKCS12File(nsISupports* aToken, nsIFile* aFile)
 
   NS_ENSURE_ARG(aFile);
   nsPKCS12Blob blob;
-  nsCOMPtr<nsIPK11Token> token = do_QueryInterface(aToken);
-  if (token) {
-    blob.SetToken(token);
-  }
   return blob.ImportFromFile(aFile);
 }
 
 NS_IMETHODIMP
-nsNSSCertificateDB::ExportPKCS12File(nsISupports* aToken,
-                                     nsIFile* aFile,
-                                     uint32_t count,
+nsNSSCertificateDB::ExportPKCS12File(nsIFile* aFile, uint32_t count,
                                      nsIX509Cert** certs)
 {
   nsNSSShutDownPreventionLock locker;
@@ -992,19 +986,10 @@ nsNSSCertificateDB::ExportPKCS12File(nsISupports* aToken,
   }
 
   NS_ENSURE_ARG(aFile);
-  nsPKCS12Blob blob;
-  if (count == 0) return NS_OK;
-  nsCOMPtr<nsIPK11Token> localRef;
-  if (!aToken) {
-    UniquePK11SlotInfo keySlot(PK11_GetInternalKeySlot());
-    if (!keySlot) {
-      return NS_ERROR_FAILURE;
-    }
-    localRef = new nsPK11Token(keySlot.get());
-  } else {
-    localRef = do_QueryInterface(aToken);
+  if (count == 0) {
+    return NS_OK;
   }
-  blob.SetToken(localRef);
+  nsPKCS12Blob blob;
   return blob.ExportToFile(aFile, certs, count);
 }
 
@@ -1279,8 +1264,15 @@ nsNSSCertificateDB::AddCertFromBase64(const nsACString& aBase64,
     return rv;
   }
 
-  SECStatus srv = CERT_AddTempCertToPerm(tmpCert.get(), nickname.get(),
-                                         trust.GetTrust());
+  UniquePK11SlotInfo slot(PK11_GetInternalKeySlot());
+  SECStatus srv = PK11_ImportCert(slot.get(), tmpCert.get(), CK_INVALID_HANDLE,
+                                  nickname.get(),
+                                  false); // this parameter is ignored by NSS
+  if (srv != SECSuccess) {
+    return MapSECStatus(srv);
+  }
+  // NSS ignores the first argument to CERT_ChangeCertTrust
+  srv = CERT_ChangeCertTrust(nullptr, tmpCert.get(), trust.GetTrust());
   if (srv != SECSuccess) {
     return MapSECStatus(srv);
   }
@@ -1410,7 +1402,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                                resultChain,
                                                false, // don't save intermediates
                                                aFlags,
-                                               NeckoOriginAttributes(),
+                                               OriginAttributes(),
                                                &evOidPolicy);
   } else {
     result = certVerifier->VerifyCert(nssCert.get(), aUsage, aTime,
@@ -1420,7 +1412,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                       aFlags,
                                       nullptr, // stapledOCSPResponse
                                       nullptr, // sctsFromTLSExtension
-                                      NeckoOriginAttributes(),
+                                      OriginAttributes(),
                                       &evOidPolicy);
   }
 

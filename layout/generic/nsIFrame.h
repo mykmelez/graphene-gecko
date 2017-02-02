@@ -417,6 +417,24 @@ enum nsBidiDirection {
 };
 
 namespace mozilla {
+
+// https://drafts.csswg.org/css-align-3/#baseline-sharing-group
+enum BaselineSharingGroup
+{
+  // NOTE Used as an array index so must be 0 and 1.
+  eFirst = 0,
+  eLast = 1,
+};
+
+// Loosely: https://drafts.csswg.org/css-align-3/#shared-alignment-context
+enum class AlignmentContext
+{
+  eInline,
+  eTable,
+  eFlexbox,
+  eGrid,
+};
+
 /*
  * For replaced elements only. Gets the intrinsic dimensions of this element.
  * The dimensions may only be one of the following two types:
@@ -499,6 +517,8 @@ static void ReleaseValue(T* aPropertyValue)
 class nsIFrame : public nsQueryFrame
 {
 public:
+  using AlignmentContext = mozilla::AlignmentContext;
+  using BaselineSharingGroup = mozilla::BaselineSharingGroup;
   template <typename T> using Maybe = mozilla::Maybe<T>;
   using Nothing = mozilla::Nothing;
   using OnNonvisible = mozilla::OnNonvisible;
@@ -707,8 +727,9 @@ public:
   #undef STYLE_STRUCT
 
   /** Also forward GetVisitedDependentColor to the style context */
-  nscolor GetVisitedDependentColor(nsCSSPropertyID aProperty)
-    { return mStyleContext->GetVisitedDependentColor(aProperty); }
+  template<typename T, typename S>
+  nscolor GetVisitedDependentColor(T S::* aField)
+    { return mStyleContext->GetVisitedDependentColor(aField); }
 
   /**
    * These methods are to access any additional style contexts that
@@ -745,13 +766,16 @@ public:
   }
 
   /**
-   * Get the writing mode of this frame, but if it is styled with
-   * unicode-bidi: plaintext, reset the direction to the resolved paragraph
+   * Construct a writing mode for line layout in this frame.  This is
+   * the writing mode of this frame, except that if this frame is styled with
+   * unicode-bidi:plaintext, we reset the direction to the resolved paragraph
    * level of the given subframe (typically the first frame on the line),
-   * not this frame's writing mode, because the container frame could be split
-   * by hard line breaks into multiple paragraphs with different base direction.
+   * because the container frame could be split by hard line breaks into
+   * multiple paragraphs with different base direction.
+   * @param aSelfWM the WM of 'this'
    */
-  mozilla::WritingMode GetWritingMode(nsIFrame* aSubFrame) const;
+  mozilla::WritingMode WritingModeForLine(mozilla::WritingMode aSelfWM,
+                                          nsIFrame* aSubFrame) const;
 
   /**
    * Bounding rect of the frame. The values are in app units, and the origin is
@@ -1141,7 +1165,7 @@ public:
   /**
    * Get the size, in app units, of the border radii. It returns FALSE iff all
    * returned radii == 0 (so no border radii), TRUE otherwise.
-   * For the aRadii indexes, use the NS_CORNER_* constants in nsStyleConsts.h
+   * For the aRadii indexes, use the enum HalfCorner constants in gfx/2d/Types.h
    * If a side is skipped via aSkipSides, its corners are forced to 0.
    *
    * All corner radii are then adjusted so they do not require more
@@ -1168,7 +1192,7 @@ public:
    * padding box, out to outline box) by reducing radii or increasing
    * nonzero radii as appropriate.
    *
-   * Indices into aRadii are the NS_CORNER_* constants in nsStyleConsts.h
+   * Indices into aRadii are the enum HalfCorner constants in gfx/2d/Types.h
    *
    * Note that InsetBorderRadii is lossy, since it can turn nonzero
    * radii into zero, and OutsetBorderRadii does not inflate zero radii.
@@ -1180,8 +1204,8 @@ public:
 
   /**
    * Fill in border radii for this frame.  Return whether any are nonzero.
-   * Indices into aRadii are the NS_CORNER_* constants in nsStyleConsts.h
-   * aSkipSides is a union of SIDE_BIT_LEFT/RIGHT/TOP/BOTTOM bits that says
+   * Indices into aRadii are the enum HalfCorner constants in gfx/2d/Types.h
+   * aSkipSides is a union of eSideBitsLeft/Right/Top/Bottom bits that says
    * which side(s) to skip.
    *
    * Note: GetMarginBoxBorderRadii() and GetShapeBoxBorderRadii() work only
@@ -1199,11 +1223,93 @@ public:
   bool GetShapeBoxBorderRadii(nscoord aRadii[8]) const;
 
   /**
+   * XXX: this method will likely be replaced by GetVerticalAlignBaseline
    * Get the position of the frame's baseline, relative to the top of
    * the frame (its top border edge).  Only valid when Reflow is not
    * needed.
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context, with the ltr/rtl
+   * direction tweak done by nsIFrame::GetWritingMode(nsIFrame*) in inline
+   * contexts (see that method).
    */
-  virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWritingMode) const = 0;
+  virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWM) const = 0;
+
+  /**
+   * Synthesize a first(last) inline-axis baseline from our margin-box.
+   * An alphabetical baseline is at the start(end) edge and a central baseline
+   * is at the center of our block-axis margin-box (aWM tells which to use).
+   * https://drafts.csswg.org/css-align-3/#synthesize-baselines
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context
+   * @return an offset from our border-box block-axis start(end) edge for
+   * a first(last) baseline respectively
+   * (implemented in nsIFrameInlines.h)
+   */
+  inline nscoord SynthesizeBaselineBOffsetFromMarginBox(
+                   mozilla::WritingMode aWM,
+                   BaselineSharingGroup aGroup) const;
+
+  /**
+   * Synthesize a first(last) inline-axis baseline from our border-box.
+   * An alphabetical baseline is at the start(end) edge and a central baseline
+   * is at the center of our block-axis border-box (aWM tells which to use).
+   * https://drafts.csswg.org/css-align-3/#synthesize-baselines
+   * @note The returned value is only valid when reflow is not needed.
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context
+   * @return an offset from our border-box block-axis start(end) edge for
+   * a first(last) baseline respectively
+   * (implemented in nsIFrameInlines.h)
+   */
+  inline nscoord SynthesizeBaselineBOffsetFromBorderBox(
+                   mozilla::WritingMode aWM,
+                   BaselineSharingGroup aGroup) const;
+
+  /**
+   * Return the position of the frame's inline-axis baseline, or synthesize one
+   * for the given alignment context. The returned baseline is the distance from
+   * the block-axis border-box start(end) edge for aBaselineGroup eFirst(eLast).
+   * @note The returned value is only valid when reflow is not needed.
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context
+   * @param aBaselineOffset out-param, only valid if the method returns true
+   * (implemented in nsIFrameInlines.h)
+   */
+  inline nscoord BaselineBOffset(mozilla::WritingMode aWM,
+                                 BaselineSharingGroup aBaselineGroup,
+                                 AlignmentContext     aAlignmentContext) const;
+
+  /**
+   * XXX: this method is taking over the role that GetLogicalBaseline has.
+   * Return true if the frame has a CSS2 'vertical-align' baseline.
+   * If it has, then the returned baseline is the distance from the block-
+   * axis border-box start edge.
+   * @note This method should only be used in AlignmentContext::eInline contexts.
+   * @note The returned value is only valid when reflow is not needed.
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context
+   * @param aBaseline the baseline offset, only valid if the method returns true
+   */
+  virtual bool GetVerticalAlignBaseline(mozilla::WritingMode aWM,
+                                        nscoord* aBaseline) const {
+    return false;
+  }
+
+  /**
+   * Return true if the frame has a first(last) inline-axis natural baseline per
+   * CSS Box Alignment.  If so, then the returned baseline is the distance from
+   * the block-axis border-box start(end) edge for aBaselineGroup eFirst(eLast).
+   * https://drafts.csswg.org/css-align-3/#natural-baseline
+   * @note The returned value is only valid when reflow is not needed.
+   * @note You should only call this on frames with a WM that's parallel to aWM.
+   * @param aWM the writing-mode of the alignment context
+   * @param aBaseline the baseline offset, only valid if the method returns true
+   */
+  virtual bool GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
+                                         BaselineSharingGroup aBaselineGroup,
+                                         nscoord*             aBaseline) const {
+    return false;
+  }
 
   /**
    * Get the position of the baseline on which the caret needs to be placed,
@@ -1918,11 +2024,29 @@ public:
   };
 
   struct InlinePrefISizeData : public InlineIntrinsicISizeData {
+    typedef mozilla::StyleClear StyleClear;
+
     InlinePrefISizeData()
       : mLineIsEmpty(true)
     {}
 
-    void ForceBreak();
+    /**
+     * Finish the current line and start a new line.
+     *
+     * @param aBreakType controls whether isize of floats are considered
+     * and what floats are kept for the next line:
+     *  * |None| skips handling floats, which means no floats are
+     *    removed, and isizes of floats are not considered either.
+     *  * |Both| takes floats into consideration when computing isize
+     *    of the current line, and removes all floats after that.
+     *  * |Left| and |Right| do the same as |Both| except that they only
+     *    remove floats on the given side, and any floats on the other
+     *    side that are prior to a float on the given side that has a
+     *    'clear' property that clears them.
+     * All other values of StyleClear must be converted to the four
+     * physical values above for this function.
+     */
+    void ForceBreak(StyleClear aBreakType = StyleClear::Both);
 
     // The default implementation for nsIFrame::AddInlinePrefISize.
     void DefaultAddInlinePrefISize(nscoord aISize);

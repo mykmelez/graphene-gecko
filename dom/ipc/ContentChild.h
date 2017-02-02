@@ -147,10 +147,6 @@ public:
 
   RefPtr<ContentBridgeParent> mLastBridge;
 
-  PPluginModuleParent *
-  AllocPPluginModuleParent(mozilla::ipc::Transport* transport,
-                           base::ProcessId otherProcess) override;
-
   PContentBridgeParent*
   AllocPContentBridgeParent(mozilla::ipc::Transport* transport,
                             base::ProcessId otherProcess) override;
@@ -158,12 +154,14 @@ public:
   AllocPContentBridgeChild(mozilla::ipc::Transport* transport,
                            base::ProcessId otherProcess) override;
 
-  PGMPServiceChild*
-  AllocPGMPServiceChild(mozilla::ipc::Transport* transport,
-                        base::ProcessId otherProcess) override;
+  mozilla::ipc::IPCResult
+  RecvInitGMPService(Endpoint<PGMPServiceChild>&& aGMPService) override;
 
   mozilla::ipc::IPCResult
   RecvGMPsChanged(nsTArray<GMPCapabilityData>&& capabilities) override;
+
+  mozilla::ipc::IPCResult
+  RecvInitProcessHangMonitor(Endpoint<PProcessHangMonitorChild>&& aHangMonitor) override;
 
   mozilla::ipc::IPCResult
   RecvInitRendering(
@@ -179,15 +177,7 @@ public:
     Endpoint<PVRManagerChild>&& aVRBridge,
     Endpoint<PVideoDecoderManagerChild>&& aVideoManager) override;
 
-  PProcessHangMonitorChild*
-  AllocPProcessHangMonitorChild(Transport* aTransport,
-                                ProcessId aOtherProcess) override;
-
   virtual mozilla::ipc::IPCResult RecvSetProcessSandbox(const MaybeFileDesc& aBroker) override;
-
-  PBackgroundChild*
-  AllocPBackgroundChild(Transport* aTransport, ProcessId aOtherProcess)
-                        override;
 
   virtual PBrowserChild* AllocPBrowserChild(const TabId& aTabId,
                                             const IPCTabContext& aContext,
@@ -223,22 +213,6 @@ public:
 
   virtual bool
   DeallocPHeapSnapshotTempFileHelperChild(PHeapSnapshotTempFileHelperChild*) override;
-
-  virtual PMemoryReportRequestChild*
-  AllocPMemoryReportRequestChild(const uint32_t& aGeneration,
-                                 const bool& aAnonymize,
-                                 const bool& aMinimizeMemoryUsage,
-                                 const MaybeFileDesc& aDMDFile) override;
-
-  virtual bool
-  DeallocPMemoryReportRequestChild(PMemoryReportRequestChild* actor) override;
-
-  virtual mozilla::ipc::IPCResult
-  RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* aChild,
-                                      const uint32_t& aGeneration,
-                                      const bool& aAnonymize,
-                                      const bool &aMinimizeMemoryUsage,
-                                      const MaybeFileDesc &aDMDFile) override;
 
   virtual PCycleCollectWithLogsChild*
   AllocPCycleCollectWithLogsChild(const bool& aDumpAllTraces,
@@ -309,6 +283,7 @@ public:
                                const nsString& aContentDispositionFilename,
                                const bool& aForceSave,
                                const int64_t& aContentLength,
+                               const bool& aWasFileChannel,
                                const OptionalURIParams& aReferrer,
                                PBrowserChild* aBrowser) override;
 
@@ -605,6 +580,13 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvBlobURLUnregistration(const nsCString& aURI) override;
 
+  mozilla::ipc::IPCResult
+  RecvRequestMemoryReport(
+          const uint32_t& generation,
+          const bool& anonymize,
+          const bool& minimizeMemoryUsage,
+          const MaybeFileDesc& DMDFile) override;
+
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   bool
   SendGetA11yContentId();
@@ -646,6 +628,9 @@ private:
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   virtual void ProcessingError(Result aCode, const char* aReason) override;
+
+  virtual already_AddRefed<nsIEventTarget>
+  GetConstructedEventTarget(const Message& aMsg) override;
 
   InfallibleTArray<nsAutoPtr<AlertObserver> > mAlertObservers;
   RefPtr<ConsoleListener> mConsoleListener;

@@ -7,7 +7,7 @@ Cu.import("resource://services-sync/util.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 
 function makeSteamEngine() {
-  return new SyncEngine('Steam', Service);
+  return new SyncEngine("Steam", Service);
 }
 
 var server = httpd_setup({});
@@ -15,7 +15,7 @@ var server = httpd_setup({});
 
 add_task(async function test_url_attributes() {
   _("SyncEngine url attributes");
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   Service.clusterURL = "https://cluster/1.1/foo/";
   let engine = makeSteamEngine();
   try {
@@ -29,7 +29,7 @@ add_task(async function test_url_attributes() {
 
 add_task(async function test_syncID() {
   _("SyncEngine.syncID corresponds to preference");
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeSteamEngine();
   try {
     // Ensure pristine environment
@@ -49,7 +49,7 @@ add_task(async function test_syncID() {
 
 add_task(async function test_lastSync() {
   _("SyncEngine.lastSync and SyncEngine.lastSyncLocal correspond to preferences");
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeSteamEngine();
   try {
     // Ensure pristine environment
@@ -139,7 +139,7 @@ add_task(async function test_previousFailed() {
 
 add_task(async function test_resetClient() {
   _("SyncEngine.resetClient resets lastSync and toFetch");
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeSteamEngine();
   try {
     // Ensure pristine environment
@@ -168,10 +168,10 @@ add_task(async function test_wipeServer() {
 
   const PAYLOAD = 42;
   let steamCollection = new ServerWBO("steam", PAYLOAD);
-  let server = httpd_setup({
+  let steamServer = httpd_setup({
     "/1.1/foo/storage/steam": steamCollection.handler()
   });
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(steamServer);
   do_test_pending();
 
   try {
@@ -186,7 +186,7 @@ add_task(async function test_wipeServer() {
     do_check_eq(engine.toFetch.length, 0);
 
   } finally {
-    server.stop(do_test_finished);
+    steamServer.stop(do_test_finished);
     Svc.Prefs.resetBranch("");
   }
 });

@@ -86,25 +86,23 @@ function openToolbarCustomizationUI(aCallback, aBrowserWin) {
 
   aBrowserWin.gCustomizeMode.enter();
 
-  aBrowserWin.gNavToolbox.addEventListener("customizationready", function UI_loaded() {
-    aBrowserWin.gNavToolbox.removeEventListener("customizationready", UI_loaded);
+  aBrowserWin.gNavToolbox.addEventListener("customizationready", function() {
     executeSoon(function() {
       aCallback(aBrowserWin)
     });
-  });
+  }, {once: true});
 }
 
 function closeToolbarCustomizationUI(aCallback, aBrowserWin) {
-  aBrowserWin.gNavToolbox.addEventListener("aftercustomization", function unloaded() {
-    aBrowserWin.gNavToolbox.removeEventListener("aftercustomization", unloaded);
+  aBrowserWin.gNavToolbox.addEventListener("aftercustomization", function() {
     executeSoon(aCallback);
-  });
+  }, {once: true});
 
   aBrowserWin.gCustomizeMode.exit();
 }
 
 function waitForCondition(condition, nextTest, errorMsg, retryTimes) {
-  retryTimes = typeof retryTimes !== 'undefined' ?  retryTimes : 30;
+  retryTimes = typeof retryTimes !== "undefined" ? retryTimes : 30;
   var tries = 0;
   var interval = setInterval(function() {
     if (tries >= retryTimes) {
@@ -235,10 +233,9 @@ function resetBlocklist() {
 
 function whenNewWindowLoaded(aOptions, aCallback) {
   let win = OpenBrowserWindow(aOptions);
-  win.addEventListener("load", function onLoad() {
-    win.removeEventListener("load", onLoad, false);
+  win.addEventListener("load", function() {
     aCallback(win);
-  }, false);
+  }, {once: true});
 }
 
 function promiseWindowWillBeClosed(win) {
@@ -271,10 +268,9 @@ function promiseOpenAndLoadWindow(aOptions, aWaitForDelayedStartup = false) {
     }, "browser-delayed-startup-finished", false);
 
   } else {
-    win.addEventListener("load", function onLoad() {
-      win.removeEventListener("load", onLoad);
+    win.addEventListener("load", function() {
       deferred.resolve(win);
-    });
+    }, {once: true});
   }
   return deferred.promise;
 }
@@ -307,9 +303,9 @@ function waitForAsyncUpdates(aCallback, aScope, aArguments) {
 
   let commit = db.createAsyncStatement("COMMIT");
   commit.executeAsync({
-    handleResult: function() {},
-    handleError: function() {},
-    handleCompletion: function(aReason) {
+    handleResult() {},
+    handleError() {},
+    handleCompletion(aReason) {
       aCallback.apply(scope, args);
     }
   });
@@ -418,7 +414,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrows
     }
 
     let progressListener = {
-      onStateChange: function(webProgress, req, flags, status) {
+      onStateChange(webProgress, req, flags, status) {
         dump("waitForDocLoadAndStopIt: onStateChange " + flags.toString(16) + ": " + req.name + "\n");
 
         if (webProgress.isTopLevel &&
@@ -470,7 +466,7 @@ function waitForDocLoadAndStopIt(aExpectedURL, aBrowser = gBrowser.selectedBrows
 function waitForDocLoadComplete(aBrowser = gBrowser) {
   return new Promise(resolve => {
     let listener = {
-      onStateChange: function(webProgress, req, flags, status) {
+      onStateChange(webProgress, req, flags, status) {
         let docStop = Ci.nsIWebProgressListener.STATE_IS_NETWORK |
                       Ci.nsIWebProgressListener.STATE_STOP;
         info("Saw state " + flags.toString(16) + " and status " + status.toString(16));
@@ -574,12 +570,11 @@ var FullZoomHelper = {
       let didPs = false;
       let didZoom = false;
 
-      gBrowser.addEventListener("pageshow", function listener(event) {
-        gBrowser.removeEventListener("pageshow", listener, true);
+      gBrowser.addEventListener("pageshow", function(event) {
         didPs = true;
         if (didZoom)
           resolve();
-      }, true);
+      }, {capture: true, once: true});
 
       if (direction == this.BACK)
         gBrowser.goBack();
@@ -614,8 +609,7 @@ var FullZoomHelper = {
  * @resolves to the received event
  * @rejects if a valid load event is not received within a meaningful interval
  */
-function promiseTabLoadEvent(tab, url)
-{
+function promiseTabLoadEvent(tab, url) {
   info("Wait tab event: load");
 
   function handle(loadedUrl) {
@@ -673,7 +667,7 @@ function waitForNewTabEvent(aTabBrowser) {
  */
 function assertMixedContentBlockingState(tabbrowser, states = {}) {
   if (!tabbrowser || !("activeLoaded" in states) ||
-      !("activeBlocked" in states) || !("passiveLoaded" in states))  {
+      !("activeBlocked" in states) || !("passiveLoaded" in states)) {
     throw new Error("assertMixedContentBlockingState requires a browser and a states object");
   }
 
@@ -865,10 +859,9 @@ function promisePopupEvent(popup, eventSuffix) {
 
   let eventType = "popup" + eventSuffix;
   let deferred = Promise.defer();
-  popup.addEventListener(eventType, function onPopupShown(event) {
-    popup.removeEventListener(eventType, onPopupShown);
+  popup.addEventListener(eventType, function(event) {
     deferred.resolve();
-  });
+  }, {once: true});
 
   return deferred.promise;
 }
@@ -902,8 +895,7 @@ function promiseNotificationShown(notification) {
  *           notification.
  * @rejects Never.
  */
-function promiseTopicObserved(aTopic)
-{
+function promiseTopicObserved(aTopic) {
   return new Promise((resolve) => {
     Services.obs.addObserver(
       function PTO_observe(aSubject, aTopic2, aData) {
@@ -918,12 +910,12 @@ function promiseNewSearchEngine(basename) {
     info("Waiting for engine to be added: " + basename);
     let url = getRootDirectory(gTestPath) + basename;
     Services.search.addEngine(url, null, "", false, {
-      onSuccess: function(engine) {
+      onSuccess(engine) {
         info("Search engine added: " + basename);
         registerCleanupFunction(() => Services.search.removeEngine(engine));
         resolve(engine);
       },
-      onError: function(errCode) {
+      onError(errCode) {
         Assert.ok(false, "addEngine failed with error code " + errCode);
         reject();
       },
@@ -966,22 +958,21 @@ function isSecurityState(expectedState) {
 function promiseOnBookmarkItemAdded(aExpectedURI) {
   return new Promise((resolve, reject) => {
     let bookmarksObserver = {
-      onItemAdded: function(aItemId, aFolderId, aIndex, aItemType, aURI) {
+      onItemAdded(aItemId, aFolderId, aIndex, aItemType, aURI) {
         info("Added a bookmark to " + aURI.spec);
         PlacesUtils.bookmarks.removeObserver(bookmarksObserver);
         if (aURI.equals(aExpectedURI)) {
           resolve();
-        }
-        else {
+        } else {
           reject(new Error("Added an unexpected bookmark"));
         }
       },
-      onBeginUpdateBatch: function() {},
-      onEndUpdateBatch: function() {},
-      onItemRemoved: function() {},
-      onItemChanged: function() {},
-      onItemVisited: function() {},
-      onItemMoved: function() {},
+      onBeginUpdateBatch() {},
+      onEndUpdateBatch() {},
+      onItemRemoved() {},
+      onItemChanged() {},
+      onItemVisited() {},
+      onItemMoved() {},
       QueryInterface: XPCOMUtils.generateQI([
         Ci.nsINavBookmarkObserver,
       ])
@@ -1006,7 +997,7 @@ function* loadBadCertPage(url) {
     // When the certificate exception dialog has opened, click the button to add
     // an exception.
     let certExceptionDialogObserver = {
-      observe: function(aSubject, aTopic, aData) {
+      observe(aSubject, aTopic, aData) {
         if (aTopic == "cert-exception-ui-ready") {
           Services.obs.removeObserver(this, "cert-exception-ui-ready");
           let certExceptionDialog = getCertExceptionDialog(EXCEPTION_DIALOG_URI);
@@ -1023,16 +1014,9 @@ function* loadBadCertPage(url) {
                              "cert-exception-ui-ready", false);
   });
 
-  // Sometimes clearing the cert override is not immediately picked up,
-  // so we reload until we are on an actual cert error page.
-  yield BrowserTestUtils.waitForCondition(function*() {
-    yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
-    yield promiseErrorPageLoaded(gBrowser.selectedBrowser);
-    let isErrorPage = yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
-      return content.document.documentURI.startsWith("about:certerror");
-    });
-    return isErrorPage;
-  }, "Could not load error page", 1000);
+  let loaded = BrowserTestUtils.waitForErrorPage(gBrowser.selectedBrowser);
+  yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+  yield loaded;
 
   yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
     content.document.getElementById("exceptionDialogButton").click();
@@ -1073,7 +1057,7 @@ function setupRemoteClientsFixture(fixture) {
     Object.getOwnPropertyDescriptor(gFxAccounts, "remoteClients").get;
 
   Object.defineProperty(gFxAccounts, "remoteClients", {
-    get: function() { return fixture; }
+    get() { return fixture; }
   });
   return oldRemoteClientsGetter;
 }

@@ -66,7 +66,7 @@ function expectBookmarkNotifications() {
               return new Date(parseInt(arg / 1000));
             return arg;
           });
-          notifications.push({ name: name, arguments: args });
+          notifications.push({ name, arguments: args });
         }
       }
 
@@ -519,7 +519,10 @@ add_task(function* test_oldKeywordsAPI() {
 
   yield PlacesUtils.keywords.insert({ keyword: "keyword", url: "http://example.com" });
   Assert.equal(PlacesUtils.bookmarks.getKeywordForBookmark(itemId), "keyword");
-  Assert.equal(PlacesUtils.bookmarks.getURIForKeyword("keyword").spec, "http://example.com/");
+
+  let entry = yield PlacesUtils.keywords.fetch("keyword");
+  Assert.equal(entry.url, "http://example.com/");
+
   yield PlacesUtils.bookmarks.remove(bookmark);
 
   check_no_orphans();

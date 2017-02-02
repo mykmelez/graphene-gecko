@@ -32,9 +32,6 @@ class GeckoInstance(object):
         # Do not show datareporting policy notifications which can interfer with tests
         "datareporting.policy.dataSubmissionPolicyBypassNotification": True,
 
-        # Until Bug 1238095 is fixed, we have to enable CPOWs in order
-        # for Marionette tests to work properly.
-        "dom.ipc.cpows.forbid-unsafe-from-browser": False,
         "dom.ipc.reportProcessHangs": False,
 
         # No slow script dialogs
@@ -389,10 +386,8 @@ class DesktopInstance(GeckoInstance):
         # Do not show the EULA notification which can interfer with tests
         "browser.EULA.override": True,
 
-        # Bug 1145668, 1312674
-        # Turn off once Marionette can correctly handle error pages, and doesn't
-        # hang when about:blank gets loaded twice
-        "browser.newtabpage.enabled": True,
+        # Turn off about:newtab and make use of about:blank instead for new opened tabs
+        "browser.newtabpage.enabled": False,
         # Assume the about:newtab page"s intro panels have been shown to not depend on
         # which test runs first and happens to open about:newtab
         "browser.newtabpage.introShown": True,

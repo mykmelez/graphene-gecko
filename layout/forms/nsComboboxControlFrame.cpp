@@ -115,7 +115,7 @@ NS_IMPL_ISUPPORTS(nsComboButtonListener,
 // static class data member for Bug 32920
 nsComboboxControlFrame* nsComboboxControlFrame::sFocused = nullptr;
 
-nsContainerFrame*
+nsComboboxControlFrame*
 NS_NewComboboxControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsFrameState aStateFlags)
 {
   nsComboboxControlFrame* it = new (aPresShell) nsComboboxControlFrame(aContext);
@@ -249,6 +249,7 @@ nsComboboxControlFrame::~nsComboboxControlFrame()
 //--------------------------------------------------------------
 
 NS_QUERYFRAME_HEAD(nsComboboxControlFrame)
+  NS_QUERYFRAME_ENTRY(nsComboboxControlFrame)
   NS_QUERYFRAME_ENTRY(nsIComboboxControlFrame)
   NS_QUERYFRAME_ENTRY(nsIFormControlFrame)
   NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
@@ -543,7 +544,7 @@ public:
       nsCOMPtr<nsIPresShell> shell = mFrame->PresContext()->PresShell();
       shell->FrameNeedsReflow(combo->mDropdownFrame, nsIPresShell::eResize,
                               NS_FRAME_IS_DIRTY);
-      shell->FlushPendingNotifications(Flush_Layout);
+      shell->FlushPendingNotifications(FlushType::Layout);
       if (mFrame.IsAlive()) {
         combo = static_cast<nsComboboxControlFrame*>(mFrame.GetFrame());
         static_cast<nsListControlFrame*>(combo->mDropdownFrame)->
@@ -1026,7 +1027,7 @@ nsComboboxControlFrame::HandleRedisplayTextEvent()
   // 289730.
   nsWeakFrame weakThis(this);
   PresContext()->Document()->
-    FlushPendingNotifications(Flush_ContentAndNotify);
+    FlushPendingNotifications(FlushType::ContentAndNotify);
   if (!weakThis.IsAlive())
     return;
 
@@ -1347,16 +1348,9 @@ nsComboboxDisplayFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 }
 
 nsIFrame*
-nsComboboxControlFrame::CreateFrameFor(nsIContent*      aContent)
+nsComboboxControlFrame::CreateFrameForDisplayNode()
 {
-  NS_PRECONDITION(nullptr != aContent, "null ptr");
-
-  NS_ASSERTION(mDisplayContent, "mDisplayContent can't be null!");
-
-  if (mDisplayContent != aContent) {
-    // We only handle the frames for mDisplayContent here
-    return nullptr;
-  }
+  MOZ_ASSERT(mDisplayContent);
 
   // Get PresShell
   nsIPresShell *shell = PresContext()->PresShell();
@@ -1381,7 +1375,7 @@ nsComboboxControlFrame::CreateFrameFor(nsIContent*      aContent)
   nsIFrame* textFrame = NS_NewTextFrame(shell, textStyleContext);
 
   // initialize the text frame
-  textFrame->Init(aContent, mDisplayFrame, nullptr);
+  textFrame->Init(mDisplayContent, mDisplayFrame, nullptr);
   mDisplayContent->SetPrimaryFrame(textFrame);
 
   nsFrameList textList(textFrame, textFrame);

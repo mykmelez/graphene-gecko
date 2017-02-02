@@ -885,7 +885,7 @@ gfxUtils::CopySurfaceToDataSourceSurfaceWithFormat(SourceSurface* aSurface,
 
   Rect bounds(0, 0, aSurface->GetSize().width, aSurface->GetSize().height);
 
-  if (aSurface->GetType() != SurfaceType::DATA) {
+  if (!aSurface->IsDataSourceSurface()) {
     // If the surface is NOT of type DATA then its data is not mapped into main
     // memory. Format conversion is probably faster on the GPU, and by doing it
     // there we can avoid any expensive uploads/readbacks except for (possibly)
@@ -1477,7 +1477,7 @@ gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
                                    status);
 
     ErrorResult rv;
-    runnable->Dispatch(rv);
+    runnable->Dispatch(dom::workers::Terminating, rv);
     if (rv.Failed()) {
         // XXXbz This is totally broken, since we're supposed to just abort
         // everything up the callstack but the callers basically eat the

@@ -302,7 +302,8 @@ private:
                           const nsIntSize& aSize,
                           const ImageRegion& aRegion,
                           gfx::SamplingFilter aSamplingFilter,
-                          uint32_t aFlags);
+                          uint32_t aFlags,
+                          float aOpacity);
 
   Pair<DrawResult, RefPtr<gfx::SourceSurface>>
     GetFrameInternal(const gfx::IntSize& aSize,
@@ -322,7 +323,6 @@ private:
     return (mLockCount == 0 || (mAnimationState && mAnimationConsumers == 0));
   }
 
-
   //////////////////////////////////////////////////////////////////////////////
   // Decoding.
   //////////////////////////////////////////////////////////////////////////////
@@ -336,10 +336,12 @@ private:
    *
    * It's an error to call Decode() before this image's intrinsic size is
    * available. A metadata decode must successfully complete first.
+   *
+   * Returns true of the decode was run synchronously.
    */
-  NS_IMETHOD Decode(const gfx::IntSize& aSize,
-                    uint32_t aFlags,
-                    PlaybackType aPlaybackType);
+  bool Decode(const gfx::IntSize& aSize,
+              uint32_t aFlags,
+              PlaybackType aPlaybackType);
 
   /**
    * Creates and runs a metadata decoder, either synchronously or
@@ -420,11 +422,12 @@ private: // data
   NotNull<RefPtr<SourceBuffer>>  mSourceBuffer;
 
   // Boolean flags (clustered together to conserve space):
-  bool                       mHasSize:1;       // Has SetSize() been called?
-  bool                       mTransient:1;     // Is the image short-lived?
-  bool                       mSyncLoad:1;      // Are we loading synchronously?
-  bool                       mDiscardable:1;   // Is container discardable?
-  bool                       mHasSourceData:1; // Do we have source data?
+  bool                       mHasSize:1;        // Has SetSize() been called?
+  bool                       mTransient:1;      // Is the image short-lived?
+  bool                       mSyncLoad:1;       // Are we loading synchronously?
+  bool                       mDiscardable:1;    // Is container discardable?
+  bool                       mSomeSourceData:1; // Do we have some source data?
+  bool                       mAllSourceData:1;  // Do we have all the source data?
   bool                       mHasBeenDecoded:1; // Decoded at least once?
 
   // Whether we're waiting to start animation. If we get a StartAnimation() call
@@ -477,6 +480,8 @@ private: // data
   bool CanDiscard();
 
   bool IsOpaque();
+
+  DrawableSurface RequestDecodeForSizeInternal(const gfx::IntSize& aSize, uint32_t aFlags);
 
 protected:
   explicit RasterImage(ImageURL* aURI = nullptr);

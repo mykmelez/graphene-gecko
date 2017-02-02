@@ -33,23 +33,23 @@ function waitForCondition(condition, nextTest, errorMsg) {
 }
 
 var TranslationStub = {
-  translate: function(aFrom, aTo) {
+  translate(aFrom, aTo) {
     this.state = Translation.STATE_TRANSLATING;
     this.translatedFrom = aFrom;
     this.translatedTo = aTo;
   },
 
-  _reset: function() {
+  _reset() {
     this.translatedFrom = "";
     this.translatedTo = "";
   },
 
-  failTranslation: function() {
+  failTranslation() {
     this.state = Translation.STATE_ERROR;
     this._reset();
   },
 
-  finishTranslation: function() {
+  finishTranslation() {
     this.showTranslatedContent();
     this.state = Translation.STATE_TRANSLATED;
     this._reset();
@@ -77,8 +77,7 @@ function test() {
   Services.prefs.setBoolPref(kShowUIPref, true);
   let tab = gBrowser.addTab();
   gBrowser.selectedTab = tab;
-  tab.linkedBrowser.addEventListener("load", function onload() {
-    tab.linkedBrowser.removeEventListener("load", onload, true);
+  tab.linkedBrowser.addEventListener("load", function() {
     TranslationStub.browser = gBrowser.selectedBrowser;
     registerCleanupFunction(function() {
       gBrowser.removeTab(tab);
@@ -87,7 +86,7 @@ function test() {
     run_tests(() => {
       finish();
     });
-  }, true);
+  }, {capture: true, once: true});
 
   content.location = "data:text/plain,test page";
 }

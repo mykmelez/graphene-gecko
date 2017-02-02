@@ -119,6 +119,34 @@ var gTests = [
     yield expectObserverCalled("getUserMedia:response:deny");
     yield expectObserverCalled("recording-window-ended");
     yield checkNotSharing();
+
+    // Verify that we set 'Temporarily blocked' permissions.
+    let browser = gBrowser.selectedBrowser;
+    let blockedPerms = document.getElementById("blocked-permissions-container");
+
+    let {state, scope} = SitePermissions.get(null, "camera", browser);
+    Assert.equal(state, SitePermissions.BLOCK);
+    Assert.equal(scope, SitePermissions.SCOPE_TEMPORARY);
+    ok(blockedPerms.querySelector(".blocked-permission-icon.camera-icon[showing=true]"),
+       "the blocked camera icon is shown");
+
+    ({state, scope} = SitePermissions.get(null, "microphone", browser));
+    Assert.equal(state, SitePermissions.BLOCK);
+    Assert.equal(scope, SitePermissions.SCOPE_TEMPORARY);
+    ok(blockedPerms.querySelector(".blocked-permission-icon.microphone-icon[showing=true]"),
+       "the blocked microphone icon is shown");
+
+    info("requesting devices again to check temporarily blocked permissions");
+    promise = promiseMessage(permissionError);
+    yield promiseRequestDevice(true, true);
+    yield promise;
+    yield expectObserverCalled("getUserMedia:request");
+    yield expectObserverCalled("getUserMedia:response:deny");
+    yield expectObserverCalled("recording-window-ended");
+    yield checkNotSharing();
+
+    SitePermissions.remove(browser.currentURI, "camera", browser);
+    SitePermissions.remove(browser.currentURI, "microphone", browser);
   }
 },
 
@@ -147,6 +175,24 @@ var gTests = [
 
     // the stream is already closed, but this will do some cleanup anyway
     yield closeStream(true);
+
+    // After stop sharing, gUM(audio+camera) causes a prompt.
+    promise = promisePopupNotificationShown("webRTC-shareDevices");
+    yield promiseRequestDevice(true, true);
+    yield promise;
+    yield expectObserverCalled("getUserMedia:request");
+    checkDeviceSelectors(true, true);
+
+    yield promiseMessage(permissionError, () => {
+      activateSecondaryAction(kActionDeny);
+    });
+
+    yield expectObserverCalled("getUserMedia:response:deny");
+    yield expectObserverCalled("recording-window-ended");
+    yield checkNotSharing();
+    SitePermissions.remove(null, "screen", gBrowser.selectedBrowser);
+    SitePermissions.remove(null, "camera", gBrowser.selectedBrowser);
+    SitePermissions.remove(null, "microphone", gBrowser.selectedBrowser);
   }
 },
 
@@ -172,6 +218,24 @@ var gTests = [
     yield checkSharingUI({video: true, audio: true});
 
     yield reloadAndAssertClosedStreams();
+
+    // After the reload, gUM(audio+camera) causes a prompt.
+    promise = promisePopupNotificationShown("webRTC-shareDevices");
+    yield promiseRequestDevice(true, true);
+    yield promise;
+    yield expectObserverCalled("getUserMedia:request");
+    checkDeviceSelectors(true, true);
+
+    yield promiseMessage(permissionError, () => {
+      activateSecondaryAction(kActionDeny);
+    });
+
+    yield expectObserverCalled("getUserMedia:response:deny");
+    yield expectObserverCalled("recording-window-ended");
+    yield checkNotSharing();
+    SitePermissions.remove(null, "screen", gBrowser.selectedBrowser);
+    SitePermissions.remove(null, "camera", gBrowser.selectedBrowser);
+    SitePermissions.remove(null, "microphone", gBrowser.selectedBrowser);
   }
 },
 
@@ -181,7 +245,7 @@ var gTests = [
     let elt = id => document.getElementById(id);
 
     function* checkPerm(aRequestAudio, aRequestVideo,
-                       aExpectedAudioPerm, aExpectedVideoPerm, aNever) {
+                        aExpectedAudioPerm, aExpectedVideoPerm, aNever) {
       let promise = promisePopupNotificationShown("webRTC-shareDevices");
       yield promiseRequestDevice(aRequestAudio, aRequestVideo);
       yield promise;
@@ -205,8 +269,7 @@ var gTests = [
           expected.video = true;
         if (aRequestAudio)
           expected.audio = true;
-      }
-      else {
+      } else {
         yield expectObserverCalled("getUserMedia:response:deny");
         yield expectObserverCalled("recording-window-ended");
       }
@@ -281,8 +344,10 @@ var gTests = [
         });
         yield expectObserverCalled("getUserMedia:response:deny");
         yield expectObserverCalled("recording-window-ended");
-      }
-      else {
+        let browser = gBrowser.selectedBrowser;
+        SitePermissions.remove(null, "camera", browser);
+        SitePermissions.remove(null, "microphone", browser);
+      } else {
         let expectedMessage = aExpectStream ? "ok" : permissionError;
         let promise = promiseMessage(expectedMessage);
         yield promiseRequestDevice(aRequestAudio, aRequestVideo);
@@ -305,8 +370,7 @@ var gTests = [
                            " to be shared");
 
           yield closeStream();
-        }
-        else {
+        } else {
           yield expectObserverCalled("recording-window-ended");
         }
       }
@@ -450,8 +514,7 @@ var gTests = [
     if ("nsISystemStatusBar" in Ci) {
       let activeStreams = webrtcUI.getActiveStreams(true, false, false);
       webrtcUI.showSharingDoorhanger(activeStreams[0]);
-    }
-    else {
+    } else {
       let win =
         Services.wm.getMostRecentWindow("Browser:WebRTCGlobalIndicator");
       let elt = win.document.getElementById("audioVideoButton");
@@ -504,6 +567,14 @@ var gTests = [
     Perms.remove(uri, "camera");
     Perms.remove(uri, "microphone");
   }
+},
+
+{
+  desc: "getUserMedia init & uninit",
+  run: function* checkInitAndUninit() {
+    webrtcUI.uninit();
+    webrtcUI.init();
+  }
 }
 
 ];
@@ -517,9 +588,7 @@ function test() {
 
   browser.messageManager.loadFrameScript(CONTENT_SCRIPT_HELPER, true);
 
-  browser.addEventListener("load", function onload() {
-    browser.removeEventListener("load", onload, true);
-
+  browser.addEventListener("load", function() {
     is(PopupNotifications._currentNotifications.length, 0,
        "should start the test without any prior popup notification");
     ok(gIdentityHandler._identityPopup.hidden,
@@ -540,7 +609,7 @@ function test() {
      ok(false, "Unexpected Exception: " + ex);
      finish();
     });
-  }, true);
+  }, {capture: true, once: true});
   let rootDir = getRootDirectory(gTestPath);
   rootDir = rootDir.replace("chrome://mochitests/content/",
                             "https://example.com/");

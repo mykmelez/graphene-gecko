@@ -5,9 +5,9 @@
 var {WebChannel} = Cu.import("resource://gre/modules/WebChannel.jsm", {});
 
 const TEST_URL_TAIL = "example.com/browser/browser/base/content/test/general/test_remoteTroubleshoot.html"
-const TEST_URI_GOOD = Services.io.newURI("https://" + TEST_URL_TAIL, null, null);
-const TEST_URI_BAD = Services.io.newURI("http://" + TEST_URL_TAIL, null, null);
-const TEST_URI_GOOD_OBJECT = Services.io.newURI("https://" + TEST_URL_TAIL + "?object", null, null);
+const TEST_URI_GOOD = Services.io.newURI("https://" + TEST_URL_TAIL);
+const TEST_URI_BAD = Services.io.newURI("http://" + TEST_URL_TAIL);
+const TEST_URI_GOOD_OBJECT = Services.io.newURI("https://" + TEST_URL_TAIL + "?object");
 
 // Creates a one-shot web-channel for the test data to be sent back from the test page.
 function promiseChannelResponse(channelID, originOrPermission) {
@@ -64,7 +64,7 @@ add_task(function*() {
     updateChannel = Cu.import("resource://gre/modules/UpdateUtils.jsm", {}).UpdateUtils.UpdateChannel;
   } catch (ex) {}
   if (!updateChannel) {
-    Assert.ok(!('updateChannel' in got.message.application),
+    Assert.ok(!("updateChannel" in got.message.application),
                 "should not have update channel where not available.");
   } else {
     Assert.equal(got.message.application.updateChannel, updateChannel,

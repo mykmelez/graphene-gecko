@@ -858,14 +858,14 @@ class LPointer : public LInstructionHelper<1, 0, 0>
 // Constant double.
 class LDouble : public LInstructionHelper<1, 0, 0>
 {
-    wasm::RawF64 d_;
+    double d_;
   public:
     LIR_HEADER(Double);
 
-    explicit LDouble(wasm::RawF64 d) : d_(d)
+    explicit LDouble(double d) : d_(d)
     { }
 
-    wasm::RawF64 getDouble() const {
+    const double& getDouble() const {
         return d_;
     }
 };
@@ -873,15 +873,15 @@ class LDouble : public LInstructionHelper<1, 0, 0>
 // Constant float32.
 class LFloat32 : public LInstructionHelper<1, 0, 0>
 {
-    wasm::RawF32 f_;
+    float f_;
   public:
     LIR_HEADER(Float32);
 
-    explicit LFloat32(wasm::RawF32 f)
+    explicit LFloat32(float f)
       : f_(f)
     { }
 
-    wasm::RawF32 getFloat() const {
+    const float& getFloat() const {
         return f_;
     }
 };
@@ -6648,37 +6648,49 @@ class LCallGetIntrinsicValue : public LCallInstructionHelper<BOX_PIECES, 0, 0>
 
 // Patchable jump to stubs generated for a GetProperty cache, which loads a
 // boxed value.
-class LGetPropertyCacheV : public LInstructionHelper<BOX_PIECES, 1 + BOX_PIECES, 0>
+class LGetPropertyCacheV : public LInstructionHelper<BOX_PIECES, 2 * BOX_PIECES, 1>
 {
   public:
     LIR_HEADER(GetPropertyCacheV)
 
-    static const size_t Id = 1;
+    static const size_t Value = 0;
+    static const size_t Id = BOX_PIECES;
 
-    LGetPropertyCacheV(const LAllocation& object, const LBoxAllocation& id) {
-        setOperand(0, object);
+    LGetPropertyCacheV(const LBoxAllocation& value, const LBoxAllocation& id,
+                       const LDefinition& temp) {
+        setBoxOperand(Value, value);
         setBoxOperand(Id, id);
+        setTemp(0, temp);
     }
     const MGetPropertyCache* mir() const {
         return mir_->toGetPropertyCache();
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 
 // Patchable jump to stubs generated for a GetProperty cache, which loads a
 // value of a known type, possibly into an FP register.
-class LGetPropertyCacheT : public LInstructionHelper<1, 1 + BOX_PIECES, 0>
+class LGetPropertyCacheT : public LInstructionHelper<1, 2 * BOX_PIECES, 1>
 {
   public:
     LIR_HEADER(GetPropertyCacheT)
 
-    static const size_t Id = 1;
+    static const size_t Value = 0;
+    static const size_t Id = BOX_PIECES;
 
-    LGetPropertyCacheT(const LAllocation& object, const LBoxAllocation& id) {
-        setOperand(0, object);
+    LGetPropertyCacheT(const LBoxAllocation& value, const LBoxAllocation& id,
+                       const LDefinition& temp) {
+        setBoxOperand(Value, value);
         setBoxOperand(Id, id);
+        setTemp(0, temp);
     }
     const MGetPropertyCache* mir() const {
         return mir_->toGetPropertyCache();
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 

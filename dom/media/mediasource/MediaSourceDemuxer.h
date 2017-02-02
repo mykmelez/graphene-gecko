@@ -20,13 +20,14 @@
 
 namespace mozilla {
 
+class AbstractThread;
 class MediaResult;
 class MediaSourceTrackDemuxer;
 
 class MediaSourceDemuxer : public MediaDataDemuxer
 {
 public:
-  explicit MediaSourceDemuxer();
+  explicit MediaSourceDemuxer(AbstractThread* aAbstractMainThread);
 
   RefPtr<InitPromise> Init() override;
 
@@ -52,7 +53,7 @@ public:
 
   // Returns a string describing the state of the MediaSource internal
   // buffered data. Used for debugging purposes.
-  void GetMozDebugReaderData(nsAString& aString);
+  void GetMozDebugReaderData(nsACString& aString);
 
   void AddSizeOfResources(MediaSourceDecoder::ResourceSizes* aSizes);
 

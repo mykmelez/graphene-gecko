@@ -50,6 +50,7 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Unused.h"
 
 #include "jsapi.h"
@@ -84,8 +85,7 @@ static bool
 ReportOutOfRange(JSContext* cx)
 {
     // Use JSMSG_BAD_INDEX here even if it is generic, since that is
-    // the message used by ToIntegerIndex for its initial range
-    // checking.
+    // the message used by NonStandardToIndex for its initial range checking.
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
     return false;
 }
@@ -115,7 +115,7 @@ static bool
 GetTypedArrayIndex(JSContext* cx, HandleValue v, Handle<TypedArrayObject*> view, uint32_t* offset)
 {
     uint64_t index;
-    if (!js::ToIntegerIndex(cx, v, &index))
+    if (!NonStandardToIndex(cx, v, &index))
         return false;
     if (index >= view->length())
         return ReportOutOfRange(cx);
@@ -973,6 +973,11 @@ js::FutexRuntime::wait(JSContext* cx, js::UniqueLock<js::Mutex>& locked,
         return false;
     }
 
+    // Go back to Idle after returning.
+    auto onFinish = mozilla::MakeScopeExit([&] {
+        state_ = Idle;
+    });
+
     const bool isTimed = timeout.isSome();
 
     auto finalEnd = timeout.map([](mozilla::TimeDuration& timeout) {
@@ -983,8 +988,6 @@ js::FutexRuntime::wait(JSContext* cx, js::UniqueLock<js::Mutex>& locked,
     // 4000s is about the longest timeout slice that is guaranteed to
     // work cross-platform.
     auto maxSlice = mozilla::TimeDuration::FromSeconds(4000.0);
-
-    bool retval = true;
 
     for (;;) {
         // If we are doing a timed wait, calculate the end time for this wait
@@ -1011,14 +1014,14 @@ js::FutexRuntime::wait(JSContext* cx, js::UniqueLock<js::Mutex>& locked,
                 auto now = mozilla::TimeStamp::Now();
                 if (now >= *finalEnd) {
                     *result = FutexTimedOut;
-                    goto finished;
+                    return true;
                 }
             }
             break;
 
           case FutexRuntime::Woken:
             *result = FutexOK;
-            goto finished;
+            return true;
 
           case FutexRuntime::WaitingNotifiedForInterrupt:
             // The interrupt handler may reenter the engine.  In that case
@@ -1053,13 +1056,12 @@ js::FutexRuntime::wait(JSContext* cx, js::UniqueLock<js::Mutex>& locked,
             state_ = WaitingInterrupted;
             {
                 UnlockGuard<Mutex> unlock(locked);
-                retval = cx->runtime()->handleInterrupt(cx);
+                if (!cx->runtime()->handleInterrupt(cx))
+                    return false;
             }
-            if (!retval)
-                goto finished;
             if (state_ == Woken) {
                 *result = FutexOK;
-                goto finished;
+                return true;
             }
             break;
 
@@ -1067,9 +1069,6 @@ js::FutexRuntime::wait(JSContext* cx, js::UniqueLock<js::Mutex>& locked,
             MOZ_CRASH("Bad FutexState in wait()");
         }
     }
-finished:
-    state_ = Idle;
-    return retval;
 }
 
 void
@@ -1116,7 +1115,7 @@ JSObject*
 AtomicsObject::initClass(JSContext* cx, Handle<GlobalObject*> global)
 {
     // Create Atomics Object.
-    RootedObject objProto(cx, global->getOrCreateObjectPrototype(cx));
+    RootedObject objProto(cx, GlobalObject::getOrCreateObjectPrototype(cx, global));
     if (!objProto)
         return nullptr;
     RootedObject Atomics(cx, NewObjectWithGivenProto(cx, &AtomicsObject::class_, objProto,
@@ -1125,6 +1124,8 @@ AtomicsObject::initClass(JSContext* cx, Handle<GlobalObject*> global)
         return nullptr;
 
     if (!JS_DefineFunctions(cx, Atomics, AtomicsMethods))
+        return nullptr;
+    if (!DefineToStringTag(cx, Atomics, cx->names().Atomics))
         return nullptr;
 
     RootedValue AtomicsValue(cx, ObjectValue(*Atomics));

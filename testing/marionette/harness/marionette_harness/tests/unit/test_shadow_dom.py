@@ -5,7 +5,8 @@
 from marionette_driver.by import By
 from marionette_driver.errors import (
     NoSuchElementException,
-    StaleElementException
+    StaleElementException,
+    UnsupportedOperationException,
 )
 
 from marionette_harness import MarionetteTestCase
@@ -14,13 +15,22 @@ from marionette_harness import MarionetteTestCase
 class TestShadowDom(MarionetteTestCase):
 
     def setUp(self):
-        MarionetteTestCase.setUp(self)
-        self.marionette.enforce_gecko_prefs({"dom.webcomponents.enabled": True})
+        super(TestShadowDom, self).setUp()
+        self.marionette.set_pref("dom.webcomponents.enabled", True)
         self.marionette.navigate(self.marionette.absolute_url("test_shadow_dom.html"))
 
         self.host = self.marionette.find_element(By.ID, "host")
         self.marionette.switch_to_shadow_root(self.host)
         self.button = self.marionette.find_element(By.ID, "button")
+
+    def tearDown(self):
+        self.marionette.clear_pref("dom.webcomponents.enabled")
+        super(TestShadowDom, self).tearDown()
+
+    def test_chrome_error(self):
+        with self.marionette.using_context("chrome"):
+            self.assertRaises(UnsupportedOperationException,
+                              self.marionette.switch_to_shadow_root)
 
     def test_shadow_dom(self):
         # Button in shadow root should be actionable

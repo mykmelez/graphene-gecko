@@ -32,6 +32,7 @@
 #if defined(MOZ_CRASHREPORTER)
 #include "nsExceptionHandler.h"
 #endif
+#include "GeckoProfiler.h"
 
 #if defined(XP_WIN)
 #include <windows.h>
@@ -214,6 +215,7 @@ PRMonitor* gWriteReady = nullptr;
 
 void RunWriter(void* arg)
 {
+  AutoProfilerRegister registerThread("Shutdown Statistics Writer");
   PR_SetCurrentThreadName("Shutdown Statistics Writer");
 
   MOZ_LSAN_INTENTIONALLY_LEAK_OBJECT(arg);
@@ -546,7 +548,7 @@ nsTerminator::UpdateCrashReport(const char* aTopic)
 
   Unused << CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ShutdownProgress"),
                                                report);
-#endif // defined(MOZ_CRASH_REPORTER)
+#endif // defined(MOZ_CRASHREPORTER)
 }
 
 

@@ -130,7 +130,7 @@ interface OnlyForUseInConstructor {
  Constructor(DOMString str),
  Constructor(unsigned long num, boolean? boolArg),
  Constructor(TestInterface? iface),
- Constructor(long arg1, IndirectlyImplementedInterface iface),
+ Constructor(unsigned long arg1, IndirectlyImplementedInterface iface),
  Constructor(Date arg1),
  Constructor(ArrayBuffer arrayBuf),
  Constructor(Uint8Array typedArr),
@@ -675,6 +675,9 @@ interface TestInterface {
   void passUnionWithDefaultValue17(optional (double or SupportedType) arg = "text/html");
   void passUnionWithDefaultValue18(optional (double or SupportedType) arg = 1);
   void passUnionWithDefaultValue19(optional (double or SupportedType) arg = 1.5);
+  void passUnionWithDefaultValue20(optional (double or USVString) arg = "abc");
+  void passUnionWithDefaultValue21(optional (double or USVString) arg = 1);
+  void passUnionWithDefaultValue22(optional (double or USVString) arg = 1.5);
 
   void passNullableUnionWithDefaultValue1(optional (double or DOMString)? arg = "");
   void passNullableUnionWithDefaultValue2(optional (double or DOMString)? arg = 1);
@@ -696,6 +699,10 @@ interface TestInterface {
   void passNullableUnionWithDefaultValue18(optional (double or SupportedType)? arg = 1);
   void passNullableUnionWithDefaultValue19(optional (double or SupportedType)? arg = 1.5);
   void passNullableUnionWithDefaultValue20(optional (double or SupportedType)? arg = null);
+  void passNullableUnionWithDefaultValue21(optional (double or USVString)? arg = "abc");
+  void passNullableUnionWithDefaultValue22(optional (double or USVString)? arg = 1);
+  void passNullableUnionWithDefaultValue23(optional (double or USVString)? arg = 1.5);
+  void passNullableUnionWithDefaultValue24(optional (double or USVString)? arg = null);
 
   void passSequenceOfUnions(sequence<(CanvasPattern or CanvasGradient)> arg);
   void passSequenceOfUnions2(sequence<(object or long)> arg);
@@ -731,12 +738,8 @@ interface TestInterface {
 
   // Promise types
   void passPromise(Promise<any> arg);
-  void passNullablePromise(Promise<any>? arg);
   void passOptionalPromise(optional Promise<any> arg);
-  void passOptionalNullablePromise(optional Promise<any>? arg);
-  void passOptionalNullablePromiseWithDefaultValue(optional Promise<any>? arg = null);
   void passPromiseSequence(sequence<Promise<any>> arg);
-  void passNullablePromiseSequence(sequence<Promise<any>?> arg);
   Promise<any> receivePromise();
   Promise<any> receiveAddrefedPromise();
 
@@ -943,6 +946,10 @@ interface TestInterface {
   [Throws] attribute boolean throwingAttr;
   [GetterThrows] attribute boolean throwingGetterAttr;
   [SetterThrows] attribute boolean throwingSetterAttr;
+  [CanOOM] void canOOMMethod();
+  [CanOOM] attribute boolean canOOMAttr;
+  [GetterCanOOM] attribute boolean canOOMGetterAttr;
+  [SetterCanOOM] attribute boolean canOOMSetterAttr;
   [NeedsSubjectPrincipal] void needsSubjectPrincipalMethod();
   [NeedsSubjectPrincipal] attribute boolean needsSubjectPrincipalAttr;
   [NeedsCallerType] void needsCallerTypeMethod();
@@ -1173,6 +1180,7 @@ interface TestIndexedGetterAndSetterAndNamedGetterInterface {
   getter DOMString (DOMString myName);
   getter long (unsigned long index);
   setter creator void (unsigned long index, long arg);
+  readonly attribute unsigned long length;
 };
 
 interface TestIndexedAndNamedGetterInterface {
@@ -1184,6 +1192,7 @@ interface TestIndexedAndNamedGetterInterface {
 interface TestIndexedSetterInterface {
   setter creator void setItem(unsigned long idx, DOMString item);
   getter DOMString (unsigned long idx);
+  readonly attribute unsigned long length;
 };
 
 interface TestNamedSetterInterface {
@@ -1194,6 +1203,7 @@ interface TestNamedSetterInterface {
 interface TestIndexedAndNamedSetterInterface {
   setter creator void (unsigned long index, TestIndexedSetterInterface item);
   getter TestIndexedSetterInterface (unsigned long index);
+  readonly attribute unsigned long length;
   setter creator void setNamedItem(DOMString name, TestIndexedSetterInterface item);
   getter TestIndexedSetterInterface (DOMString name);
 };

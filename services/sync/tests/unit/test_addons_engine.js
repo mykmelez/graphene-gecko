@@ -36,6 +36,7 @@ function advance_test() {
   reconciler.saveState(null, cb);
   cb.wait();
 
+  tracker.clearChangedIDs();
   run_next_test();
 }
 
@@ -182,7 +183,7 @@ add_task(async function test_disabled_install_semantics() {
   let now = Date.now() / 1000;
 
   let record = encryptPayload({
-    id:            id,
+    id,
     applicationID: Services.appinfo.ID,
     addonID:       ADDON_ID,
     enabled:       false,

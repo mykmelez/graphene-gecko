@@ -42,7 +42,7 @@ function* open_subdialog_and_test_generic_start_state(browser, domcontentloadedF
     Assert.ok(!!subdialog._frame.contentWindow, "The dialog should be non-null");
     Assert.notEqual(subdialog._frame.contentWindow.location.toString(), "about:blank",
       "Subdialog URL should not be about:blank");
-    Assert.equal(win.getComputedStyle(subdialog._overlay, "").visibility, "visible",
+    Assert.equal(win.getComputedStyle(subdialog._overlay).visibility, "visible",
       "Overlay should be visible");
     Assert.equal(expectedStyleSheetURLs.length, 0,
       "No stylesheets that were expected are missing");
@@ -65,7 +65,7 @@ function* close_subdialog_and_test_generic_end_state(browser, closingFn, closing
     info("waiting for about:blank load");
     yield ContentTaskUtils.waitForEvent(frame, "load");
 
-    Assert.notEqual(win.getComputedStyle(subdialog._overlay, "").visibility, "visible",
+    Assert.notEqual(win.getComputedStyle(subdialog._overlay).visibility, "visible",
       "overlay is not visible");
     Assert.equal(frame.getAttribute("style"), "", "inline styles should be cleared");
     Assert.equal(frame.contentWindow.location.href.toString(), "about:blank",
@@ -252,7 +252,7 @@ add_task(function* wrapped_text_in_dialog_should_have_expected_scrollHeight() {
 add_task(function* dialog_too_tall_should_get_reduced_in_height() {
   yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser, function domcontentloadedFn() {
     let frame = content.window.gSubDialog._frame;
-    frame.contentDocument.documentElement.style.height = '100000px';
+    frame.contentDocument.documentElement.style.height = "100000px";
   });
 
   yield ContentTask.spawn(tab.linkedBrowser, null, function*() {

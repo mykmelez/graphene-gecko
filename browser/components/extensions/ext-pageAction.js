@@ -5,7 +5,7 @@
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
-  EventManager,
+  SingletonEventManager,
   IconDetails,
 } = ExtensionUtils;
 
@@ -154,7 +154,7 @@ PageAction.prototype = {
   },
 
   handleEvent(event) {
-    const window = event.target.ownerDocument.defaultView;
+    const window = event.target.ownerGlobal;
 
     switch (event.type) {
       case "click":
@@ -244,9 +244,9 @@ extensions.registerSchemaAPI("pageAction", "addon_parent", context => {
   let {extension} = context;
   return {
     pageAction: {
-      onClicked: new EventManager(context, "pageAction.onClicked", fire => {
+      onClicked: new SingletonEventManager(context, "pageAction.onClicked", fire => {
         let listener = (evt, tab) => {
-          fire(TabManager.convert(extension, tab));
+          fire.async(TabManager.convert(extension, tab));
         };
         let pageAction = PageAction.for(extension);
 

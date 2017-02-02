@@ -57,20 +57,21 @@ nsTArray<nsViewManager*>* nsViewManager::gViewManagers = nullptr;
 uint32_t nsViewManager::gLastUserEventTime = 0;
 
 nsViewManager::nsViewManager()
-  : mDelayedResize(NSCOORD_NONE, NSCOORD_NONE)
+  : mPresShell(nullptr)
+  , mDelayedResize(NSCOORD_NONE, NSCOORD_NONE)
+  , mRootView(nullptr)
+  , mRootViewManager(this)
+  , mRefreshDisableCount(0)
+  , mPainting(false)
+  , mRecursiveRefreshPending(false)
+  , mHasPendingWidgetGeometryChanges(false)
 {
-  mRootViewManager = this;
   if (gViewManagers == nullptr) {
     // Create an array to hold a list of view managers
     gViewManagers = new nsTArray<nsViewManager*>;
   }
  
   gViewManagers->AppendElement(this);
-
-  // NOTE:  we use a zeroing operator new, so all data members are
-  // assumed to be cleared here.
-  mHasPendingWidgetGeometryChanges = false;
-  mRecursiveRefreshPending = false;
 }
 
 nsViewManager::~nsViewManager()
@@ -405,7 +406,7 @@ nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
     return; // presentation might have been torn down
   }
   if (aFlushDirtyRegion) {
-    profiler_tracing("Paint", "DisplayList", TRACING_INTERVAL_START);
+    GeckoProfilerTracingRAII tracer("Paint", "DisplayList");
     nsAutoScriptBlocker scriptBlocker;
     SetPainting(true);
     for (uint32_t i = 0; i < widgets.Length(); ++i) {
@@ -416,7 +417,6 @@ nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
       }
     }
     SetPainting(false);
-    profiler_tracing("Paint", "DisplayList", TRACING_INTERVAL_END);
   }
 }
 
@@ -836,11 +836,7 @@ void nsViewManager::ReparentChildWidgets(nsView* aView, nsIWidget *aNewWidget)
     if (parentWidget) {
       // Child widget
       if (parentWidget != aNewWidget) {
-#ifdef DEBUG
-        nsresult rv =
-#endif
-          widget->SetParent(aNewWidget);
-        NS_ASSERTION(NS_SUCCEEDED(rv), "SetParent failed!");
+        widget->SetParent(aNewWidget);
       }
     } else {
       // Toplevel widget (popup, dialog, etc)
@@ -939,15 +935,6 @@ nsViewManager::InsertChild(nsView *aParent, nsView *aChild, nsView *aSibling,
       if (aParent->GetFloating())
         aChild->SetFloating(true);
     }
-}
-
-void
-nsViewManager::InsertChild(nsView *aParent, nsView *aChild, int32_t aZIndex)
-{
-  // no-one really calls this with anything other than aZIndex == 0 on a fresh view
-  // XXX this method should simply be eliminated and its callers redirected to the real method
-  SetViewZIndex(aChild, false, aZIndex);
-  InsertChild(aParent, aChild, nullptr, true);
 }
 
 void

@@ -35,7 +35,7 @@
 #include "TextRenderer.h"               // for TextRenderer
 #include <vector>
 #include "GeckoProfiler.h"              // for GeckoProfiler
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 #include "ProfilerMarkers.h"            // for ProfilerMarkers
 #endif
 
@@ -80,7 +80,7 @@ DrawLayerInfo(const RenderTargetIntRect& aClipRect,
 static void
 PrintUniformityInfo(Layer* aLayer)
 {
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
   if (!profiler_is_active()) {
     return;
   }
@@ -429,9 +429,9 @@ RenderLayers(ContainerT* aContainer, LayerManagerComposite* aManager,
       // should only occur transiently.
       EffectChain effectChain(layer);
       effectChain.mPrimaryEffect = new EffectSolidColor(color);
-      aManager->GetCompositor()->DrawQuad(gfx::Rect(layer->GetLayerBounds()), clipRect,
-                                          effectChain, layer->GetEffectiveOpacity(),
-                                          layer->GetEffectiveTransform());
+      aManager->GetCompositor()->DrawGeometry(gfx::Rect(layer->GetLayerBounds()), clipRect,
+                                              effectChain, layer->GetEffectiveOpacity(),
+                                              layer->GetEffectiveTransform(), Nothing());
     }
 
     if (layerToRender->HasLayerBeenComposited()) {
@@ -451,7 +451,9 @@ RenderLayers(ContainerT* aContainer, LayerManagerComposite* aManager,
 
       // If we are dealing with a nested 3D context, we might need to transform
       // the geometry to the coordinate space of the parent 3D context leaf.
-      if (geometry && !layer->Is3DContextLeaf()) {
+      const bool isLeafLayer = layer->AsContainerLayer() == nullptr;
+
+      if (geometry && isLeafLayer) {
         TransformLayerGeometry(layer, geometry);
       }
 

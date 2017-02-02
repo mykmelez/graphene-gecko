@@ -263,6 +263,23 @@ this.FinderIterator = {
   },
 
   /**
+   * The default mode of operation of the iterator is to not accept duplicate
+   * listeners, resolve the promise of the older listeners and replace it with
+   * the new listener.
+   * Consumers may opt-out of this behavior by using this check and not call
+   * start().
+   *
+   * @param  {Object} paramSet Property bag with the same signature as you would
+   *                           pass into `start()`
+   * @return {Boolean}
+   */
+  isAlreadyRunning(paramSet) {
+    return (this.running &&
+      this._areParamsEqual(this._currentParams, paramSet) &&
+      this._listeners.has(paramSet.listener));
+  },
+
+  /**
    * Safely notify all registered listeners that an event has occurred.
    *
    * @param {String}   callback    Name of the callback to invoke
@@ -337,7 +354,7 @@ this.FinderIterator = {
    *                                   to `true`.
    * @yield {nsIDOMRange}
    */
-  _yieldResult: function* (listener, rangeSource, window, withPause = true) {
+  *_yieldResult(listener, rangeSource, window, withPause = true) {
     // We keep track of the number of iterations to allow a short pause between
     // every `kIterationSizeMax` number of iterations.
     let iterCount = 0;
@@ -516,7 +533,7 @@ this.FinderIterator = {
    * @param {nsIDOMWindow} window                The window to search in
    * @yield {nsIDOMRange}
    */
-  _iterateDocument: function* ({ caseSensitive, entireWord, word }, window) {
+  *_iterateDocument({ caseSensitive, entireWord, word }, window) {
     let doc = window.document;
     let body = (doc instanceof Ci.nsIDOMHTMLDocument && doc.body) ?
                doc.body : doc.documentElement;
@@ -567,7 +584,13 @@ this.FinderIterator = {
       let frame = window.frames[i];
       // Don't count matches in hidden frames.
       let frameEl = frame && frame.frameElement;
-      if (!frameEl || !frameEl.getClientRects().length)
+      if (!frameEl)
+        continue;
+      // Construct a range around the frame element to check its visiblity.
+      let range = window.document.createRange();
+      range.setStart(frameEl, 0);
+      range.setEnd(frameEl, 0);
+      if (!finder._fastFind.isRangeVisible(range, this._getDocShell(range), true))
         continue;
       // All conditions pass, so push the current frame and its children on the
       // stack.
@@ -590,7 +613,7 @@ this.FinderIterator = {
     let window = windowOrRange;
     // Ranges may also be passed in, so fetch its window.
     if (windowOrRange instanceof Ci.nsIDOMRange)
-      window = windowOrRange.startContainer.ownerDocument.defaultView;
+      window = windowOrRange.startContainer.ownerGlobal;
     return window.QueryInterface(Ci.nsIInterfaceRequestor)
                  .getInterface(Ci.nsIWebNavigation)
                  .QueryInterface(Ci.nsIDocShell);

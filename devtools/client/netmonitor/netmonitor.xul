@@ -94,211 +94,27 @@
                        data-key="body"/>
             </vbox>
           </vbox>
-          <tabbox id="event-details-pane"
-                  class="devtools-sidebar-tabs"
-                  handleCtrlTab="false">
-            <tabs>
-              <tab id="headers-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.headers"/>
-              <tab id="cookies-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.cookies"/>
-              <tab id="params-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.params"/>
-              <tab id="response-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.response"/>
-              <tab id="timings-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.timings"/>
-              <tab id="security-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.security"/>
-              <tab id="preview-tab"
-                   crop="end"
-                   data-localization="label=netmonitor.tab.preview"/>
-            </tabs>
-            <tabpanels flex="1">
-              <tabpanel id="headers-tabpanel"
-                        class="tabpanel-content">
-                <vbox flex="1">
-                  <hbox id="headers-summary-url"
-                        class="tabpanel-summary-container"
-                        align="center">
-                    <label class="plain tabpanel-summary-label"
-                           data-localization="content=netmonitor.summary.url"/>
-                    <textbox id="headers-summary-url-value"
-                             class="plain tabpanel-summary-value devtools-monospace cropped-textbox"
-                             flex="1"
-                             readonly="true"/>
-                  </hbox>
-                  <hbox id="headers-summary-method"
-                        class="tabpanel-summary-container"
-                        align="center">
-                    <label class="plain tabpanel-summary-label"
-                           data-localization="content=netmonitor.summary.method"/>
-                    <label id="headers-summary-method-value"
-                           class="plain tabpanel-summary-value devtools-monospace"
-                           crop="end"
-                           flex="1"/>
-                  </hbox>
-                  <hbox id="headers-summary-address"
-                        class="tabpanel-summary-container"
-                        align="center">
-                    <label class="plain tabpanel-summary-label"
-                           data-localization="content=netmonitor.summary.address"/>
-                    <textbox id="headers-summary-address-value"
-                             class="plain tabpanel-summary-value devtools-monospace cropped-textbox"
-                             flex="1"
-                             readonly="true"/>
-                  </hbox>
-                  <hbox id="headers-summary-status"
-                        class="tabpanel-summary-container"
-                        align="center">
-                    <label class="plain tabpanel-summary-label"
-                           data-localization="content=netmonitor.summary.status"/>
-                    <box id="headers-summary-status-circle"
-                         class="requests-menu-status-icon"/>
-                    <label id="headers-summary-status-value"
-                           class="plain tabpanel-summary-value devtools-monospace"
-                           crop="end"
-                           flex="1"/>
-                    <button id="headers-summary-resend"
-                            class="devtools-toolbarbutton"
-                            data-localization="label=netmonitor.summary.editAndResend"/>
-                    <button id="toggle-raw-headers"
-                            class="devtools-toolbarbutton"
-                            data-localization="label=netmonitor.summary.rawHeaders"/>
-                  </hbox>
-                  <hbox id="headers-summary-version"
-                        class="tabpanel-summary-container"
-                        align="center">
-                    <label class="plain tabpanel-summary-label"
-                           data-localization="content=netmonitor.summary.version"/>
-                    <label id="headers-summary-version-value"
-                           class="plain tabpanel-summary-value devtools-monospace"
-                           crop="end"
-                           flex="1"/>
-                  </hbox>
-                  <hbox id="raw-headers"
-                        class="tabpanel-summary-container"
-                        align="center"
-                        hidden="true">
-                    <vbox id="raw-request-headers-textarea-box" flex="1" hidden="false">
-                      <label class="plain tabpanel-summary-label"
-                        data-localization="content=netmonitor.summary.rawHeaders.requestHeaders"/>
-                      <textbox id="raw-request-headers-textarea"
-                        class="raw-response-textarea"
-                        flex="1" multiline="true" readonly="true"/>
-                    </vbox>
-                    <vbox id="raw-response-headers-textarea-box" flex="1" hidden="false">
-                      <label class="plain tabpanel-summary-label"
-                        data-localization="content=netmonitor.summary.rawHeaders.responseHeaders"/>
-                      <textbox id="raw-response-headers-textarea"
-                        class="raw-response-textarea"
-                        flex="1" multiline="true" readonly="true"/>
-                    </vbox>
-                  </hbox>
-                  <vbox id="all-headers" flex="1"/>
-                </vbox>
-              </tabpanel>
-              <tabpanel id="cookies-tabpanel"
-                        class="tabpanel-content">
-                <vbox flex="1">
-                  <vbox id="all-cookies" flex="1"/>
-                </vbox>
-              </tabpanel>
-              <tabpanel id="params-tabpanel"
-                        class="tabpanel-content">
-                <vbox flex="1">
-                  <vbox id="request-params-box" flex="1" hidden="true">
-                    <vbox id="request-params" flex="1"/>
-                  </vbox>
-                  <vbox id="request-post-data-textarea-box" flex="1" hidden="true">
-                    <vbox id="request-post-data-textarea" flex="1"/>
-                  </vbox>
-                </vbox>
-              </tabpanel>
-              <tabpanel id="response-tabpanel"
-                        class="tabpanel-content">
-                <vbox flex="1">
-                  <label id="response-content-info-header"/>
-                  <vbox id="response-content-json-box" flex="1" hidden="true">
-                    <vbox id="response-content-json" flex="1" context="network-response-popup" />
-                  </vbox>
-                  <vbox id="response-content-textarea-box" flex="1" hidden="true">
-                    <vbox id="response-content-textarea" flex="1"/>
-                  </vbox>
-                  <vbox id="response-content-image-box" flex="1" hidden="true">
-                    <image id="response-content-image"/>
-                    <hbox>
-                      <label class="plain tabpanel-summary-label"
-                             data-localization="content=netmonitor.response.name"/>
-                      <label id="response-content-image-name-value"
-                             class="plain tabpanel-summary-value devtools-monospace"
-                             crop="end"
-                             flex="1"/>
-                    </hbox>
-                    <hbox>
-                      <label class="plain tabpanel-summary-label"
-                             data-localization="content=netmonitor.response.dimensions"/>
-                      <label id="response-content-image-dimensions-value"
-                             class="plain tabpanel-summary-value devtools-monospace"
-                             crop="end"
-                             flex="1"/>
-                    </hbox>
-                    <hbox>
-                      <label class="plain tabpanel-summary-label"
-                             data-localization="content=netmonitor.response.mime"/>
-                      <label id="response-content-image-mime-value"
-                             class="plain tabpanel-summary-value devtools-monospace"
-                             crop="end"
-                             flex="1"/>
-                    </hbox>
-                  </vbox>
-                </vbox>
-              </tabpanel>
-              <tabpanel id="timings-tabpanel"
-                        class="tabpanel-content">
-                <html:div xmlns="http://www.w3.org/1999/xhtml"
-                          id="react-timings-tabpanel-hook"/>
-              </tabpanel>
-              <tabpanel id="security-tabpanel"
-                        class="tabpanel-content">
-                <html:div xmlns="http://www.w3.org/1999/xhtml"
-                          id="react-security-tabpanel-hook"/>
-              </tabpanel>
-              <tabpanel id="preview-tabpanel"
-                        class="tabpanel-content">
-                <html:div xmlns="http://www.w3.org/1999/xhtml"
-                          id="react-preview-tabpanel-hook"/>
-              </tabpanel>
-            </tabpanels>
-          </tabbox>
+          <html:div xmlns="http://www.w3.org/1999/xhtml"
+                    id="react-details-panel-hook"/>
         </deck>
       </hbox>
 
     </vbox>
 
-    <box id="network-statistics-view">
-      <toolbar id="network-statistics-toolbar"
-               class="devtools-toolbar">
-        <button id="network-statistics-back-button"
-                class="devtools-toolbarbutton"
-                data-localization="label=netmonitor.backButton"/>
-      </toolbar>
-      <box id="network-statistics-charts"
-           class="devtools-responsive-container"
-           flex="1">
-        <vbox id="primed-cache-chart" pack="center" flex="1"/>
-        <splitter id="network-statistics-view-splitter"
-                  class="devtools-side-splitter"/>
-        <vbox id="empty-cache-chart" pack="center" flex="1"/>
-      </box>
-    </box>
-
+    <html:div id="network-statistics-view">
+      <html:div id="network-statistics-toolbar"
+                class="devtools-toolbar">
+        <html:div xmlns="http://www.w3.org/1999/xhtml"
+                  id="react-statistics-back-hook"/>
+      </html:div>
+      <html:div id="network-statistics-charts"
+                class="devtools-responsive-container">
+        <html:div id="primed-cache-chart"/>
+        <html:div id="network-statistics-view-splitter"
+                  class="split-box devtools-side-splitter"/>
+        <html:div id="empty-cache-chart"/>
+      </html:div>
+    </html:div>
   </deck>
 
 </window>

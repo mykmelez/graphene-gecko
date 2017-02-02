@@ -46,7 +46,9 @@ function isTopLevelFrame({frameId, parentFrameId}) {
 }
 
 function fillTransitionProperties(eventName, src, dst) {
-  if (eventName == "onCommitted" || eventName == "onHistoryStateUpdated") {
+  if (eventName == "onCommitted" ||
+      eventName == "onHistoryStateUpdated" ||
+      eventName == "onReferenceFragmentUpdated") {
     let frameTransitionData = src.frameTransitionData || {};
     let tabTransitionData = src.tabTransitionData || {};
 
@@ -98,7 +100,7 @@ function fillTransitionProperties(eventName, src, dst) {
 // Similar to WebRequestEventManager but for WebNavigation.
 function WebNavigationEventManager(context, eventName) {
   let name = `webNavigation.${eventName}`;
-  let register = (callback, urlFilters) => {
+  let register = (fire, urlFilters) => {
     // Don't create a MatchURLFilters instance if the listener does not include any filter.
     let filters = urlFilters ?
           new MatchURLFilters(urlFilters.url) : null;
@@ -127,7 +129,7 @@ function WebNavigationEventManager(context, eventName) {
 
       fillTransitionProperties(eventName, data, data2);
 
-      context.runSafe(callback, data2);
+      fire.async(data2);
     };
 
     WebNavigation[eventName].addListener(listener, filters);

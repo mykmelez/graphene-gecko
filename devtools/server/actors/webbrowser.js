@@ -15,8 +15,8 @@ var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 loader.lazyRequireGetter(this, "RootActor", "devtools/server/actors/root", true);
 loader.lazyRequireGetter(this, "BrowserAddonActor", "devtools/server/actors/addon", true);
 loader.lazyRequireGetter(this, "WebExtensionActor", "devtools/server/actors/webextension", true);
-loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker", true);
-loader.lazyRequireGetter(this, "ServiceWorkerRegistrationActorList", "devtools/server/actors/worker", true);
+loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker-list", true);
+loader.lazyRequireGetter(this, "ServiceWorkerRegistrationActorList", "devtools/server/actors/worker-list", true);
 loader.lazyRequireGetter(this, "ProcessActorList", "devtools/server/actors/process", true);
 loader.lazyImporter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
 
@@ -608,7 +608,7 @@ BrowserTabList.prototype.onOpenWindow =
 DevToolsUtils.makeInfallible(function (window) {
   let handleLoad = DevToolsUtils.makeInfallible(() => {
     /* We don't want any further load events from this window. */
-    window.removeEventListener("load", handleLoad, false);
+    window.removeEventListener("load", handleLoad);
 
     if (appShellDOMWindowType(window) !== DebuggerServer.chromeWindowType) {
       return;
@@ -616,13 +616,13 @@ DevToolsUtils.makeInfallible(function (window) {
 
     // Listen for future tab activity.
     if (this._listeningForTabOpen) {
-      window.addEventListener("TabOpen", this, false);
-      window.addEventListener("TabSelect", this, false);
-      window.addEventListener("TabAttrModified", this, false);
+      window.addEventListener("TabOpen", this);
+      window.addEventListener("TabSelect", this);
+      window.addEventListener("TabAttrModified", this);
     }
     if (this._listeningForTabClose) {
-      window.addEventListener("TabClose", this, false);
-      window.addEventListener("TabRemotenessChange", this, false);
+      window.addEventListener("TabClose", this);
+      window.addEventListener("TabRemotenessChange", this);
     }
     if (this._listeningForTitleChange) {
       window.messageManager.addMessageListener("DOMTitleChanged", this);
@@ -643,7 +643,7 @@ DevToolsUtils.makeInfallible(function (window) {
   window = window.QueryInterface(Ci.nsIInterfaceRequestor)
                  .getInterface(Ci.nsIDOMWindow);
 
-  window.addEventListener("load", handleLoad, false);
+  window.addEventListener("load", handleLoad);
 }, "BrowserTabList.prototype.onOpenWindow");
 
 BrowserTabList.prototype.onCloseWindow =
@@ -667,7 +667,7 @@ DevToolsUtils.makeInfallible(function (window) {
      */
     for (let [browser, actor] of this._actorByBrowser) {
       /* The browser document of a closed window has no default view. */
-      if (!browser.ownerDocument.defaultView) {
+      if (!browser.ownerGlobal) {
         this._handleActorClose(actor, browser);
       }
     }

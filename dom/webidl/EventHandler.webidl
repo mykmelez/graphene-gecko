@@ -15,13 +15,11 @@ callback EventHandlerNonNull = any (Event event);
 typedef EventHandlerNonNull? EventHandler;
 
 [TreatNonObjectAsNull]
-// https://www.w3.org/Bugs/Public/show_bug.cgi?id=23489
-//callback OnBeforeUnloadEventHandlerNonNull = DOMString (Event event);
 callback OnBeforeUnloadEventHandlerNonNull = DOMString? (Event event);
 typedef OnBeforeUnloadEventHandlerNonNull? OnBeforeUnloadEventHandler;
 
 [TreatNonObjectAsNull]
-callback OnErrorEventHandlerNonNull = boolean ((Event or DOMString) event, optional DOMString source, optional unsigned long lineno, optional unsigned long column, optional any error);
+callback OnErrorEventHandlerNonNull = any ((Event or DOMString) event, optional DOMString source, optional unsigned long lineno, optional unsigned long column, optional any error);
 typedef OnErrorEventHandlerNonNull? OnErrorEventHandler;
 
 [NoInterfaceObject]
@@ -38,7 +36,7 @@ interface GlobalEventHandlers {
            attribute EventHandler oncanplaythrough;
            attribute EventHandler onchange;
            attribute EventHandler onclick;
-           //(Not implemented)attribute EventHandler onclose;
+           attribute EventHandler onclose;
            attribute EventHandler oncontextmenu;
            //(Not implemented)attribute EventHandler oncuechange;
            attribute EventHandler ondblclick;
@@ -131,6 +129,7 @@ interface GlobalEventHandlers {
            attribute EventHandler onanimationend;
            attribute EventHandler onanimationiteration;
            attribute EventHandler onanimationstart;
+           attribute EventHandler ontransitioncancel;
            attribute EventHandler ontransitionend;
            attribute EventHandler ontransitionrun;
            attribute EventHandler ontransitionstart;
@@ -158,6 +157,13 @@ interface WindowEventHandlers {
            attribute EventHandler onpopstate;
            attribute EventHandler onstorage;
            attribute EventHandler onunload;
+};
+
+[NoInterfaceObject]
+interface DocumentAndElementEventHandlers {
+  attribute EventHandler oncopy;
+  attribute EventHandler oncut;
+  attribute EventHandler onpaste;
 };
 
 // The spec has |attribute OnErrorEventHandler onerror;| on

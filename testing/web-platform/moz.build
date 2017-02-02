@@ -21,3 +21,31 @@ TEST_HARNESS_FILES['web-platform'].certs = [
     'certs/web-platform.test.key',
     'certs/web-platform.test.pem',
 ]
+
+with Files("update/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("harness/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("certs/**"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("mach*"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("*.py"):
+    BUG_COMPONENT = ("Testing", "web-platform-tests")
+
+with Files("tests/media/**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: Playback")
+
+with Files("tests/media-source/**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: Playback")
+
+with Files("tests/mediacapture-record/**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: Recording")
+
+with Files("tests/mediacapture-streams/**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: MediaStreamGraph")
+

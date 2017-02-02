@@ -44,7 +44,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageButton;
 
-import com.keepsafe.switchboard.SwitchBoard;
+import org.mozilla.gecko.switchboard.SwitchBoard;
 
 /**
 * {@code ToolbarDisplayLayout} is the UI for when the toolbar is in
@@ -397,9 +397,9 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
             imageLevel = LEVEL_SHIELD_DISABLED;
         } else if (trackingMode == TrackingMode.TRACKING_CONTENT_BLOCKED) {
             imageLevel = LEVEL_SHIELD_ENABLED;
-        } else if (activeMixedMode == MixedMode.MIXED_CONTENT_LOADED) {
+        } else if (activeMixedMode == MixedMode.LOADED) {
             imageLevel = LEVEL_LOCK_DISABLED;
-        } else if (displayMixedMode == MixedMode.MIXED_CONTENT_LOADED) {
+        } else if (displayMixedMode == MixedMode.LOADED) {
             imageLevel = LEVEL_WARNING_MINOR;
         }
 

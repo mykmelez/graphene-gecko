@@ -402,11 +402,11 @@ DevToolsUtils.defineLazyGetter(this, "NetworkHelper", () => {
  * http://www.softwareishard.com/blog/firebug/nsitraceablechannel-intercept-http-traffic/
  */
 function mainThreadFetch(urlIn, aOptions = { loadFromCache: true,
-                                          policy: Ci.nsIContentPolicy.TYPE_OTHER,
-                                          window: null,
-                                          charset: null,
-                                          principal: null,
-                                          cacheKey: null }) {
+                                             policy: Ci.nsIContentPolicy.TYPE_OTHER,
+                                             window: null,
+                                             charset: null,
+                                             principal: null,
+                                             cacheKey: null }) {
   // Create a channel.
   let url = urlIn.split(" -> ").pop();
   let channel;
@@ -535,12 +535,12 @@ function newChannelForURL(url, { policy, window, principal }) {
 
   let uri;
   try {
-    uri = Services.io.newURI(url, null, null);
+    uri = Services.io.newURI(url);
   } catch (e) {
     // In the xpcshell tests, the script url is the absolute path of the test
     // file, which will make a malformed URI error be thrown. Add the file
     // scheme to see if it helps.
-    uri = Services.io.newURI("file://" + url, null, null);
+    uri = Services.io.newURI("file://" + url);
   }
   let channelOptions = {
     contentPolicyType: policy,

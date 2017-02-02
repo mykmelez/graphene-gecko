@@ -77,7 +77,6 @@
 #include "nsDOMStringMap.h"
 
 #include "nsIEditor.h"
-#include "nsIEditorIMESupport.h"
 #include "nsLayoutUtils.h"
 #include "mozAutoDocUpdate.h"
 #include "nsHtml5Module.h"
@@ -1000,7 +999,7 @@ nsGenericHTMLElement::GetFormControlFrame(bool aFlushFrames)
 {
   if (aFlushFrames && IsInComposedDoc()) {
     // Cause a flush of the frames, so we get up-to-date frame information
-    GetComposedDoc()->FlushPendingNotifications(Flush_Frames);
+    GetComposedDoc()->FlushPendingNotifications(FlushType::Frames);
   }
   nsIFrame* frame = GetPrimaryFrame();
   if (frame) {
@@ -1258,12 +1257,10 @@ nsGenericHTMLElement::MapCommonAttributesIntoExceptHidden(const nsMappedAttribut
       if (value) {
         if (value->Equals(nsGkAtoms::_empty, eCaseMatters) ||
             value->Equals(nsGkAtoms::_true, eIgnoreCase)) {
-          userModify->SetIntValue(StyleUserModify::ReadWrite,
-                                  eCSSUnit_Enumerated);
+          userModify->SetEnumValue(StyleUserModify::ReadWrite);
         }
         else if (value->Equals(nsGkAtoms::_false, eIgnoreCase)) {
-            userModify->SetIntValue(StyleUserModify::ReadOnly,
-                                    eCSSUnit_Enumerated);
+            userModify->SetEnumValue(StyleUserModify::ReadOnly);
         }
       }
     }
@@ -1282,7 +1279,7 @@ nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttribu
     nsCSSValue* display = aData->ValueForDisplay();
     if (display->GetUnit() == eCSSUnit_Null) {
       if (aAttributes->IndexOfAttr(nsGkAtoms::hidden) >= 0) {
-        display->SetIntValue(StyleDisplay::None, eCSSUnit_Enumerated);
+        display->SetEnumValue(StyleDisplay::None);
       }
     }
   }
@@ -1347,9 +1344,9 @@ nsGenericHTMLElement::MapImageAlignAttributeInto(const nsMappedAttributes* aAttr
       nsCSSValue* cssFloat = aRuleData->ValueForFloat();
       if (cssFloat->GetUnit() == eCSSUnit_Null) {
         if (align == NS_STYLE_TEXT_ALIGN_LEFT) {
-          cssFloat->SetIntValue(StyleFloat::Left, eCSSUnit_Enumerated);
+          cssFloat->SetEnumValue(StyleFloat::Left);
         } else if (align == NS_STYLE_TEXT_ALIGN_RIGHT) {
-          cssFloat->SetIntValue(StyleFloat::Right, eCSSUnit_Enumerated);
+          cssFloat->SetEnumValue(StyleFloat::Right);
         }
       }
       nsCSSValue* verticalAlign = aRuleData->ValueForVerticalAlign();
@@ -1829,11 +1826,8 @@ nsGenericHTMLFormElement::GetDesiredIMEState()
   nsIEditor* editor = GetEditorInternal();
   if (!editor)
     return nsGenericHTMLElement::GetDesiredIMEState();
-  nsCOMPtr<nsIEditorIMESupport> imeEditor = do_QueryInterface(editor);
-  if (!imeEditor)
-    return nsGenericHTMLElement::GetDesiredIMEState();
   IMEState state;
-  nsresult rv = imeEditor->GetPreferredIMEState(&state);
+  nsresult rv = editor->GetPreferredIMEState(&state);
   if (NS_FAILED(rv))
     return nsGenericHTMLElement::GetDesiredIMEState();
   return state;
@@ -2851,7 +2845,7 @@ nsGenericHTMLElement::GetWidthHeightForImage(RefPtr<imgRequestProxy>& aImageRequ
 {
   nsSize size(0,0);
 
-  nsIFrame* frame = GetPrimaryFrame(Flush_Layout);
+  nsIFrame* frame = GetPrimaryFrame(FlushType::Layout);
 
   if (frame) {
     size = frame->GetContentRect().Size();
@@ -2947,9 +2941,7 @@ IsOrHasAncestorWithDisplayNone(Element* aElement, nsIPresShell* aPresShell)
   RefPtr<nsStyleContext> sc;
   for (int32_t i = elementsToCheck.Length() - 1; i >= 0; --i) {
     if (sc) {
-      sc = styleSet->ResolveStyleFor(elementsToCheck[i], sc,
-                                     ConsumeStyleBehavior::DontConsume,
-                                     LazyComputeBehavior::Assert);
+      sc = styleSet->ResolveStyleFor(elementsToCheck[i], sc, LazyComputeBehavior::Assert);
     } else {
       sc = nsComputedDOMStyle::GetStyleContextForElementNoFlush(elementsToCheck[i],
                                                                 nullptr, aPresShell);
@@ -2966,7 +2958,7 @@ void
 nsGenericHTMLElement::GetInnerText(mozilla::dom::DOMString& aValue,
                                    mozilla::ErrorResult& aError)
 {
-  if (!GetPrimaryFrame(Flush_Layout)) {
+  if (!GetPrimaryFrame(FlushType::Layout)) {
     nsIPresShell* presShell = nsComputedDOMStyle::GetPresShellForContent(this);
     if (!presShell || IsOrHasAncestorWithDisplayNone(this, presShell)) {
       GetTextContentInternal(aValue, aError);

@@ -210,14 +210,8 @@ FlagAllOperandsAsHavingRemovedUses(MIRGenerator* mir, MBasicBlock* block)
         if (MResumePoint* rp = ins->resumePoint()) {
             // Note: no need to iterate over the caller's of the resume point as
             // this is the same as the entry resume point.
-            for (size_t i = 0, e = rp->numOperands(); i < e; i++) {
-                if (mir->shouldCancel("FlagAllOperandsAsHavingRemovedUses inner loop"))
-                    return false;
-
-                if (!rp->isObservableOperand(i))
-                    continue;
+            for (size_t i = 0, e = rp->numOperands(); i < e; i++)
                 rp->getOperand(i)->setUseRemovedUnchecked();
-            }
         }
     }
 
@@ -227,11 +221,9 @@ FlagAllOperandsAsHavingRemovedUses(MIRGenerator* mir, MBasicBlock* block)
         if (mir->shouldCancel("FlagAllOperandsAsHavingRemovedUses loop 2"))
             return false;
 
-        for (size_t i = 0, e = rp->numOperands(); i < e; i++) {
-            if (!rp->isObservableOperand(i))
-                continue;
+        for (size_t i = 0, e = rp->numOperands(); i < e; i++)
             rp->getOperand(i)->setUseRemovedUnchecked();
-        }
+
         rp = rp->caller();
     }
 
@@ -923,6 +915,42 @@ jit::FoldTests(MIRGraph& graph)
     return true;
 }
 
+bool
+jit::FoldEmptyBlocks(MIRGraph& graph)
+{
+    for (MBasicBlockIterator iter(graph.begin()); iter != graph.end(); ) {
+        MBasicBlock* block = *iter;
+        iter++;
+
+        if (block->numPredecessors() != 1 || block->numSuccessors() != 1)
+            continue;
+
+        if (!block->phisEmpty())
+            continue;
+
+        if (block->outerResumePoint())
+            continue;
+
+        if (*block->begin() != *block->rbegin())
+            continue;
+
+        MBasicBlock* succ = block->getSuccessor(0);
+        MBasicBlock* pred = block->getPredecessor(0);
+
+        if (succ->numPredecessors() != 1)
+            continue;
+
+        size_t pos = pred->getSuccessorIndex(block);
+        pred->lastIns()->replaceSuccessor(pos, succ);
+
+        graph.removeBlock(block);
+
+        succ->addPredecessorSameInputsAs(pred, block);
+        succ->removePredecessor(block);
+    }
+    return true;
+}
+
 static void
 EliminateTriviallyDeadResumePointOperands(MIRGraph& graph, MResumePoint* rp)
 {
@@ -965,16 +993,22 @@ jit::EliminateDeadResumePointOperands(MIRGenerator* mir, MIRGraph& graph)
         if (mir->shouldCancel("Eliminate Dead Resume Point Operands (main loop)"))
             return false;
 
-        if (MResumePoint* rp = block->entryResumePoint())
+        if (MResumePoint* rp = block->entryResumePoint()) {
+            if (!graph.alloc().ensureBallast())
+                return false;
             EliminateTriviallyDeadResumePointOperands(graph, rp);
+        }
 
         // The logic below can get confused on infinite loops.
         if (block->isLoopHeader() && block->backedge() == *block)
             continue;
 
         for (MInstructionIterator ins = block->begin(); ins != block->end(); ins++) {
-            if (MResumePoint* rp = ins->resumePoint())
+            if (MResumePoint* rp = ins->resumePoint()) {
+                if (!graph.alloc().ensureBallast())
+                    return false;
                 EliminateTriviallyDeadResumePointOperands(graph, rp);
+            }
 
             // No benefit to replacing constant operands with other constants.
             if (ins->isConstant())
@@ -4040,7 +4074,7 @@ AnalyzePoppedThis(JSContext* cx, ObjectGroup* group,
         // Add the property to the object, being careful not to update type information.
         DebugOnly<unsigned> slotSpan = baseobj->slotSpan();
         MOZ_ASSERT(!baseobj->containsPure(id));
-        if (!baseobj->addDataProperty(cx, id, baseobj->slotSpan(), JSPROP_ENUMERATE))
+        if (!NativeObject::addDataProperty(cx, baseobj, id, baseobj->slotSpan(), JSPROP_ENUMERATE))
             return false;
         MOZ_ASSERT(baseobj->slotSpan() != slotSpan);
         MOZ_ASSERT(!baseobj->inDictionaryMode());
@@ -4149,6 +4183,9 @@ jit::AnalyzeNewScriptDefiniteProperties(JSContext* cx, HandleFunction fun,
     TempAllocator temp(&alloc);
     JitContext jctx(cx, &temp);
 
+    if (!jit::CanLikelyAllocateMoreExecutableMemory())
+        return true;
+
     if (!cx->compartment()->ensureJitCompartmentExists(cx))
         return false;
 
@@ -4187,10 +4224,12 @@ jit::AnalyzeNewScriptDefiniteProperties(JSContext* cx, HandleFunction fun,
     IonBuilder builder(cx, CompileCompartment::get(cx->compartment()), options, &temp, &graph, constraints,
                        &inspector, &info, optimizationInfo, /* baselineFrame = */ nullptr);
 
-    if (!builder.build()) {
+    AbortReasonOr<Ok> buildResult = builder.build();
+    if (buildResult.isErr()) {
+        AbortReason reason = buildResult.unwrapErr();
         if (cx->isThrowingOverRecursed() || cx->isThrowingOutOfMemory())
             return false;
-        if (builder.abortReason() == AbortReason_Alloc) {
+        if (reason == AbortReason::Alloc) {
             ReportOutOfMemory(cx);
             return false;
         }
@@ -4392,6 +4431,9 @@ jit::AnalyzeArgumentsUsage(JSContext* cx, JSScript* scriptArg)
     TempAllocator temp(&alloc);
     JitContext jctx(cx, &temp);
 
+    if (!jit::CanLikelyAllocateMoreExecutableMemory())
+        return true;
+
     if (!cx->compartment()->ensureJitCompartmentExists(cx))
         return false;
 
@@ -4422,10 +4464,12 @@ jit::AnalyzeArgumentsUsage(JSContext* cx, JSScript* scriptArg)
     IonBuilder builder(nullptr, CompileCompartment::get(cx->compartment()), options, &temp, &graph, constraints,
                        &inspector, &info, optimizationInfo, /* baselineFrame = */ nullptr);
 
-    if (!builder.build()) {
+    AbortReasonOr<Ok> buildResult = builder.build();
+    if (buildResult.isErr()) {
+        AbortReason reason = buildResult.unwrapErr();
         if (cx->isThrowingOverRecursed() || cx->isThrowingOutOfMemory())
             return false;
-        if (builder.abortReason() == AbortReason_Alloc) {
+        if (reason == AbortReason::Alloc) {
             ReportOutOfMemory(cx);
             return false;
         }

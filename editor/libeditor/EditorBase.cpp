@@ -25,11 +25,11 @@
 #include "SplitNodeTransaction.h"       // for SplitNodeTransaction
 #include "StyleSheetTransactions.h"     // for AddStyleSheetTransaction, etc.
 #include "TextEditUtils.h"              // for TextEditUtils
-#include "mozFlushType.h"               // for mozFlushType::Flush_Frames
 #include "mozInlineSpellChecker.h"      // for mozInlineSpellChecker
 #include "mozilla/CheckedInt.h"         // for CheckedInt
 #include "mozilla/EditorUtils.h"        // for AutoRules, etc.
 #include "mozilla/EditTransactionBase.h" // for EditTransactionBase
+#include "mozilla/FlushType.h"          // for FlushType::Frames
 #include "mozilla/IMEStateManager.h"    // for IMEStateManager
 #include "mozilla/Preferences.h"        // for Preferences
 #include "mozilla/dom/Selection.h"      // for Selection, etc.
@@ -927,7 +927,14 @@ EditorBase::BeginPlaceHolderTransaction(nsIAtom* aName)
     if (selection) {
       mSelState = new SelectionState();
       mSelState->SaveSelection(selection);
-      mRangeUpdater.RegisterSelectionState(*mSelState);
+      // Composition transaction can modify multiple nodes and it merges text
+      // node for ime into single text node.
+      // So if current selection is into IME text node, it might be failed
+      // to restore selection by UndoTransaction.
+      // So we need update selection by range updater.
+      if (mPlaceHolderName == nsGkAtoms::IMETxnName) {
+        mRangeUpdater.RegisterSelectionState(*mSelState);
+      }
     }
   }
   mPlaceHolderBatch++;
@@ -979,7 +986,9 @@ EditorBase::EndPlaceHolderTransaction()
     if (mSelState) {
       // we saved the selection state, but never got to hand it to placeholder
       // (else we ould have nulled out this pointer), so destroy it to prevent leaks.
-      mRangeUpdater.DropSelectionState(*mSelState);
+      if (mPlaceHolderName == nsGkAtoms::IMETxnName) {
+        mRangeUpdater.DropSelectionState(*mSelState);
+      }
       delete mSelState;
       mSelState = nullptr;
     }
@@ -1201,12 +1210,23 @@ EditorBase::SetAttribute(nsIDOMElement* aElement,
                          const nsAString& aAttribute,
                          const nsAString& aValue)
 {
+  if (NS_WARN_IF(aAttribute.IsEmpty())) {
+    return NS_ERROR_FAILURE;
+  }
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
   NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
   nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
 
+  return SetAttribute(element, attribute, aValue);
+}
+
+nsresult
+EditorBase::SetAttribute(Element* aElement,
+                         nsIAtom* aAttribute,
+                         const nsAString& aValue)
+{
   RefPtr<ChangeAttributeTransaction> transaction =
-    CreateTxnForSetAttribute(*element, *attribute, aValue);
+    CreateTxnForSetAttribute(*aElement, *aAttribute, aValue);
   return DoTransaction(transaction);
 }
 
@@ -1235,12 +1255,22 @@ NS_IMETHODIMP
 EditorBase::RemoveAttribute(nsIDOMElement* aElement,
                             const nsAString& aAttribute)
 {
+  if (NS_WARN_IF(aAttribute.IsEmpty())) {
+    return NS_ERROR_FAILURE;
+  }
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
   NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
   nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
 
+  return RemoveAttribute(element, attribute);
+}
+
+nsresult
+EditorBase::RemoveAttribute(Element* aElement,
+                            nsIAtom* aAttribute)
+{
   RefPtr<ChangeAttributeTransaction> transaction =
-    CreateTxnForRemoveAttribute(*element, *attribute);
+    CreateTxnForRemoveAttribute(*aElement, *aAttribute);
   return DoTransaction(transaction);
 }
 
@@ -2180,25 +2210,28 @@ EditorBase::CloneAttribute(const nsAString& aAttribute,
                            nsIDOMNode* aSourceNode)
 {
   NS_ENSURE_TRUE(aDestNode && aSourceNode, NS_ERROR_NULL_POINTER);
-
-  nsCOMPtr<nsIDOMElement> destElement = do_QueryInterface(aDestNode);
-  nsCOMPtr<nsIDOMElement> sourceElement = do_QueryInterface(aSourceNode);
-  NS_ENSURE_TRUE(destElement && sourceElement, NS_ERROR_NO_INTERFACE);
-
-  nsAutoString attrValue;
-  bool isAttrSet;
-  nsresult rv = GetAttributeValue(sourceElement,
-                                  aAttribute,
-                                  attrValue,
-                                  &isAttrSet);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (isAttrSet) {
-    rv = SetAttribute(destElement, aAttribute, attrValue);
-  } else {
-    rv = RemoveAttribute(destElement, aAttribute);
+  if (NS_WARN_IF(aAttribute.IsEmpty())) {
+    return NS_ERROR_FAILURE;
   }
 
-  return rv;
+  nsCOMPtr<Element> destElement = do_QueryInterface(aDestNode);
+  nsCOMPtr<Element> sourceElement = do_QueryInterface(aSourceNode);
+  NS_ENSURE_TRUE(destElement && sourceElement, NS_ERROR_NO_INTERFACE);
+
+  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
+  return CloneAttribute(attribute, destElement, sourceElement);
+}
+
+nsresult
+EditorBase::CloneAttribute(nsIAtom* aAttribute,
+                           Element* aDestElement,
+                           Element* aSourceElement)
+{
+  nsAutoString attrValue;
+  if (aSourceElement->GetAttr(kNameSpaceID_None, aAttribute, attrValue)) {
+    return SetAttribute(aDestElement, aAttribute, attrValue);
+  }
+  return RemoveAttribute(aDestElement, aAttribute);
 }
 
 /**
@@ -2237,11 +2270,9 @@ EditorBase::CloneAttributes(Element* aDest,
   RefPtr<nsDOMAttributeMap> destAttributes = aDest->Attributes();
   while (RefPtr<Attr> attr = destAttributes->Item(0)) {
     if (destInBody) {
-      RemoveAttribute(static_cast<nsIDOMElement*>(GetAsDOMNode(aDest)),
-                      attr->NodeName());
+      RemoveAttribute(aDest, attr->NodeInfo()->NameAtom());
     } else {
-      ErrorResult ignored;
-      aDest->RemoveAttribute(attr->NodeName(), ignored);
+      aDest->UnsetAttr(kNameSpaceID_None, attr->NodeInfo()->NameAtom(), true);
     }
   }
 
@@ -2253,13 +2284,13 @@ EditorBase::CloneAttributes(Element* aDest,
     nsAutoString value;
     attr->GetValue(value);
     if (destInBody) {
-      SetAttributeOrEquivalent(static_cast<nsIDOMElement*>(GetAsDOMNode(aDest)),
-                               attr->NodeName(), value, false);
+      SetAttributeOrEquivalent(aDest, attr->NodeInfo()->NameAtom(), value,
+                               false);
     } else {
       // The element is not inserted in the document yet, we don't want to put
       // a transaction on the UndoStack
-      SetAttributeOrEquivalent(static_cast<nsIDOMElement*>(GetAsDOMNode(aDest)),
-                               attr->NodeName(), value, true);
+      SetAttributeOrEquivalent(aDest, attr->NodeInfo()->NameAtom(), value,
+                               true);
     }
   }
 }
@@ -2766,7 +2797,7 @@ EditorBase::SplitNodeImpl(nsIContent& aExistingRightNode,
   // Handle selection
   nsCOMPtr<nsIPresShell> ps = GetPresShell();
   if (ps) {
-    ps->FlushPendingNotifications(Flush_Frames);
+    ps->FlushPendingNotifications(FlushType::Frames);
   }
 
   bool shouldSetSelection = GetShouldTxnSetSelection();
@@ -2887,15 +2918,13 @@ EditorBase::JoinNodesImpl(nsINode* aNodeToKeep,
 
   // OK, ready to do join now.
   // If it's a text node, just shuffle around some text.
-  nsCOMPtr<nsIDOMCharacterData> keepNodeAsText( do_QueryInterface(aNodeToKeep) );
-  nsCOMPtr<nsIDOMCharacterData> joinNodeAsText( do_QueryInterface(aNodeToJoin) );
-  if (keepNodeAsText && joinNodeAsText) {
+  if (IsTextNode(aNodeToKeep) && IsTextNode(aNodeToJoin)) {
     nsAutoString rightText;
     nsAutoString leftText;
-    keepNodeAsText->GetData(rightText);
-    joinNodeAsText->GetData(leftText);
+    aNodeToKeep->GetAsText()->GetData(rightText);
+    aNodeToJoin->GetAsText()->GetData(leftText);
     leftText += rightText;
-    keepNodeAsText->SetData(leftText);
+    aNodeToKeep->GetAsText()->SetData(leftText);
   } else {
     // Otherwise it's an interior node, so shuffle around the children.
     nsCOMPtr<nsINodeList> childNodes = aNodeToJoin->ChildNodes();
@@ -4245,34 +4274,22 @@ EditorBase::CreateTxnForComposition(const nsAString& aStringToInsert)
   return transaction.forget();
 }
 
-NS_IMETHODIMP
-EditorBase::CreateTxnForAddStyleSheet(StyleSheet* aSheet,
-                                      AddStyleSheetTransaction** aTransaction)
+already_AddRefed<AddStyleSheetTransaction>
+EditorBase::CreateTxnForAddStyleSheet(StyleSheet* aSheet)
 {
-  RefPtr<AddStyleSheetTransaction> transaction = new AddStyleSheetTransaction();
+  RefPtr<AddStyleSheetTransaction> transaction =
+    new AddStyleSheetTransaction(*this, aSheet);
 
-  nsresult rv = transaction->Init(this, aSheet);
-  if (NS_SUCCEEDED(rv)) {
-    transaction.forget(aTransaction);
-  }
-
-  return rv;
+  return transaction.forget();
 }
 
-NS_IMETHODIMP
-EditorBase::CreateTxnForRemoveStyleSheet(
-              StyleSheet* aSheet,
-              RemoveStyleSheetTransaction** aTransaction)
+already_AddRefed<RemoveStyleSheetTransaction>
+EditorBase::CreateTxnForRemoveStyleSheet(StyleSheet* aSheet)
 {
   RefPtr<RemoveStyleSheetTransaction> transaction =
-    new RemoveStyleSheetTransaction();
+    new RemoveStyleSheetTransaction(*this, aSheet);
 
-  nsresult rv = transaction->Init(this, aSheet);
-  if (NS_SUCCEEDED(rv)) {
-    transaction.forget(aTransaction);
-  }
-
-  return rv;
+  return transaction.forget();
 }
 
 nsresult
@@ -4590,21 +4607,32 @@ EditorBase::CreateHTMLContent(nsIAtom* aTag)
                          kNameSpaceID_XHTML);
 }
 
-nsresult
+NS_IMETHODIMP
 EditorBase::SetAttributeOrEquivalent(nsIDOMElement* aElement,
                                      const nsAString& aAttribute,
                                      const nsAString& aValue,
                                      bool aSuppressTransaction)
 {
-  return SetAttribute(aElement, aAttribute, aValue);
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  if (NS_WARN_IF(!element)) {
+    return NS_ERROR_NULL_POINTER;
+  }
+  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
+  return SetAttributeOrEquivalent(element, attribute, aValue,
+                                  aSuppressTransaction);
 }
 
-nsresult
+NS_IMETHODIMP
 EditorBase::RemoveAttributeOrEquivalent(nsIDOMElement* aElement,
                                         const nsAString& aAttribute,
                                         bool aSuppressTransaction)
 {
-  return RemoveAttribute(aElement, aAttribute);
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  if (NS_WARN_IF(!element)) {
+    return NS_ERROR_NULL_POINTER;
+  }
+  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
+  return RemoveAttributeOrEquivalent(element, attribute, aSuppressTransaction);
 }
 
 nsresult

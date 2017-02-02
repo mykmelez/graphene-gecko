@@ -593,10 +593,10 @@ public:
    * its presentation context (presentation contexts <b>must not</b> be
    * shared among multiple presentation shells).
    */
-  virtual already_AddRefed<nsIPresShell> CreateShell(
-      nsPresContext* aContext,
-      nsViewManager* aViewManager,
-      mozilla::StyleSetHandle aStyleSet) override;
+  already_AddRefed<nsIPresShell> CreateShell(nsPresContext* aContext,
+                                             nsViewManager* aViewManager,
+                                             mozilla::StyleSetHandle aStyleSet)
+    final;
   virtual void DeleteShell() override;
 
   virtual nsresult GetAllowPlugins(bool* aAllowPlugins) override;
@@ -714,8 +714,8 @@ public:
   virtual void StyleRuleRemoved(mozilla::StyleSheet* aStyleSheet,
                                 mozilla::css::Rule* aStyleRule) override;
 
-  virtual void FlushPendingNotifications(mozFlushType aType) override;
-  virtual void FlushExternalResources(mozFlushType aType) override;
+  virtual void FlushPendingNotifications(mozilla::FlushType aType) override;
+  virtual void FlushExternalResources(mozilla::FlushType aType) override;
   virtual void SetXMLDeclaration(const char16_t *aVersion,
                                  const char16_t *aEncoding,
                                  const int32_t aStandalone) override;
@@ -774,7 +774,19 @@ public:
 
   virtual nsViewportInfo GetViewportInfo(const mozilla::ScreenIntSize& aDisplaySize) override;
 
-  void ReportUseCounters();
+  enum class UseCounterReportKind {
+    // Flush the document's use counters only; the use counters for any
+    // external resource documents will be flushed when the external
+    // resource documents themselves are destroyed.
+    eDefault,
+
+    // Flush use counters for the document and for its external resource
+    // documents. (Should only be necessary for tests, where we need
+    // flushing to happen synchronously and deterministically.)
+    eIncludeExternalResources,
+  };
+
+  void ReportUseCounters(UseCounterReportKind aKind = UseCounterReportKind::eDefault);
 
   virtual void AddIntersectionObserver(
     mozilla::dom::DOMIntersectionObserver* aObserver) override;
@@ -1273,10 +1285,6 @@ public:
   bool ContainsMSEContent();
 
 protected:
-  already_AddRefed<nsIPresShell> doCreateShell(nsPresContext* aContext,
-                                               nsViewManager* aViewManager,
-                                               mozilla::StyleSetHandle aStyleSet);
-
   void RemoveDocStyleSheetsFromStyleSets();
   void RemoveStyleSheetsFromStyleSets(
       const nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets,

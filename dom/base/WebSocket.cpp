@@ -337,7 +337,7 @@ WebSocketImpl::PrintErrorOnConsole(const char *aBundleURI,
       new PrintErrorOnConsoleRunnable(this, aBundleURI, aError, aFormatStrings,
                                       aFormatStringsLen);
     ErrorResult rv;
-    runnable->Dispatch(rv);
+    runnable->Dispatch(Killing, rv);
     // XXXbz this seems totally broken.  We should be propagating this out, but
     // none of our callers really propagate anything usefully.  Come to think of
     // it, why is this a syncrunnable anyway?  Can't this be a fire-and-forget
@@ -409,7 +409,10 @@ public:
 
   NS_IMETHOD Run() override
   {
-    mChannel->Close(mReasonCode, mReasonString);
+    nsresult rv = mChannel->Close(mReasonCode, mReasonString);
+    if (NS_FAILED(rv)) {
+      NS_WARNING("Failed to dispatch the close message");
+    }
     return NS_OK;
   }
 
@@ -622,7 +625,7 @@ WebSocketImpl::Disconnect()
     RefPtr<DisconnectInternalRunnable> runnable =
       new DisconnectInternalRunnable(this);
     ErrorResult rv;
-    runnable->Dispatch(rv);
+    runnable->Dispatch(Killing, rv);
     // XXXbz this seems totally broken.  We should be propagating this out, but
     // where to, exactly?
     rv.SuppressException();
@@ -758,10 +761,12 @@ WebSocketImpl::OnStart(nsISupports* aContext)
   }
 
   if (!mRequestedProtocolList.IsEmpty()) {
-    mChannel->GetProtocol(mWebSocket->mEstablishedProtocol);
+    rv = mChannel->GetProtocol(mWebSocket->mEstablishedProtocol);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
-  mChannel->GetExtensions(mWebSocket->mEstablishedExtensions);
+  rv = mChannel->GetExtensions(mWebSocket->mEstablishedExtensions);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
   UpdateURI();
 
   mWebSocket->SetReadyState(WebSocket::OPEN);
@@ -1304,7 +1309,7 @@ WebSocket::ConstructorCommon(const GlobalObject& aGlobal,
       new InitRunnable(webSocketImpl, !!aTransportProvider, aUrl,
                        protocolArray, nsDependentCString(file.get()), lineno,
                        column, &connectionFailed);
-    runnable->Dispatch(aRv);
+    runnable->Dispatch(Terminating, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       return nullptr;
     }
@@ -1393,7 +1398,7 @@ WebSocket::ConstructorCommon(const GlobalObject& aGlobal,
                "not yet implemented");
     RefPtr<AsyncOpenRunnable> runnable =
       new AsyncOpenRunnable(webSocket->mImpl);
-    runnable->Dispatch(aRv);
+    runnable->Dispatch(Terminating, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       return nullptr;
     }
@@ -1424,32 +1429,6 @@ WebSocket::ConstructorCommon(const GlobalObject& aGlobal,
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(WebSocket)
 
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(WebSocket)
-  bool isBlack = tmp->IsBlack();
-  if (isBlack || tmp->mKeepingAlive) {
-    if (tmp->mListenerManager) {
-      tmp->mListenerManager->MarkForCC();
-    }
-    if (!isBlack && tmp->PreservingWrapper()) {
-      // This marks the wrapper black.
-      tmp->GetWrapper();
-    }
-    return true;
-  }
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_END
-
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_BEGIN(WebSocket)
-  return tmp->IsBlack();
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_END
-
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_BEGIN(WebSocket)
-  return tmp->IsBlack();
-NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(WebSocket,
-                                               DOMEventTargetHelper)
-NS_IMPL_CYCLE_COLLECTION_TRACE_END
-
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(WebSocket,
                                                   DOMEventTargetHelper)
   if (tmp->mImpl) {
@@ -1465,6 +1444,12 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WebSocket,
     MOZ_ASSERT(!tmp->mImpl);
   }
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+bool
+WebSocket::IsCertainlyAliveForCC() const
+{
+  return mKeepingAlive;
+}
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(WebSocket)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
@@ -1856,11 +1841,12 @@ WebSocketImpl::InitializeConnection(nsIPrincipal* aPrincipal)
   // and aPrincipal are same origin.
   MOZ_ASSERT(!doc || doc->NodePrincipal()->Equals(aPrincipal));
 
-  wsChannel->InitLoadInfo(doc ? doc->AsDOMNode() : nullptr,
-                          doc ? doc->NodePrincipal() : aPrincipal,
-                          aPrincipal,
-                          nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                          nsIContentPolicy::TYPE_WEBSOCKET);
+  rv = wsChannel->InitLoadInfo(doc ? doc->AsDOMNode() : nullptr,
+                               doc ? doc->NodePrincipal() : aPrincipal,
+                               aPrincipal,
+                               nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                               nsIContentPolicy::TYPE_WEBSOCKET);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   if (!mRequestedProtocolList.IsEmpty()) {
     rv = wsChannel->SetProtocol(mRequestedProtocolList);
@@ -2022,10 +2008,11 @@ WebSocket::CreateAndDispatchCloseEvent(bool aWasClean,
                                        uint16_t aCode,
                                        const nsAString& aReason)
 {
-  MOZ_ASSERT(mImpl);
   AssertIsOnTargetThread();
 
-  if (mImpl->mChannel) {
+  // This method is called by a runnable and it can happen that, in the
+  // meantime, GC unlinked this object, so mImpl could be null.
+  if (mImpl && mImpl->mChannel) {
     mImpl->mService->WebSocketClosed(mImpl->mChannel->Serial(),
                                      mImpl->mInnerWindowID,
                                      aWasClean, aCode, aReason);
@@ -2245,6 +2232,7 @@ public:
   }
 
 private:
+  // RawPointer because this proxy keeps alive the holder.
   WebSocketImpl* mWebSocketImpl;
 };
 
@@ -2290,6 +2278,11 @@ WebSocketImpl::UnregisterWorkerHolder()
   MOZ_ASSERT(mWorkerPrivate);
   mWorkerPrivate->AssertIsOnWorkerThread();
   MOZ_ASSERT(mWorkerHolder);
+
+  {
+    MutexAutoLock lock(mMutex);
+    mWorkerShuttingDown = true;
+  }
 
   // The DTOR of this WorkerHolder will release the worker for us.
   mWorkerHolder = nullptr;
@@ -2845,7 +2838,7 @@ WebSocketImpl::Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags)
     return NS_OK;
   }
 
-  MOZ_ASSERT(mWorkerPrivate);
+  MOZ_DIAGNOSTIC_ASSERT(mWorkerPrivate);
 
 #ifdef DEBUG
   MOZ_ASSERT(HasWorkerHolderRegistered());

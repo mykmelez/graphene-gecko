@@ -171,7 +171,7 @@ static const char kProfileDoChange[] = "profile-do-change";
 uint32_t   nsIOService::gDefaultSegmentSize = 4096;
 uint32_t   nsIOService::gDefaultSegmentCount = 24;
 
-bool nsIOService::sTelemetryEnabled = false;
+bool nsIOService::sDataURIInheritSecurityContext = true;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -250,7 +250,8 @@ nsIOService::Init()
     else
         NS_WARNING("failed to get observer service");
 
-    Preferences::AddBoolVarCache(&sTelemetryEnabled, "toolkit.telemetry.enabled", false);
+    Preferences::AddBoolVarCache(&sDataURIInheritSecurityContext,
+                                 "security.data_uri.inherit_security_context", true);
     Preferences::AddBoolVarCache(&mOfflineMirrorsConnectivity, OFFLINE_MIRRORS_CONNECTIVITY, true);
 
     gIOService = this;
@@ -1150,6 +1151,15 @@ nsIOService::SetConnectivityInternal(bool aConnectivity)
     // we have statistic about network change event even if we are offline.
     mLastConnectivityChange = PR_IntervalNow();
 
+    if (mCaptivePortalService) {
+        if (aConnectivity && !xpc::AreNonLocalConnectionsDisabled()) {
+            // This will also trigger a captive portal check for the new network
+            static_cast<CaptivePortalService*>(mCaptivePortalService.get())->Start();
+        } else {
+            static_cast<CaptivePortalService*>(mCaptivePortalService.get())->Stop();
+        }
+    }
+
     nsCOMPtr<nsIObserverService> observerService = services::GetObserverService();
     if (!observerService) {
         return NS_OK;
@@ -1613,12 +1623,12 @@ nsIOService::OnNetworkLinkEvent(const char *data)
     if (!strcmp(data, NS_NETWORK_LINK_DATA_CHANGED)) {
         mLastNetworkLinkChange = PR_IntervalNow();
         // CHANGED means UP/DOWN didn't change
+        // but the status of the captive portal may have changed.
+        RecheckCaptivePortal();
         return NS_OK;
     } else if (!strcmp(data, NS_NETWORK_LINK_DATA_DOWN)) {
         isUp = false;
     } else if (!strcmp(data, NS_NETWORK_LINK_DATA_UP)) {
-        // Interface is up. Triggering a captive portal recheck.
-        RecheckCaptivePortal();
         isUp = true;
     } else if (!strcmp(data, NS_NETWORK_LINK_DATA_UNKNOWN)) {
         nsresult rv = mNetworkLinkService->GetIsLinkUp(&isUp);
@@ -1865,6 +1875,12 @@ nsIOService::SpeculativeAnonymousConnect2(nsIURI *aURI,
                                           nsIInterfaceRequestor *aCallbacks)
 {
     return SpeculativeConnectInternal(aURI, aPrincipal, aCallbacks, true);
+}
+
+/*static*/ bool
+nsIOService::IsInheritSecurityContextForDataURIEnabled()
+{
+  return sDataURIInheritSecurityContext;
 }
 
 } // namespace net

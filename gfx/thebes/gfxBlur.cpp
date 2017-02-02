@@ -430,7 +430,7 @@ ComputeMinSizeForShadowShape(const RectCornerRadii* aCornerRadii,
   Size cornerSize(0, 0);
   if (aCornerRadii) {
     const RectCornerRadii& corners = *aCornerRadii;
-    for (size_t i = 0; i < RectCorner::Count; i++) {
+    NS_FOR_CSS_FULL_CORNERS(i) {
       cornerSize.width = std::max(cornerSize.width, corners[i].width);
       cornerSize.height = std::max(cornerSize.height, corners[i].height);
     }
@@ -1163,7 +1163,7 @@ static void GetBlurMargins(const RectCornerRadii* aInnerClipRadii,
   Size cornerSize(0, 0);
   if (aInnerClipRadii) {
     const RectCornerRadii& corners = *aInnerClipRadii;
-    for (size_t i = 0; i < RectCorner::Count; i++) {
+    NS_FOR_CSS_FULL_CORNERS(i) {
       cornerSize.width = std::max(cornerSize.width, corners[i].width);
       cornerSize.height = std::max(cornerSize.height, corners[i].height);
     }
@@ -1245,7 +1245,13 @@ gfxAlphaBoxBlur::BlurInsetBox(gfxContext* aDestinationCtx,
     GetInsetBoxShadowRects(blurMargin, innerMargin, aShadowClipRect,
                            aDestinationRect, whitespaceRect, outerRect);
 
-  bool mirrorCorners = !aInnerClipRadii || aInnerClipRadii->AreRadiiSame();
+  // Check that the inset margin between the outer and whitespace rects is symmetric,
+  // and that all corner radii are the same, in which case the blur can be mirrored.
+  Margin checkMargin = outerRect - whitespaceRect;
+  bool mirrorCorners =
+    checkMargin.left == checkMargin.right &&
+    checkMargin.top == checkMargin.bottom &&
+    (!aInnerClipRadii || aInnerClipRadii->AreRadiiSame());
   RefPtr<SourceSurface> minBlur =
     GetInsetBlur(outerRect, whitespaceRect, useDestRect, aShadowColor,
                  aBlurRadius, aInnerClipRadii, destDrawTarget, mirrorCorners);

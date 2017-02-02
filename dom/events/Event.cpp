@@ -230,7 +230,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Event)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPresContext)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExplicitOriginalTarget)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 
@@ -566,6 +565,34 @@ Event::SetEventType(const nsAString& aEventTypeArg)
     mEvent->SetComposed(aEventTypeArg);
   }
   mEvent->SetDefaultComposedInNativeAnonymousContent();
+}
+
+already_AddRefed<EventTarget>
+Event::EnsureWebAccessibleRelatedTarget(EventTarget* aRelatedTarget)
+{
+  nsCOMPtr<EventTarget> relatedTarget = aRelatedTarget;
+  if (relatedTarget) {
+    nsCOMPtr<nsIContent> content = do_QueryInterface(relatedTarget);
+    nsCOMPtr<nsIContent> currentTarget =
+      do_QueryInterface(mEvent->mCurrentTarget);
+
+    if (content && content->ChromeOnlyAccess() &&
+        !nsContentUtils::CanAccessNativeAnon()) {
+      content = content->FindFirstNonChromeOnlyAccessContent();
+      relatedTarget = do_QueryInterface(content);
+    }
+
+    nsIContent* shadowRelatedTarget =
+      GetShadowRelatedTarget(currentTarget, content);
+    if (shadowRelatedTarget) {
+      relatedTarget = shadowRelatedTarget;
+    }
+
+    if (relatedTarget) {
+      relatedTarget = relatedTarget->GetTargetForDOMEvent();
+    }
+  }
+  return relatedTarget.forget();
 }
 
 void
@@ -1006,7 +1033,7 @@ Event::GetOffsetCoords(nsPresContext* aPresContext,
   if (!shell) {
     return CSSIntPoint(0, 0);
   }
-  shell->FlushPendingNotifications(Flush_Layout);
+  shell->FlushPendingNotifications(FlushType::Layout);
   nsIFrame* frame = content->GetPrimaryFrame();
   if (!frame) {
     return CSSIntPoint(0, 0);
@@ -1261,7 +1288,9 @@ Event::GetCancelBubble(bool* aCancelBubble)
 NS_IMETHODIMP
 Event::SetCancelBubble(bool aCancelBubble)
 {
-  mEvent->mFlags.mPropagationStopped = aCancelBubble;
+  if (aCancelBubble) {
+    mEvent->StopPropagation();
+  }
   return NS_OK;
 }
 

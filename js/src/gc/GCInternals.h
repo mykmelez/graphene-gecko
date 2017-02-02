@@ -46,7 +46,7 @@ class MOZ_RAII AutoTraceSession
     void operator=(const AutoTraceSession&) = delete;
 
     JS::HeapState prevState;
-    AutoSPSEntry pseudoFrame;
+    AutoGeckoProfilerEntry pseudoFrame;
 };
 
 class MOZ_RAII AutoPrepareForTracing
@@ -88,9 +88,7 @@ class MOZ_RAII AutoStopVerifyingBarriers
         gcstats::Phase outer = gc->stats.currentPhase();
         if (outer != gcstats::PHASE_NONE)
             gc->stats.endPhase(outer);
-        MOZ_ASSERT((gc->stats.currentPhase() == gcstats::PHASE_NONE) ||
-                   (gc->stats.currentPhase() == gcstats::PHASE_GC_BEGIN) ||
-                   (gc->stats.currentPhase() == gcstats::PHASE_GC_END));
+        MOZ_ASSERT(gc->stats.currentPhase() == gcstats::PHASE_NONE);
 
         if (restartPreVerifier)
             gc->startVerifyPreBarriers();

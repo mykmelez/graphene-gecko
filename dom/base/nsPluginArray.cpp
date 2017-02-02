@@ -45,12 +45,6 @@ nsPluginArray::Init()
 
 nsPluginArray::~nsPluginArray() = default;
 
-static bool
-ResistFingerprinting() {
-  return !nsContentUtils::ThreadsafeIsCallerChrome() &&
-         nsContentUtils::ResistFingerprinting();
-}
-
 nsPIDOMWindowInner*
 nsPluginArray::GetParentObject() const
 {
@@ -132,17 +126,17 @@ nsPluginArray::GetCTPMimeTypes(nsTArray<RefPtr<nsMimeType>>& aMimeTypes)
 }
 
 nsPluginElement*
-nsPluginArray::Item(uint32_t aIndex)
+nsPluginArray::Item(uint32_t aIndex, CallerType aCallerType)
 {
   bool unused;
-  return IndexedGetter(aIndex, unused);
+  return IndexedGetter(aIndex, unused, aCallerType);
 }
 
 nsPluginElement*
-nsPluginArray::NamedItem(const nsAString& aName)
+nsPluginArray::NamedItem(const nsAString& aName, CallerType aCallerType)
 {
   bool unused;
-  return NamedGetter(aName, unused);
+  return NamedGetter(aName, unused, aCallerType);
 }
 
 void
@@ -191,11 +185,11 @@ nsPluginArray::Refresh(bool aReloadDocuments)
 }
 
 nsPluginElement*
-nsPluginArray::IndexedGetter(uint32_t aIndex, bool &aFound)
+nsPluginArray::IndexedGetter(uint32_t aIndex, bool &aFound, CallerType aCallerType)
 {
   aFound = false;
 
-  if (!AllowPlugins() || ResistFingerprinting()) {
+  if (!AllowPlugins() || nsContentUtils::ResistFingerprinting(aCallerType)) {
     return nullptr;
   }
 
@@ -238,11 +232,12 @@ FindPlugin(const nsTArray<RefPtr<nsPluginElement> >& aPlugins,
 }
 
 nsPluginElement*
-nsPluginArray::NamedGetter(const nsAString& aName, bool &aFound)
+nsPluginArray::NamedGetter(const nsAString& aName, bool &aFound,
+                           CallerType aCallerType)
 {
   aFound = false;
 
-  if (!AllowPlugins() || ResistFingerprinting()) {
+  if (!AllowPlugins() || nsContentUtils::ResistFingerprinting(aCallerType)) {
     return nullptr;
   }
 
@@ -274,9 +269,9 @@ void nsPluginArray::NotifyHiddenPluginTouched(nsPluginElement* aHiddenElement)
 }
 
 uint32_t
-nsPluginArray::Length()
+nsPluginArray::Length(CallerType aCallerType)
 {
-  if (!AllowPlugins() || ResistFingerprinting()) {
+  if (!AllowPlugins() || nsContentUtils::ResistFingerprinting(aCallerType)) {
     return 0;
   }
 
@@ -286,11 +281,12 @@ nsPluginArray::Length()
 }
 
 void
-nsPluginArray::GetSupportedNames(nsTArray<nsString>& aRetval)
+nsPluginArray::GetSupportedNames(nsTArray<nsString>& aRetval,
+                                 CallerType aCallerType)
 {
   aRetval.Clear();
 
-  if (!AllowPlugins()) {
+  if (!AllowPlugins() || nsContentUtils::ResistFingerprinting(aCallerType)) {
     return;
   }
 
@@ -370,9 +366,21 @@ nsPluginArray::EnsurePlugins()
           nsCString permString;
           nsresult rv = pluginHost->GetPermissionStringForTag(pluginTag, 0, permString);
           if (rv == NS_OK) {
-            nsIPrincipal* principal = mWindow->GetExtantDoc()->NodePrincipal();
-            nsCOMPtr<nsIPermissionManager> permMgr = services::GetPermissionManager();
-            permMgr->TestPermissionFromPrincipal(principal, permString.get(), &permission);
+            nsCOMPtr<nsIDocument> currentDoc = mWindow->GetExtantDoc();
+
+            // The top-level content document gets the final say on whether or not
+            // a plugin is going to be hidden or not, regardless of the origin
+            // that a subframe is hosted at. This is to avoid spamming the user
+            // with the hidden plugin notification bar when third-party iframes
+            // attempt to access navigator.plugins after the user has already
+            // expressed that the top-level document has this permission.
+            nsCOMPtr<nsIDocument> topDoc = currentDoc->GetTopLevelContentDocument();
+
+            if (topDoc) {
+              nsIPrincipal* principal = topDoc->NodePrincipal();
+              nsCOMPtr<nsIPermissionManager> permMgr = services::GetPermissionManager();
+              permMgr->TestPermissionFromPrincipal(principal, permString.get(), &permission);
+            }
           }
         }
       }

@@ -33,6 +33,10 @@
     _(ParserCompileLazy)                              \
     _(ParserCompileScript)                            \
     _(ParserCompileModule)                            \
+    _(DecodeScript)                                   \
+    _(DecodeFunction)                                 \
+    _(EncodeScript)                                   \
+    _(EncodeFunction)                                 \
     _(Scripts)                                        \
     _(VM)                                             \
     _(CompressSource)                                 \
@@ -42,6 +46,7 @@
     /* Specific passes during ion compilation */      \
     _(PruneUnusedBranches)                            \
     _(FoldTests)                                      \
+    _(FoldEmptyBlocks)                                \
     _(SplitCriticalEdges)                             \
     _(RenumberBlocks)                                 \
     _(ScalarReplacement)                              \

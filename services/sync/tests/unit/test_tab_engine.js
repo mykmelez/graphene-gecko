@@ -56,7 +56,7 @@ add_task(async function test_tab_engine_skips_incoming_local_record() {
   let apply = store.applyIncoming;
   let applied = [];
 
-  store.applyIncoming = function (record) {
+  store.applyIncoming = function(record) {
     notEqual(record.id, localID, "Only apply tab records from remote clients");
     applied.push(record);
     apply.call(store, record);
@@ -78,8 +78,7 @@ add_task(async function test_tab_engine_skips_incoming_local_record() {
       "/1.1/foo/storage/tabs": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -90,7 +89,7 @@ add_task(async function test_tab_engine_skips_incoming_local_record() {
 
   let promiseFinished = new Promise(resolve => {
     let syncFinish = engine._syncFinish;
-    engine._syncFinish = function () {
+    engine._syncFinish = function() {
       equal(applied.length, 1, "Remote client record was applied");
       equal(applied[0].id, remoteID, "Remote client ID matches");
 
@@ -105,7 +104,7 @@ add_task(async function test_tab_engine_skips_incoming_local_record() {
 });
 
 add_test(function test_reconcile() {
-  let [engine, store] = getMocks();
+  let [engine, ] = getMocks();
 
   _("Setup engine for reconciling");
   engine._syncStartup();

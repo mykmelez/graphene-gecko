@@ -13,6 +13,7 @@
 #include "jsfriendapi.h"
 #include "jsgc.h"
 
+#include "gc/AtomMarking.h"
 #include "gc/Heap.h"
 #include "gc/Nursery.h"
 #include "gc/Statistics.h"
@@ -24,7 +25,6 @@ namespace js {
 
 class AutoLockGC;
 class AutoLockHelperThreadState;
-class SliceBudget;
 class VerifyPreTracer;
 
 namespace gc {
@@ -816,9 +816,6 @@ class GCRuntime
     bool isFullGc() const { return isFull; }
     bool isCompactingGc() const { return isCompacting; }
 
-    bool areGrayBitsValid() const { return grayBitsValid; }
-    void setGrayBitsInvalid() { grayBitsValid = false; }
-
     bool minorGCRequested() const { return minorGCTriggerReason != JS::gcreason::NO_REASON; }
     bool majorGCRequested() const { return majorGCTriggerReason != JS::gcreason::NO_REASON; }
     bool isGcNeeded() { return minorGCRequested() || majorGCRequested(); }
@@ -860,19 +857,6 @@ class GCRuntime
 #else
     bool isVerifyPreBarriersEnabled() const { return false; }
 #endif
-
-    // GC interrupt callbacks.
-    bool addInterruptCallback(JS::GCInterruptCallback callback);
-    void requestInterruptCallback();
-
-    bool checkInterruptCallback(JSContext* cx) {
-        if (interruptCallbackRequested) {
-            invokeInterruptCallback(cx);
-            return true;
-        }
-        return false;
-    }
-    void invokeInterruptCallback(JSContext* cx);
 
     // Free certain LifoAlloc blocks when it is safe to do so.
     void freeUnusedLifoBlocksAfterSweeping(LifoAlloc* lifo);
@@ -1057,6 +1041,10 @@ class GCRuntime
 
     MemProfiler mMemProfiler;
 
+    // State used for managing atom mark bitmaps in each zone. Protected by the
+    // exclusive access lock.
+    AtomMarkingRuntime atomMarking;
+
   private:
     // When empty, chunks reside in the emptyChunks pool and are re-used as
     // needed or eventually expired if not re-used. The emptyChunks pool gets
@@ -1088,13 +1076,6 @@ class GCRuntime
      */
     mozilla::Atomic<uint32_t, mozilla::ReleaseAcquire> numArenasFreeCommitted;
     VerifyPreTracer* verifyPreData;
-
-    // GC interrupt callbacks.
-    using GCInterruptCallbackVector = js::Vector<JS::GCInterruptCallback, 2, js::SystemAllocPolicy>;
-    GCInterruptCallbackVector interruptCallbacks;
-
-    mozilla::Atomic<bool, mozilla::Relaxed> interruptCallbackRequested;
-    SliceBudget* currentBudget;
 
   private:
     bool chunkAllocationSinceLastGC;
@@ -1129,12 +1110,6 @@ class GCRuntime
         grayBufferState = GrayBufferState::Unused;
         resetBufferedGrayRoots();
     }
-
-    /*
-     * The gray bits can become invalid if UnmarkGray overflows the stack. A
-     * full GC will reset this bit, since it fills in all the gray bits.
-     */
-    bool grayBitsValid;
 
     mozilla::Atomic<JS::gcreason::Reason, mozilla::Relaxed> majorGCTriggerReason;
 

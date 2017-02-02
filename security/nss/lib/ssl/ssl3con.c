@@ -273,10 +273,6 @@ static const /*SSL3ClientCertificateType */ PRUint8 certificate_types[] = {
     ct_DSS_sign,
 };
 
-/* This global item is used only in servers.  It is is initialized by
-** SSL_ConfigSecureServer(), and is used in ssl3_SendCertificateRequest().
-*/
-CERTDistNames *ssl3_server_ca_list = NULL;
 static SSL3Statistics ssl3stats;
 
 /* Record protection algorithms, indexed by SSL3BulkCipher.
@@ -863,12 +859,10 @@ ssl_HasCert(const sslSocket *ss, SSLAuthType authType)
          cursor != &ss->serverCerts;
          cursor = PR_NEXT_LINK(cursor)) {
         sslServerCert *cert = (sslServerCert *)cursor;
-        if (cert->certType.authType != authType) {
-            continue;
-        }
         if (!cert->serverKeyPair ||
             !cert->serverKeyPair->privKey ||
-            !cert->serverCertChain) {
+            !cert->serverCertChain ||
+            !SSL_CERT_IS(cert, authType)) {
             continue;
         }
         /* When called from ssl3_config_match_init(), all the EC curves will be
@@ -879,7 +873,7 @@ ssl_HasCert(const sslSocket *ss, SSLAuthType authType)
         if ((authType == ssl_auth_ecdsa ||
              authType == ssl_auth_ecdh_ecdsa ||
              authType == ssl_auth_ecdh_rsa) &&
-            !ssl_NamedGroupEnabled(ss, cert->certType.namedCurve)) {
+            !ssl_NamedGroupEnabled(ss, cert->namedCurve)) {
             continue;
         }
         return PR_TRUE;
@@ -1044,8 +1038,9 @@ Null_Cipher(void *ctx, unsigned char *output, int *outputLen, int maxOutputLen,
         return SECFailure;
     }
     *outputLen = inputLen;
-    if (input != output)
+    if (inputLen > 0 && input != output) {
         PORT_Memcpy(output, input, inputLen);
+    }
     return SECSuccess;
 }
 
@@ -2577,11 +2572,23 @@ ssl_ProtectRecord(sslSocket *ss, ssl3CipherSpec *cwSpec,
                   const SSL3Opaque *pIn, PRUint32 contentLen, sslBuffer *wrBuf)
 {
     const ssl3BulkCipherDef *cipher_def = cwSpec->cipher_def;
-    PRUint16 headerLen = IS_DTLS(ss) ? DTLS_RECORD_HEADER_LENGTH : SSL3_RECORD_HEADER_LENGTH;
-    sslBuffer protBuf = { wrBuf->buf + headerLen, 0, wrBuf->space - headerLen };
+    PRUint16 headerLen;
+    sslBuffer protBuf;
     SSL3ProtocolVersion version = cwSpec->version;
     PRBool isTLS13;
+    PRUint8 *ptr = wrBuf->buf;
     SECStatus rv;
+
+    if (ss->ssl3.hs.shortHeaders) {
+        PORT_Assert(!IS_DTLS(ss));
+        PORT_Assert(ss->version >= SSL_LIBRARY_VERSION_TLS_1_3);
+        headerLen = TLS13_RECORD_HEADER_LENGTH_SHORT;
+    } else {
+        headerLen = IS_DTLS(ss) ? DTLS_RECORD_HEADER_LENGTH : SSL3_RECORD_HEADER_LENGTH;
+    }
+    protBuf.buf = wrBuf->buf + headerLen;
+    protBuf.len = 0;
+    protBuf.space = wrBuf->space - headerLen;
 
     PORT_Assert(cipher_def->max_records <= RECORD_SEQ_MAX);
     if ((cwSpec->write_seq_num & RECORD_SEQ_MAX) >= cipher_def->max_records) {
@@ -2612,29 +2619,32 @@ ssl_ProtectRecord(sslSocket *ss, ssl3CipherSpec *cwSpec,
     PORT_Assert(protBuf.len <= MAX_FRAGMENT_LENGTH + (isTLS13 ? 256 : 1024));
     wrBuf->len = protBuf.len + headerLen;
 
-#ifndef UNSAFE_FUZZER_MODE
-    if (isTLS13 && cipher_def->calg != ssl_calg_null) {
-        wrBuf->buf[0] = content_application_data;
-    } else
-#endif
-    {
-        wrBuf->buf[0] = type;
-    }
-
-    if (IS_DTLS(ss)) {
-        version = isTLS13 ? SSL_LIBRARY_VERSION_TLS_1_1 : version;
-        version = dtls_TLSVersionToDTLSVersion(version);
-
-        (void)ssl_EncodeUintX(version, 2, &wrBuf->buf[1]);
-        (void)ssl_EncodeUintX(cwSpec->write_seq_num, 8, &wrBuf->buf[3]);
-        (void)ssl_EncodeUintX(protBuf.len, 2, &wrBuf->buf[11]);
+    if (ss->ssl3.hs.shortHeaders) {
+        PORT_Assert(!IS_DTLS(ss)); /* Decoder not yet implemented. */
+        (void)ssl_EncodeUintX(0x8000 | protBuf.len, 2, ptr);
     } else {
-        if (capRecordVersion || isTLS13) {
-            version = PR_MIN(SSL_LIBRARY_VERSION_TLS_1_0, version);
+#ifndef UNSAFE_FUZZER_MODE
+        if (isTLS13 && cipher_def->calg != ssl_calg_null) {
+            *ptr++ = content_application_data;
+        } else
+#endif
+        {
+            *ptr++ = type;
         }
 
-        (void)ssl_EncodeUintX(version, 2, &wrBuf->buf[1]);
-        (void)ssl_EncodeUintX(protBuf.len, 2, &wrBuf->buf[3]);
+        if (IS_DTLS(ss)) {
+            version = isTLS13 ? SSL_LIBRARY_VERSION_TLS_1_1 : version;
+            version = dtls_TLSVersionToDTLSVersion(version);
+
+            ptr = ssl_EncodeUintX(version, 2, ptr);
+            ptr = ssl_EncodeUintX(cwSpec->write_seq_num, 8, ptr);
+        } else {
+            if (capRecordVersion || isTLS13) {
+                version = PR_MIN(SSL_LIBRARY_VERSION_TLS_1_0, version);
+            }
+            ptr = ssl_EncodeUintX(version, 2, ptr);
+        }
+        (void)ssl_EncodeUintX(protBuf.len, 2, ptr);
     }
     ++cwSpec->write_seq_num;
 
@@ -3106,6 +3116,10 @@ SSL3_SendAlert(sslSocket *ss, SSL3AlertLevel level, SSL3AlertDescription desc)
 {
     PRUint8 bytes[2];
     SECStatus rv;
+    PRBool needHsLock = !ssl_HaveSSL3HandshakeLock(ss);
+
+    /* Check that if I need the HS lock I also need the Xmit lock */
+    PORT_Assert(!needHsLock || !ssl_HaveXmitBufLock(ss));
 
     SSL_TRC(3, ("%d: SSL3[%d]: send alert record, level=%d desc=%d",
                 SSL_GETPID(), ss->fd, level, desc));
@@ -3113,7 +3127,9 @@ SSL3_SendAlert(sslSocket *ss, SSL3AlertLevel level, SSL3AlertDescription desc)
     bytes[0] = level;
     bytes[1] = desc;
 
-    ssl_GetSSL3HandshakeLock(ss);
+    if (needHsLock) {
+        ssl_GetSSL3HandshakeLock(ss);
+    }
     if (level == alert_fatal) {
         if (!ss->opt.noCache && ss->sec.ci.sid) {
             ss->sec.uncache(ss->sec.ci.sid);
@@ -3131,7 +3147,9 @@ SSL3_SendAlert(sslSocket *ss, SSL3AlertLevel level, SSL3AlertDescription desc)
         ss->ssl3.fatalAlertSent = PR_TRUE;
     }
     ssl_ReleaseXmitBufLock(ss);
-    ssl_ReleaseSSL3HandshakeLock(ss);
+    if (needHsLock) {
+        ssl_ReleaseSSL3HandshakeLock(ss);
+    }
     return rv; /* error set by ssl3_FlushHandshake or ssl3_SendRecord */
 }
 
@@ -5559,8 +5577,6 @@ ssl3_HandleHelloRequest(sslSocket *ss)
     return rv;
 }
 
-#define UNKNOWN_WRAP_MECHANISM 0x7fffffff
-
 static const CK_MECHANISM_TYPE wrapMechanismList[SSL_NUM_WRAP_MECHS] = {
     CKM_DES3_ECB,
     CKM_CAST5_ECB,
@@ -5576,27 +5592,58 @@ static const CK_MECHANISM_TYPE wrapMechanismList[SSL_NUM_WRAP_MECHS] = {
     CKM_SKIPJACK_CBC64,
     CKM_AES_ECB,
     CKM_CAMELLIA_ECB,
-    CKM_SEED_ECB,
-    UNKNOWN_WRAP_MECHANISM
+    CKM_SEED_ECB
 };
 
-static int
-ssl_FindIndexByWrapMechanism(CK_MECHANISM_TYPE mech)
+static SECStatus
+ssl_FindIndexByWrapMechanism(CK_MECHANISM_TYPE mech, unsigned int *wrapMechIndex)
 {
-    const CK_MECHANISM_TYPE *pMech = wrapMechanismList;
-
-    while (mech != *pMech && *pMech != UNKNOWN_WRAP_MECHANISM) {
-        ++pMech;
+    unsigned int i;
+    for (i = 0; i < SSL_NUM_WRAP_MECHS; ++i) {
+        if (wrapMechanismList[i] == mech) {
+            *wrapMechIndex = i;
+            return SECSuccess;
+        }
     }
-    return (*pMech == UNKNOWN_WRAP_MECHANISM) ? -1
-                                              : (pMech - wrapMechanismList);
+    PORT_Assert(0);
+    PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
+    return SECFailure;
+}
+
+/* Each process sharing the server session ID cache has its own array of SymKey
+ * pointers for the symmetric wrapping keys that are used to wrap the master
+ * secrets.  There is one key for each authentication type.  These Symkeys
+ * correspond to the wrapped SymKeys kept in the server session cache.
+ */
+const SSLAuthType ssl_wrap_key_auth_type[SSL_NUM_WRAP_KEYS] = {
+    ssl_auth_rsa_decrypt,
+    ssl_auth_rsa_sign,
+    ssl_auth_rsa_pss,
+    ssl_auth_ecdsa,
+    ssl_auth_ecdh_rsa,
+    ssl_auth_ecdh_ecdsa
+};
+
+static SECStatus
+ssl_FindIndexByWrapKey(const sslServerCert *serverCert, unsigned int *wrapKeyIndex)
+{
+    unsigned int i;
+    for (i = 0; i < SSL_NUM_WRAP_KEYS; ++i) {
+        if (SSL_CERT_IS(serverCert, ssl_wrap_key_auth_type[i])) {
+            *wrapKeyIndex = i;
+            return SECSuccess;
+        }
+    }
+    /* Can't assert here because we still get people using DSA certificates. */
+    PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
+    return SECFailure;
 }
 
 static PK11SymKey *
 ssl_UnwrapSymWrappingKey(
     SSLWrappedSymWrappingKey *pWswk,
     SECKEYPrivateKey *svrPrivKey,
-    SSLAuthType authType,
+    unsigned int wrapKeyIndex,
     CK_MECHANISM_TYPE masterWrapMech,
     void *pwArg)
 {
@@ -5608,9 +5655,9 @@ ssl_UnwrapSymWrappingKey(
 
     /* found the wrapping key on disk. */
     PORT_Assert(pWswk->symWrapMechanism == masterWrapMech);
-    PORT_Assert(pWswk->authType == authType);
+    PORT_Assert(pWswk->wrapKeyIndex == wrapKeyIndex);
     if (pWswk->symWrapMechanism != masterWrapMech ||
-        pWswk->authType != authType) {
+        pWswk->wrapKeyIndex != wrapKeyIndex) {
         goto loser;
     }
     wrappedKey.type = siBuffer;
@@ -5618,7 +5665,7 @@ ssl_UnwrapSymWrappingKey(
     wrappedKey.len = pWswk->wrappedSymKeyLen;
     PORT_Assert(wrappedKey.len <= sizeof pWswk->wrappedSymmetricWrappingkey);
 
-    switch (authType) {
+    switch (ssl_wrap_key_auth_type[wrapKeyIndex]) {
 
         case ssl_auth_rsa_decrypt:
         case ssl_auth_rsa_sign: /* bad: see Bug 1248320 */
@@ -5691,14 +5738,8 @@ loser:
     return unwrappedWrappingKey;
 }
 
-/* Each process sharing the server session ID cache has its own array of SymKey
- * pointers for the symmetric wrapping keys that are used to wrap the master
- * secrets.  There is one key for each authentication type.  These Symkeys
- * correspond to the wrapped SymKeys kept in the server session cache.
- */
-
 typedef struct {
-    PK11SymKey *symWrapKey[ssl_auth_size];
+    PK11SymKey *symWrapKey[SSL_NUM_WRAP_KEYS];
 } ssl3SymWrapKey;
 
 static PZLock *symWrapKeysLock = NULL;
@@ -5726,7 +5767,7 @@ SSL3_ShutdownServerCache(void)
     PZ_Lock(symWrapKeysLock);
     /* get rid of all symWrapKeys */
     for (i = 0; i < SSL_NUM_WRAP_MECHS; ++i) {
-        for (j = 0; j < ssl_auth_size; ++j) {
+        for (j = 0; j < SSL_NUM_WRAP_KEYS; ++j) {
             PK11SymKey **pSymWrapKey;
             pSymWrapKey = &symWrapKeys[i].symWrapKey[j];
             if (*pSymWrapKey) {
@@ -5760,7 +5801,6 @@ ssl_InitSymWrapKeysLock(void)
 PK11SymKey *
 ssl3_GetWrappingKey(sslSocket *ss,
                     PK11SlotInfo *masterSecretSlot,
-                    const sslServerCert *serverCert,
                     CK_MECHANISM_TYPE masterWrapMech,
                     void *pwArg)
 {
@@ -5771,7 +5811,8 @@ ssl3_GetWrappingKey(sslSocket *ss,
     PK11SymKey **pSymWrapKey;
     CK_MECHANISM_TYPE asymWrapMechanism = CKM_INVALID_MECHANISM;
     int length;
-    int symWrapMechIndex;
+    unsigned int wrapMechIndex;
+    unsigned int wrapKeyIndex;
     SECStatus rv;
     SECItem wrappedKey;
     SSLWrappedSymWrappingKey wswk;
@@ -5779,6 +5820,7 @@ ssl3_GetWrappingKey(sslSocket *ss,
     SECKEYPublicKey *pubWrapKey = NULL;
     SECKEYPrivateKey *privWrapKey = NULL;
     ECCWrappedKeyInfo *ecWrapped;
+    const sslServerCert *serverCert = ss->sec.serverCert;
 
     PORT_Assert(serverCert);
     PORT_Assert(serverCert->serverKeyPair);
@@ -5790,15 +5832,18 @@ ssl3_GetWrappingKey(sslSocket *ss,
         PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
         return NULL; /* hmm */
     }
-    authType = serverCert->certType.authType;
-    svrPrivKey = serverCert->serverKeyPair->privKey;
 
-    symWrapMechIndex = ssl_FindIndexByWrapMechanism(masterWrapMech);
-    PORT_Assert(symWrapMechIndex >= 0);
-    if (symWrapMechIndex < 0)
+    rv = ssl_FindIndexByWrapKey(serverCert, &wrapKeyIndex);
+    if (rv != SECSuccess)
+        return NULL; /* unusable wrapping key. */
+
+    rv = ssl_FindIndexByWrapMechanism(masterWrapMech, &wrapMechIndex);
+    if (rv != SECSuccess)
         return NULL; /* invalid masterWrapMech. */
 
-    pSymWrapKey = &symWrapKeys[symWrapMechIndex].symWrapKey[authType];
+    authType = ssl_wrap_key_auth_type[wrapKeyIndex];
+    svrPrivKey = serverCert->serverKeyPair->privKey;
+    pSymWrapKey = &symWrapKeys[wrapMechIndex].symWrapKey[wrapKeyIndex];
 
     ssl_InitSessionCacheLocks(PR_TRUE);
 
@@ -5817,10 +5862,11 @@ ssl3_GetWrappingKey(sslSocket *ss,
 
     /* Try to get wrapped SymWrapping key out of the (disk) cache. */
     /* Following call fills in wswk on success. */
-    if (ssl_GetWrappingKey(symWrapMechIndex, authType, &wswk)) {
+    rv = ssl_GetWrappingKey(wrapMechIndex, wrapKeyIndex, &wswk);
+    if (rv == SECSuccess) {
         /* found the wrapped sym wrapping key on disk. */
         unwrappedWrappingKey =
-            ssl_UnwrapSymWrappingKey(&wswk, svrPrivKey, authType,
+            ssl_UnwrapSymWrappingKey(&wswk, svrPrivKey, wrapKeyIndex,
                                      masterWrapMech, pwArg);
         if (unwrappedWrappingKey) {
             goto install;
@@ -5969,9 +6015,9 @@ ssl3_GetWrappingKey(sslSocket *ss,
     PORT_Assert(asymWrapMechanism != CKM_INVALID_MECHANISM);
 
     wswk.symWrapMechanism = masterWrapMech;
-    wswk.symWrapMechIndex = symWrapMechIndex;
     wswk.asymWrapMechanism = asymWrapMechanism;
-    wswk.authType = authType;
+    wswk.wrapMechIndex = wrapMechIndex;
+    wswk.wrapKeyIndex = wrapKeyIndex;
     wswk.wrappedSymKeyLen = wrappedKey.len;
 
     /* put it on disk. */
@@ -5979,7 +6025,8 @@ ssl3_GetWrappingKey(sslSocket *ss,
      * then abandon the value we just computed and
      * use the one we got from the disk.
      */
-    if (ssl_SetWrappingKey(&wswk)) {
+    rv = ssl_SetWrappingKey(&wswk);
+    if (rv == SECSuccess) {
         /* somebody beat us to it.  The original contents of our wswk
          * has been replaced with the content on disk.  Now, discard
          * the key we just created and unwrap this new one.
@@ -5987,7 +6034,7 @@ ssl3_GetWrappingKey(sslSocket *ss,
         PK11_FreeSymKey(unwrappedWrappingKey);
 
         unwrappedWrappingKey =
-            ssl_UnwrapSymWrappingKey(&wswk, svrPrivKey, authType,
+            ssl_UnwrapSymWrappingKey(&wswk, svrPrivKey, wrapKeyIndex,
                                      masterWrapMech, pwArg);
     }
 
@@ -6357,7 +6404,7 @@ ssl_PickSignatureScheme(sslSocket *ss,
         PRUint32 policy;
 
         if (!ssl_SignatureSchemeValidForKey(!isTLS13 /* allowSha1 */,
-                                            PR_TRUE /* matchGroup */,
+                                            isTLS13 /* matchGroup */,
                                             keyType, group, preferred)) {
             continue;
         }
@@ -6391,6 +6438,33 @@ ssl_PickSignatureScheme(sslSocket *ss,
     return SECFailure;
 }
 
+static SECStatus
+ssl_PickFallbackSignatureScheme(sslSocket *ss, SECKEYPublicKey *pubKey)
+{
+    PRBool isTLS12 = ss->version >= SSL_LIBRARY_VERSION_TLS_1_2;
+
+    switch (SECKEY_GetPublicKeyType(pubKey)) {
+        case rsaKey:
+            if (isTLS12) {
+                ss->ssl3.hs.signatureScheme = ssl_sig_rsa_pkcs1_sha1;
+            } else {
+                ss->ssl3.hs.signatureScheme = ssl_sig_rsa_pkcs1_sha1md5;
+            }
+            break;
+        case ecKey:
+            ss->ssl3.hs.signatureScheme = ssl_sig_ecdsa_sha1;
+            break;
+        case dsaKey:
+            ss->ssl3.hs.signatureScheme = ssl_sig_dsa_sha1;
+            break;
+        default:
+            PORT_Assert(0);
+            PORT_SetError(SEC_ERROR_INVALID_KEY);
+            return SECFailure;
+    }
+    return SECSuccess;
+}
+
 /* ssl3_PickServerSignatureScheme selects a signature scheme for signing the
  * handshake.  Most of this is determined by the key pair we are using.
  * Prior to TLS 1.2, the MD5/SHA1 combination is always used. With TLS 1.2, a
@@ -6404,26 +6478,7 @@ ssl3_PickServerSignatureScheme(sslSocket *ss)
     if (!isTLS12 || !ssl3_ExtensionNegotiated(ss, ssl_signature_algorithms_xtn)) {
         /* If the client didn't provide any signature_algorithms extension then
          * we can assume that they support SHA-1: RFC5246, Section 7.4.1.4.1. */
-        switch (SECKEY_GetPublicKeyType(keyPair->pubKey)) {
-            case rsaKey:
-                if (isTLS12) {
-                    ss->ssl3.hs.signatureScheme = ssl_sig_rsa_pkcs1_sha1;
-                } else {
-                    ss->ssl3.hs.signatureScheme = ssl_sig_rsa_pkcs1_sha1md5;
-                }
-                break;
-            case ecKey:
-                ss->ssl3.hs.signatureScheme = ssl_sig_ecdsa_sha1;
-                break;
-            case dsaKey:
-                ss->ssl3.hs.signatureScheme = ssl_sig_dsa_sha1;
-                break;
-            default:
-                PORT_Assert(0);
-                PORT_SetError(SEC_ERROR_INVALID_KEY);
-                return SECFailure;
-        }
-        return SECSuccess;
+        return ssl_PickFallbackSignatureScheme(ss, keyPair->pubKey);
     }
 
     /* Sets error code, if needed. */
@@ -6441,9 +6496,21 @@ ssl_PickClientSignatureScheme(sslSocket *ss, const SSLSignatureScheme *schemes,
     SECKEYPublicKey *pubKey;
     SECStatus rv;
 
+    PRBool isTLS13 = (PRBool)ss->version >= SSL_LIBRARY_VERSION_TLS_1_3;
     pubKey = CERT_ExtractPublicKey(ss->ssl3.clientCertificate);
     PORT_Assert(pubKey);
-    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3 &&
+
+    if (!isTLS13 && numSchemes == 0) {
+        /* If the server didn't provide any signature algorithms
+         * then let's assume they support SHA-1. */
+        rv = ssl_PickFallbackSignatureScheme(ss, pubKey);
+        SECKEY_DestroyPublicKey(pubKey);
+        return rv;
+    }
+
+    PORT_Assert(schemes && numSchemes > 0);
+
+    if (!isTLS13 &&
         (SECKEY_GetPublicKeyType(pubKey) == rsaKey ||
          SECKEY_GetPublicKeyType(pubKey) == dsaKey) &&
         SECKEY_PublicKeyStrengthInBits(pubKey) <= 1024) {
@@ -6631,12 +6698,19 @@ ssl3_HandleServerHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 
     /* The server didn't pick 1.3 although we either received a
      * HelloRetryRequest, or we prepared to send early app data. */
-    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3 &&
-        (ss->ssl3.hs.helloRetry || ss->ssl3.hs.zeroRttState == ssl_0rtt_sent)) {
-        /* SSL3_SendAlert() will uncache the SID. */
-        desc = illegal_parameter;
-        errCode = SSL_ERROR_RX_MALFORMED_SERVER_HELLO;
-        goto alert_loser;
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+        if (ss->ssl3.hs.helloRetry) {
+            /* SSL3_SendAlert() will uncache the SID. */
+            desc = illegal_parameter;
+            errCode = SSL_ERROR_RX_MALFORMED_SERVER_HELLO;
+            goto alert_loser;
+        }
+        if (ss->ssl3.hs.zeroRttState == ssl_0rtt_sent) {
+            /* SSL3_SendAlert() will uncache the SID. */
+            desc = illegal_parameter;
+            errCode = SSL_ERROR_DOWNGRADE_WITH_EARLY_DATA;
+            goto alert_loser;
+        }
     }
 
     /* Check that the server negotiated the same version as it did
@@ -7350,7 +7424,7 @@ ssl_ParseSignatureSchemes(const sslSocket *ss, PLArenaPool *arena,
 {
     SECStatus rv;
     SECItem buf;
-    SSLSignatureScheme *schemes;
+    SSLSignatureScheme *schemes = NULL;
     unsigned int numSchemes = 0;
     unsigned int max;
 
@@ -7358,10 +7432,15 @@ ssl_ParseSignatureSchemes(const sslSocket *ss, PLArenaPool *arena,
     if (rv != SECSuccess) {
         return SECFailure;
     }
-    /* An empty or odd-length value is invalid. */
-    if (buf.len == 0 || (buf.len & 1) != 0) {
+    /* An odd-length value is invalid. */
+    if ((buf.len & 1) != 0) {
         ssl3_ExtSendAlert(ss, alert_fatal, decode_error);
         return SECFailure;
+    }
+
+    /* Let the caller decide whether to alert here. */
+    if (buf.len == 0) {
+        goto done;
     }
 
     /* Limit the number of schemes we read. */
@@ -7397,6 +7476,7 @@ ssl_ParseSignatureSchemes(const sslSocket *ss, PLArenaPool *arena,
         schemes = NULL;
     }
 
+done:
     *schemesOut = schemes;
     *numSchemesOut = numSchemes;
     return SECSuccess;
@@ -8200,6 +8280,20 @@ ssl3_SelectServerCert(sslSocket *ss)
     const ssl3KEADef *kea_def = ss->ssl3.hs.kea_def;
     PRCList *cursor;
 
+    /* If the client didn't include the supported groups extension, assume just
+     * P-256 support and disable all the other ECDHE groups.  This also affects
+     * ECDHE group selection, but this function is called first. */
+    if (!ssl3_ExtensionNegotiated(ss, ssl_supported_groups_xtn)) {
+        unsigned int i;
+        for (i = 0; i < SSL_NAMED_GROUP_COUNT; ++i) {
+            if (ss->namedGroupPreferences[i] &&
+                ss->namedGroupPreferences[i]->keaType == ssl_kea_ecdh &&
+                ss->namedGroupPreferences[i]->name != ssl_grp_ec_secp256r1) {
+                ss->namedGroupPreferences[i] = NULL;
+            }
+        }
+    }
+
     /* This picks the first certificate that has:
      * a) the right authentication method, and
      * b) the right named curve (EC only)
@@ -8210,19 +8304,17 @@ ssl3_SelectServerCert(sslSocket *ss)
          cursor != &ss->serverCerts;
          cursor = PR_NEXT_LINK(cursor)) {
         sslServerCert *cert = (sslServerCert *)cursor;
-        if (cert->certType.authType != kea_def->authKeyType) {
+        if (!SSL_CERT_IS(cert, kea_def->authKeyType)) {
             continue;
         }
-        if ((cert->certType.authType == ssl_auth_ecdsa ||
-             cert->certType.authType == ssl_auth_ecdh_rsa ||
-             cert->certType.authType == ssl_auth_ecdh_ecdsa) &&
-            !ssl_NamedGroupEnabled(ss, cert->certType.namedCurve)) {
+        if (SSL_CERT_IS_EC(cert) &&
+            !ssl_NamedGroupEnabled(ss, cert->namedCurve)) {
             continue;
         }
 
         /* Found one. */
         ss->sec.serverCert = cert;
-        ss->sec.authType = cert->certType.authType;
+        ss->sec.authType = kea_def->authKeyType;
         ss->sec.authKeyBits = cert->serverKeyBits;
 
         /* Don't pick a signature scheme if we aren't going to use it. */
@@ -8746,7 +8838,6 @@ compression_found:
         do {
             ssl3CipherSpec *pwSpec;
             SECItem wrappedMS; /* wrapped key */
-            const sslServerCert *serverCert;
 
             if (sid->version != ss->version ||
                 sid->u.ssl3.cipherSuite != ss->ssl3.hs.cipher_suite ||
@@ -8754,8 +8845,13 @@ compression_found:
                 break; /* not an error */
             }
 
-            serverCert = ssl_FindServerCert(ss, &sid->certType);
-            if (!serverCert || !serverCert->serverCert) {
+            /* server sids don't remember the server cert we previously sent,
+            ** but they do remember the slot we originally used, so we
+            ** can locate it again, provided that the current ssl socket
+            ** has had its server certs configured the same as the previous one.
+            */
+            ss->sec.serverCert = ssl_FindServerCert(ss, sid->authType, sid->namedCurve);
+            if (!ss->sec.serverCert || !ss->sec.serverCert->serverCert) {
                 /* A compatible certificate must not have been configured.  It
                  * might not be the same certificate, but we only find that out
                  * when the ticket fails to decrypt. */
@@ -8803,7 +8899,7 @@ compression_found:
                 PK11SymKey *wrapKey; /* wrapping key */
                 CK_FLAGS keyFlags = 0;
 
-                wrapKey = ssl3_GetWrappingKey(ss, NULL, serverCert,
+                wrapKey = ssl3_GetWrappingKey(ss, NULL,
                                               sid->u.ssl3.masterWrapMech,
                                               ss->pkcs11PinArg);
                 if (!wrapKey) {
@@ -8862,13 +8958,8 @@ compression_found:
             ss->sec.keaType = sid->keaType;
             ss->sec.keaKeyBits = sid->keaKeyBits;
 
-            /* server sids don't remember the server cert we previously sent,
-            ** but they do remember the slot we originally used, so we
-            ** can locate it again, provided that the current ssl socket
-            ** has had its server certs configured the same as the previous one.
-            */
-            ss->sec.serverCert = serverCert;
-            ss->sec.localCert = CERT_DupCertificate(serverCert->serverCert);
+            ss->sec.localCert =
+                CERT_DupCertificate(ss->sec.serverCert->serverCert);
 
             /* Copy cached name in to pending spec */
             if (sid != NULL &&
@@ -9586,34 +9677,6 @@ ssl3_EncodeSigAlgs(const sslSocket *ss, PRUint8 *buf, unsigned maxLen, PRUint32 
     return SECSuccess;
 }
 
-void
-ssl3_GetCertificateRequestCAs(sslSocket *ss, int *calen, SECItem **names,
-                              int *nnames)
-{
-    SECItem *name;
-    CERTDistNames *ca_list;
-    int i;
-
-    *calen = 0;
-    *names = NULL;
-    *nnames = 0;
-
-    /* ssl3.ca_list is initialized to NULL, and never changed. */
-    ca_list = ss->ssl3.ca_list;
-    if (!ca_list) {
-        ca_list = ssl3_server_ca_list;
-    }
-
-    if (ca_list != NULL) {
-        *names = ca_list->names;
-        *nnames = ca_list->nnames;
-    }
-
-    for (i = 0, name = *names; i < *nnames; i++, name++) {
-        *calen += 2 + name->len;
-    }
-}
-
 static SECStatus
 ssl3_SendCertificateRequest(sslSocket *ss)
 {
@@ -9622,8 +9685,8 @@ ssl3_SendCertificateRequest(sslSocket *ss)
     SECStatus rv;
     int length;
     SECItem *names;
-    int calen;
-    int nnames;
+    unsigned int calen;
+    unsigned int nnames;
     SECItem *name;
     int i;
     int certTypesLength;
@@ -9638,7 +9701,10 @@ ssl3_SendCertificateRequest(sslSocket *ss)
 
     isTLS12 = (PRBool)(ss->ssl3.pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
 
-    ssl3_GetCertificateRequestCAs(ss, &calen, &names, &nnames);
+    rv = ssl_GetCertificateRequestCAs(ss, &calen, &names, &nnames);
+    if (rv != SECSuccess) {
+        return rv;
+    }
     certTypes = certificate_types;
     certTypesLength = sizeof certificate_types;
 
@@ -11286,7 +11352,7 @@ fail:
  */
 SECStatus
 ssl3_CacheWrappedMasterSecret(sslSocket *ss, sslSessionID *sid,
-                              ssl3CipherSpec *spec, SSLAuthType authType)
+                              ssl3CipherSpec *spec)
 {
     PK11SymKey *wrappingKey = NULL;
     PK11SlotInfo *symKeySlot;
@@ -11340,8 +11406,7 @@ ssl3_CacheWrappedMasterSecret(sslSocket *ss, sslSessionID *sid,
         mechanism = PK11_GetBestWrapMechanism(symKeySlot);
         if (mechanism != CKM_INVALID_MECHANISM) {
             wrappingKey =
-                ssl3_GetWrappingKey(ss, symKeySlot, ss->sec.serverCert,
-                                    mechanism, pwArg);
+                ssl3_GetWrappingKey(ss, symKeySlot, mechanism, pwArg);
             if (wrappingKey) {
                 mechanism = PK11_GetMechanism(wrappingKey); /* can't fail. */
             }
@@ -11548,9 +11613,7 @@ ssl3_FillInCachedSID(sslSocket *ss, sslSessionID *sid)
     sid->expirationTime = sid->creationTime + ssl3_sid_timeout;
     sid->localCert = CERT_DupCertificate(ss->sec.localCert);
     if (ss->sec.isServer) {
-        memcpy(&sid->certType, &ss->sec.serverCert->certType, sizeof(sid->certType));
-    } else {
-        sid->certType.authType = ssl_auth_null;
+        sid->namedCurve = ss->sec.serverCert->namedCurve;
     }
 
     if (ss->xtnData.nextProtoState != SSL_NEXT_PROTO_NO_SUPPORT &&
@@ -11574,8 +11637,7 @@ ssl3_FillInCachedSID(sslSocket *ss, sslSessionID *sid)
         rv = SECSuccess;
     } else {
         rv = ssl3_CacheWrappedMasterSecret(ss, ss->sec.ci.sid,
-                                           ss->ssl3.crSpec,
-                                           ss->ssl3.hs.kea_def->authKeyType);
+                                           ss->ssl3.crSpec);
         sid->u.ssl3.keys.msIsWrapped = PR_TRUE;
     }
     ssl_ReleaseSpecReadLock(ss); /*************************************/

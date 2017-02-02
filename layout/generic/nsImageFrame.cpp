@@ -2059,7 +2059,6 @@ nsImageFrame::GetCursor(const nsPoint& aPoint,
       RefPtr<nsStyleContext> areaStyle = 
         PresContext()->PresShell()->StyleSet()->
           ResolveStyleFor(area->AsElement(), StyleContext(),
-                          ConsumeStyleBehavior::DontConsume,
                           LazyComputeBehavior::Allow);
       FillCursorInformationFromStyle(areaStyle->StyleUserInterface(),
                                      aCursor);
@@ -2210,7 +2209,7 @@ nsImageFrame::LoadIcon(const nsAString& aSpec,
                                        relevant for cookies, so does not
                                        apply to icons. */
                        nullptr,      /* referrer (not relevant for icons) */
-                       mozilla::net::RP_Default,
+                       mozilla::net::RP_Unset,
                        nullptr,      /* principal (not relevant for icons) */
                        loadGroup,
                        gIconLoad,

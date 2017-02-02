@@ -21,7 +21,8 @@ namespace layers {
 class PTextureParent;
 }
 namespace dom {
-enum class GamepadMappingType : uint32_t;
+enum class GamepadMappingType : uint8_t;
+enum class GamepadHand : uint8_t;
 struct GamepadPoseState;
 }
 namespace gfx {
@@ -195,7 +196,7 @@ struct VRHMDSensorState {
   }
 };
 
-class VRDisplayManager {
+class VRSystemManager {
 public:
   static uint32_t AllocateDisplayID();
 
@@ -203,15 +204,36 @@ protected:
   static Atomic<uint32_t> sDisplayBase;
 
 public:
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VRDisplayManager)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VRSystemManager)
 
   virtual bool Init() = 0;
   virtual void Destroy() = 0;
   virtual void GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult) = 0;
+  virtual void HandleInput() = 0;
+  virtual void GetControllers(nsTArray<RefPtr<VRControllerHost>>& aControllerResult) = 0;
+  virtual void ScanForControllers() = 0;
+  virtual void RemoveControllers() = 0;
+  void NewButtonEvent(uint32_t aIndex, uint32_t aButton, bool aPressed);
+  void NewAxisMove(uint32_t aIndex, uint32_t aAxis, double aValue);
+  void NewPoseState(uint32_t aIndex, const dom::GamepadPoseState& aPose);
+  void AddGamepad(const char* aID, dom::GamepadMappingType aMapping,
+                  dom::GamepadHand aHand, uint32_t aNumButtons, uint32_t aNumAxes);
+  void RemoveGamepad(uint32_t aIndex);
 
 protected:
-  VRDisplayManager() { }
-  virtual ~VRDisplayManager() { }
+  VRSystemManager() : mControllerCount(0) { }
+  virtual ~VRSystemManager() { }
+
+  uint32_t mControllerCount;
+
+private:
+  virtual void HandleButtonPress(uint32_t aControllerIdx,
+                                 uint64_t aButtonPressed) = 0;
+  virtual void HandleAxisMove(uint32_t aControllerIdx, uint32_t aAxis,
+                              float aValue) = 0;
+  virtual void HandlePoseTracking(uint32_t aControllerIdx,
+                                  const dom::GamepadPoseState& aPose,
+                                  VRControllerHost* aController) = 0;
 };
 
 struct VRControllerInfo
@@ -219,14 +241,14 @@ struct VRControllerInfo
   VRDeviceType GetType() const { return mType; }
   uint32_t GetControllerID() const { return mControllerID; }
   const nsCString& GetControllerName() const { return mControllerName; }
-  uint32_t GetMappingType() const { return mMappingType; }
+  dom::GamepadMappingType GetMappingType() const { return mMappingType; }
   uint32_t GetNumButtons() const { return mNumButtons; }
   uint32_t GetNumAxes() const { return mNumAxes; }
 
   uint32_t mControllerID;
   VRDeviceType mType;
   nsCString mControllerName;
-  uint32_t mMappingType;
+  dom::GamepadMappingType mMappingType;
   uint32_t mNumButtons;
   uint32_t mNumAxes;
 
@@ -242,42 +264,6 @@ struct VRControllerInfo
   bool operator!=(const VRControllerInfo& other) const {
     return !(*this == other);
   }
-};
-
-class VRControllerManager {
-public:
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VRControllerManager)
-
-  static uint32_t AllocateControllerID();
-  virtual bool Init() = 0;
-  virtual void Destroy() = 0;
-  virtual void HandleInput() = 0;
-  virtual void GetControllers(nsTArray<RefPtr<VRControllerHost>>& aControllerResult) = 0;
-  virtual void ScanForDevices() = 0;
-  virtual void RemoveDevices() = 0;
-  void NewButtonEvent(uint32_t aIndex, uint32_t aButton, bool aPressed);
-  void NewAxisMove(uint32_t aIndex, uint32_t aAxis, double aValue);
-  void NewPoseState(uint32_t aIndex, const dom::GamepadPoseState& aPose);
-  void AddGamepad(const char* aID, uint32_t aMapping, uint32_t aHand,
-                  uint32_t aNumButtons, uint32_t aNumAxes);
-  void RemoveGamepad(uint32_t aIndex);
-
-protected:
-  VRControllerManager() : mInstalled(false), mControllerCount(0) {}
-  virtual ~VRControllerManager() {}
-
-  bool mInstalled;
-  uint32_t mControllerCount;
-  static Atomic<uint32_t> sControllerBase;
-
-private:
-  virtual void HandleButtonPress(uint32_t aControllerIdx,
-                                 uint64_t aButtonPressed) = 0;
-  virtual void HandleAxisMove(uint32_t aControllerIdx, uint32_t aAxis,
-                              float aValue) = 0;
-  virtual void HandlePoseTracking(uint32_t aControllerIdx,
-                                  const dom::GamepadPoseState& aPose,
-                                  VRControllerHost* aController) = 0;
 };
 
 } // namespace gfx

@@ -20,8 +20,10 @@
 #include "ipc/IPCMessageUtils.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/layers/AsyncDragMetrics.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/GeckoContentController.h"
+#include "mozilla/layers/LayerAttributes.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "nsRect.h"
 #include "nsRegion.h"
@@ -700,6 +702,32 @@ struct ParamTraits<mozilla::layers::FrameMetrics::ScrollOffsetUpdateType>
              mozilla::layers::FrameMetrics::ScrollOffsetUpdateType::eSentinel>
 {};
 
+template<>
+struct ParamTraits<mozilla::layers::LayerHandle>
+{
+  typedef mozilla::layers::LayerHandle paramType;
+
+  static void Write(Message* msg, const paramType& param) {
+    WriteParam(msg, param.mHandle);
+  }
+  static bool Read(const Message* msg, PickleIterator* iter, paramType* result) {
+    return ReadParam(msg, iter, &result->mHandle);
+  }
+};
+
+template<>
+struct ParamTraits<mozilla::layers::CompositableHandle>
+{
+  typedef mozilla::layers::CompositableHandle paramType;
+
+  static void Write(Message* msg, const paramType& param) {
+    WriteParam(msg, param.mHandle);
+  }
+  static bool Read(const Message* msg, PickleIterator* iter, paramType* result) {
+    return ReadParam(msg, iter, &result->mHandle);
+  }
+};
+
 // Helper class for reading bitfields.
 // If T has bitfields members, derive ParamTraits<T> from BitfieldHelper<T>.
 template <typename ParamType>
@@ -1302,6 +1330,34 @@ struct ParamTraits<mozilla::Array<T, Length>>
       }
     }
     return true;
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::CompositorOptions>
+{
+  typedef mozilla::layers::CompositorOptions paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam) {
+    WriteParam(aMsg, aParam.mUseAPZ);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult) {
+    return ReadParam(aMsg, aIter, &aResult->mUseAPZ);
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::SimpleLayerAttributes>
+{
+  typedef mozilla::layers::SimpleLayerAttributes paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam) {
+    aMsg->WriteBytes(&aParam, sizeof(aParam));
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult) {
+    return aMsg->ReadBytesInto(aIter, aResult, sizeof(paramType));
   }
 };
 

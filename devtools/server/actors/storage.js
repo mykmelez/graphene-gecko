@@ -126,7 +126,11 @@ StorageActors.defaults = function (typeName, observationTopics) {
     get hosts() {
       let hosts = new Set();
       for (let {location} of this.storageActor.windows) {
-        hosts.add(this.getHostName(location));
+        let host = this.getHostName(location);
+
+        if (host) {
+          hosts.add(host);
+        }
       }
       return hosts;
     },
@@ -140,13 +144,35 @@ StorageActors.defaults = function (typeName, observationTopics) {
     },
 
     /**
-     * Converts the window.location object into host.
+     * Converts the window.location object into a URL (e.g. http://domain.com).
      */
     getHostName(location) {
-      if (location.protocol === "chrome:") {
-        return location.href;
+      if (!location) {
+        // Debugging a legacy Firefox extension... no hostname available and no
+        // storage possible.
+        return null;
       }
-      return location.hostname || location.href;
+
+      switch (location.protocol) {
+        case "data:":
+          // data: URLs do not support storage of any type.
+          return null;
+        case "about:":
+          // Fallthrough.
+        case "chrome:":
+          // Fallthrough.
+        case "file:":
+          return location.protocol + location.pathname;
+        case "resource:":
+          return location.origin + location.pathname;
+        case "moz-extension:":
+          return location.origin;
+        case "javascript:":
+          return location.href;
+        default:
+          // http: or unknown protocol.
+          return `${location.protocol}//${location.host}`;
+      }
     },
 
     initialize(storageActor) {
@@ -169,7 +195,7 @@ StorageActors.defaults = function (typeName, observationTopics) {
     destroy() {
       if (observationTopics) {
         observationTopics.forEach((observationTopic) => {
-          Services.obs.removeObserver(this, observationTopic, false);
+          Services.obs.removeObserver(this, observationTopic);
         });
       }
       events.off(this.storageActor, "window-ready", this.onWindowReady);
@@ -206,7 +232,7 @@ StorageActors.defaults = function (typeName, observationTopics) {
      */
     onWindowReady: Task.async(function* (window) {
       let host = this.getHostName(window.location);
-      if (!this.hostVsStores.has(host)) {
+      if (host && !this.hostVsStores.has(host)) {
         yield this.populateStoresForHost(host, window);
         let data = {};
         data[host] = this.getNamesForHost(host);
@@ -227,7 +253,7 @@ StorageActors.defaults = function (typeName, observationTopics) {
         return;
       }
       let host = this.getHostName(window.location);
-      if (!this.hosts.has(host)) {
+      if (host && !this.hosts.has(host)) {
         this.hostVsStores.delete(host);
         let data = {};
         data[host] = [];
@@ -467,12 +493,16 @@ StorageActors.createActor({
     if (cookie.host == null) {
       return host == null;
     }
+
+    host = trimHttpHttps(host);
+
     if (cookie.host.startsWith(".")) {
       return ("." + host).endsWith(cookie.host);
     }
     if (cookie.host === "") {
       return host.startsWith("file://" + cookie.path);
     }
+
     return cookie.host == host;
   },
 
@@ -714,6 +744,8 @@ var cookieHelpers = {
       host = "";
     }
 
+    host = trimHttpHttps(host);
+
     let cookies = Services.cookies.getCookiesFromHost(host, originAttributes);
     let store = [];
 
@@ -848,6 +880,8 @@ var cookieHelpers = {
       opts.path = split[2];
     }
 
+    host = trimHttpHttps(host);
+
     function hostMatches(cookieHost, matchHost) {
       if (cookieHost == null) {
         return matchHost == null;
@@ -894,7 +928,7 @@ var cookieHelpers = {
   },
 
   removeCookieObservers() {
-    Services.obs.removeObserver(cookieHelpers, "cookie-changed", false);
+    Services.obs.removeObserver(cookieHelpers, "cookie-changed");
     return null;
   },
 
@@ -1054,16 +1088,6 @@ function getObjectForLocalOrSessionStorage(type) {
       }));
     },
 
-    getHostName(location) {
-      if (!location.host) {
-        return location.href;
-      }
-      if (location.protocol === "chrome:") {
-        return location.href;
-      }
-      return location.protocol + "//" + location.host;
-    },
-
     populateStoresForHost(host, window) {
       try {
         this.hostVsStores.set(host, window[type]);
@@ -1075,7 +1099,10 @@ function getObjectForLocalOrSessionStorage(type) {
     populateStoresForHosts() {
       this.hostVsStores = new Map();
       for (let window of this.windows) {
-        this.populateStoresForHost(this.getHostName(window.location), window);
+        let host = this.getHostName(window.location);
+        if (host) {
+          this.populateStoresForHost(host, window);
+        }
       }
     },
 
@@ -1151,7 +1178,7 @@ function getObjectForLocalOrSessionStorage(type) {
      * Given a url, correctly determine its protocol + hostname part.
      */
     getSchemaAndHost(url) {
-      let uri = Services.io.newURI(url, null, null);
+      let uri = Services.io.newURI(url);
       if (!uri.host) {
         return uri.spec;
       }
@@ -1191,7 +1218,7 @@ StorageActors.createActor({
   typeName: "Cache"
 }, {
   getCachesForHost: Task.async(function* (host) {
-    let uri = Services.io.newURI(host, null, null);
+    let uri = Services.io.newURI(host);
     let principal =
       Services.scriptSecurityManager.getNoAppCodebasePrincipal(uri);
 
@@ -1202,6 +1229,11 @@ StorageActors.createActor({
     // The |chrome| cache is the cache implicitely cached by the platform,
     // hosting the source file of the service worker.
     let { CacheStorage } = this.storageActor.window;
+
+    if (!CacheStorage) {
+      return [];
+    }
+
     let cache = new CacheStorage("content", principal);
     return cache;
   }),
@@ -1269,16 +1301,6 @@ StorageActors.createActor({
     ];
   }),
 
-  getHostName(location) {
-    if (!location.host) {
-      return location.href;
-    }
-    if (location.protocol === "chrome:") {
-      return location.href;
-    }
-    return location.protocol + "//" + location.host;
-  },
-
   populateStoresForHost: Task.async(function* (host) {
     let storeMap = new Map();
     let caches = yield this.getCachesForHost(host);
@@ -1305,7 +1327,7 @@ StorageActors.createActor({
    * Given a url, correctly determine its protocol + hostname part.
    */
   getSchemaAndHost(url) {
-    let uri = Services.io.newURI(url, null, null);
+    let uri = Services.io.newURI(url);
     return uri.scheme + "://" + uri.hostPort;
   },
 
@@ -1465,7 +1487,7 @@ function DatabaseMetadata(origin, db, storage) {
       let objectStore =
         transaction.objectStore(transaction.objectStoreNames[i]);
       this._objectStores.push([transaction.objectStoreNames[i],
-                              new ObjectStoreMetadata(objectStore)]);
+                               new ObjectStoreMetadata(objectStore)]);
     }
   }
 }
@@ -1553,16 +1575,6 @@ StorageActors.createActor({
     let principal = win.document.nodePrincipal;
     this.removeDBRecord(host, principal, db, store, id);
   }),
-
-  getHostName(location) {
-    if (!location.host) {
-      return location.href;
-    }
-    if (location.protocol === "chrome:") {
-      return location.href;
-    }
-    return location.protocol + "//" + location.host;
-  },
 
   /**
    * This method is overriden and left blank as for indexedDB, this operation
@@ -1912,7 +1924,7 @@ var indexedDBHelpers = {
   },
 
   removeDB: Task.async(function* (host, principal, dbName) {
-    let result = new promise(resolve => {
+    let result = new Promise(resolve => {
       let {name, storage} = this.splitNameAndStorage(dbName);
       let request =
         indexedDBForStorage.deleteForPrincipal(principal, name,
@@ -1949,7 +1961,7 @@ var indexedDBHelpers = {
     let {name, storage} = this.splitNameAndStorage(dbName);
 
     try {
-      db = yield new promise((resolve, reject) => {
+      db = yield new Promise((resolve, reject) => {
         let request = this.openWithPrincipal(principal, name, storage);
         request.onsuccess = ev => resolve(ev.target.result);
         request.onerror = ev => reject(ev.target.error);
@@ -1958,7 +1970,7 @@ var indexedDBHelpers = {
       let transaction = db.transaction(storeName, "readwrite");
       let store = transaction.objectStore(storeName);
 
-      yield new promise((resolve, reject) => {
+      yield new Promise((resolve, reject) => {
         let request = store.delete(id);
         request.onsuccess = () => resolve();
         request.onerror = ev => reject(ev.target.error);
@@ -1982,7 +1994,7 @@ var indexedDBHelpers = {
     let {name, storage} = this.splitNameAndStorage(dbName);
 
     try {
-      db = yield new promise((resolve, reject) => {
+      db = yield new Promise((resolve, reject) => {
         let request = this.openWithPrincipal(principal, name, storage);
         request.onsuccess = ev => resolve(ev.target.result);
         request.onerror = ev => reject(ev.target.error);
@@ -1991,7 +2003,7 @@ var indexedDBHelpers = {
       let transaction = db.transaction(storeName, "readwrite");
       let store = transaction.objectStore(storeName);
 
-      yield new promise((resolve, reject) => {
+      yield new Promise((resolve, reject) => {
         let request = store.clear();
         request.onsuccess = () => resolve();
         request.onerror = ev => reject(ev.target.error);
@@ -2405,6 +2417,19 @@ exports.setupParentProcessForIndexedDB = function ({ mm, prefix }) {
 };
 
 /**
+ * General helpers
+ */
+function trimHttpHttps(url) {
+  if (url.startsWith("http://")) {
+    return url.substr(7);
+  }
+  if (url.startsWith("https://")) {
+    return url.substr(8);
+  }
+  return url;
+}
+
+/**
  * The main Storage Actor.
  */
 let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
@@ -2456,8 +2481,8 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
     clearTimeout(this.batchTimer);
     this.batchTimer = null;
     // Remove observers
-    Services.obs.removeObserver(this, "content-document-global-created", false);
-    Services.obs.removeObserver(this, "inner-window-destroyed", false);
+    Services.obs.removeObserver(this, "content-document-global-created");
+    Services.obs.removeObserver(this, "inner-window-destroyed");
     this.destroyed = true;
     if (this.parentActor.browser) {
       this.parentActor.browser.removeEventListener("pageshow", this.onPageChange, true);

@@ -518,7 +518,7 @@ GetPresShellForContent(nsIDOMNode* aDOMNode)
 
   nsCOMPtr<nsIDocument> document = content->GetUncomposedDoc();
   if (document) {
-    document->FlushPendingNotifications(Flush_Display);
+    document->FlushPendingNotifications(FlushType::Display);
 
     return document->GetShell();
   }
@@ -757,7 +757,7 @@ nsBaseDragService::DrawDragForImage(nsPresContext* aPresContext,
       imgContainer->Draw(ctx, destSize, ImageRegion::Create(destSize),
                          imgIContainer::FRAME_CURRENT,
                          SamplingFilter::GOOD, /* no SVGImageContext */ Nothing(),
-                         imgIContainer::FLAG_SYNC_DECODE);
+                         imgIContainer::FLAG_SYNC_DECODE, 1.0);
     if (res == DrawResult::BAD_IMAGE || res == DrawResult::BAD_ARGS) {
       return NS_ERROR_FAILURE;
     }
@@ -804,6 +804,19 @@ NS_IMETHODIMP
 nsBaseDragService::UpdateDragEffect()
 {
   mDragActionFromChildProcess = mDragAction;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsBaseDragService::UpdateDragImage(nsIDOMNode* aImage, int32_t aImageX, int32_t aImageY)
+{
+  // Don't change the image if this is a drag from another source or if there
+  // is a drag popup.
+  if (!mSourceNode || mDragPopup)
+    return NS_OK;
+
+  mImage = aImage;
+  mImageOffset = CSSIntPoint(aImageX, aImageY);
   return NS_OK;
 }
 

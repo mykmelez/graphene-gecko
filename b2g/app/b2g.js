@@ -278,7 +278,6 @@ pref("ui.threedlightshadow", "#ece7e2");
 pref("ui.threedshadow", "#aea194");
 pref("ui.windowframe", "#efebe7");
 
-// Themable via mozSettings
 pref("ui.menu", "#f97c17");
 pref("ui.menutext", "#ffffff");
 pref("ui.infobackground", "#343e40");
@@ -409,9 +408,6 @@ pref("dom.webapps.firstRunWithSIM", true);
 pref("dom.mozApps.single_variant_sourcedir", "/persist/svoperapps");
 #endif
 
-// WebSettings
-pref("dom.mozSettings.enabled", true);
-
 // controls if we want camera support
 pref("device.camera.enabled", true);
 pref("media.realtime_decoder.enabled", true);
@@ -450,16 +446,6 @@ pref("full-screen-api.ignore-widgets", true);
 #endif
 
 pref("media.volume.steps", 10);
-
-#ifdef ENABLE_MARIONETTE
-//Enable/disable marionette server, set listening port
-pref("marionette.defaultPrefs.enabled", true);
-pref("marionette.defaultPrefs.port", 2828);
-#ifndef MOZ_WIDGET_GONK
-// On desktop builds, we need to force the socket to listen on localhost only
-pref("marionette.force-local", true);
-#endif
-#endif
 
 #ifdef MOZ_UPDATER
 // When we're applying updates, we can't let anything hang us on
@@ -694,9 +680,6 @@ pref("dom.ipc.systemMessageCPULockTimeoutSec", 30);
 // Ignore the "dialog=1" feature in window.open.
 pref("dom.disable_window_open_dialog_feature", true);
 
-// Enable before keyboard events and after keyboard events.
-pref("dom.beforeAfterKeyboardEvent.enabled", true);
-
 // Screen reader support
 pref("accessibility.accessfu.activate", 2);
 pref("accessibility.accessfu.quicknav_modes", "Link,Heading,FormElement,Landmark,ListItem");
@@ -817,13 +800,9 @@ pref("network.sntp.pools", // Servers separated by ';'.
 pref("network.sntp.port", 123);
 pref("network.sntp.timeout", 30); // In seconds.
 
-// Allow ADB to run for this many hours before disabling
-// (only applies when marionette is disabled)
+// Allow ADB to run for this many hours before disabling.
 // 0 disables the timer.
 pref("b2g.adb.timeout-hours", 12);
-
-// InputMethod so we can do soft keyboards
-pref("dom.mozInputMethod.enabled", true);
 
 // Absolute path to the devtool unix domain socket file used
 // to communicate with a usb cable via adb forward
@@ -856,10 +835,6 @@ pref("media.webspeech.synth.enabled", true);
 
 // Enable Web Speech recognition API
 pref("media.webspeech.recognition.enable", true);
-
-// Downloads API
-pref("dom.mozDownloads.enabled", true);
-pref("dom.downloads.max_retention_days", 7);
 
 // External Helper Application Handling
 //
@@ -936,27 +911,6 @@ pref("dom.mapped_arraybuffer.enabled", true);
 
 // UDPSocket API
 pref("dom.udpsocket.enabled", true);
-
-// Enable TV Manager API
-pref("dom.tv.enabled", true);
-
-// Enable Inputport Manager API
-pref("dom.inputport.enabled", true);
-
-pref("dom.mozSettings.SettingsDB.debug.enabled", true);
-pref("dom.mozSettings.SettingsManager.debug.enabled", true);
-pref("dom.mozSettings.SettingsRequestManager.debug.enabled", true);
-pref("dom.mozSettings.SettingsService.debug.enabled", true);
-
-pref("dom.mozSettings.SettingsDB.verbose.enabled", false);
-pref("dom.mozSettings.SettingsManager.verbose.enabled", false);
-pref("dom.mozSettings.SettingsRequestManager.verbose.enabled", false);
-pref("dom.mozSettings.SettingsService.verbose.enabled", false);
-
-// Controlling whether we want to allow forcing some Settings
-// IndexedDB transactions to be opened as readonly or keep everything as
-// readwrite.
-pref("dom.mozSettings.allowForceReadOnly", false);
 
 // Comma separated list of activity names that can only be provided by
 // the system app in dev mode.

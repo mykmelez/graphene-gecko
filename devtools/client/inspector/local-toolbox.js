@@ -92,9 +92,7 @@ function fixStylesheetsOnMutation() {
   }
 }
 
-window.addEventListener("DOMContentLoaded", function onInspectorDOMLoaded() {
-  window.removeEventListener("DOMContentLoaded", onInspectorDOMLoaded);
-
+window.addEventListener("DOMContentLoaded", function () {
   // Add styling for the main document.
   fixStylesheets(document);
 
@@ -116,6 +114,6 @@ window.addEventListener("DOMContentLoaded", function onInspectorDOMLoaded() {
 
   // Toolbox tries to add a theme classname on the documentElement and should only be
   // required after DOMContentLoaded.
-  const { bootstrap } = require("devtools-local-toolbox");
+  const { bootstrap } = require("devtools-launchpad");
   bootstrap(React, ReactDOM).then(onConnect);
-});
+}, {once: true});

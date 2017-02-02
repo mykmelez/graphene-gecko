@@ -24,7 +24,7 @@ public:
    */
   void addStoredMarker(ProfilerMarker *aStoredMarker);
   PseudoStack* GetPseudoStack();
-  ::Mutex& GetMutex();
+  mozilla::Mutex& GetMutex();
   void StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime = 0);
 
   /**
@@ -46,9 +46,7 @@ public:
   void DuplicateLastSample();
 
   ThreadInfo* GetThreadInfo() const { return mThreadInfo; }
-#ifndef SPS_STANDALONE
   ThreadResponsiveness* GetThreadResponsiveness() { return &mRespInfo; }
-#endif
 
   bool CanInvokeJS() const { return mThreadInfo->CanInvokeJS(); }
 
@@ -85,14 +83,12 @@ private:
   mozilla::Maybe<UniqueStacks> mUniqueStacks;
 
   PseudoStack*   mPseudoStack;
-  mozilla::UniquePtr<Mutex>  mMutex;
+  mozilla::UniquePtr<mozilla::Mutex> mMutex;
   int            mThreadId;
   bool           mIsMainThread;
   PlatformData*  mPlatformData;  // Platform specific data.
   void* const    mStackTop;
-#ifndef SPS_STANDALONE
   ThreadResponsiveness mRespInfo;
-#endif
 
   // Only Linux is using a signal sender, instead of stopping the thread, so we
   // need some space to store the data which cannot be collected in the signal

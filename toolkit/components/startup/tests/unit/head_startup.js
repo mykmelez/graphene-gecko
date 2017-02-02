@@ -18,13 +18,15 @@ function createAppInfo(ID, name, version, platformVersion = "1.0") {
   });
 
   let XULAppInfoFactory = {
-    createInstance: function(outer, iid) {
+    createInstance(outer, iid) {
       if (outer != null)
         throw Components.results.NS_ERROR_NO_AGGREGATION;
       return gAppInfo.QueryInterface(iid);
     }
   };
-  let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+
+  let registrar =
+    Components.manager.QueryInterface(Components.interfaces.nsIComponentRegistrar);
   registrar.registerFactory(XULRUNTIME_CID, "XULRuntime",
                             XULRUNTIME_CONTRACTID, XULAppInfoFactory);
 }

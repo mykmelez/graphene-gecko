@@ -171,6 +171,18 @@ ABIArgGenerator::next(MIRType type)
     return softNext(type);
 }
 
+bool
+js::jit::IsUnaligned(const wasm::MemoryAccessDesc& access)
+{
+    if (!access.align())
+        return false;
+
+    if (access.type() == Scalar::Float64 && access.align() >= 4)
+        return false;
+
+    return access.align() < access.byteSize();
+}
+
 // Encode a standard register when it is being used as src1, the dest, and an
 // extra register. These should never be called with an InvalidReg.
 uint32_t
@@ -2210,17 +2222,16 @@ Assembler::as_BranchPool(uint32_t value, RepatchLabel* label, ARMBuffer::PoolEnt
 }
 
 BufferOffset
-Assembler::as_FImm64Pool(VFPRegister dest, wasm::RawF64 value, Condition c)
+Assembler::as_FImm64Pool(VFPRegister dest, double d, Condition c)
 {
     MOZ_ASSERT(dest.isDouble());
     PoolHintPun php;
     php.phd.init(0, c, PoolHintData::PoolVDTR, dest);
-    uint64_t d = value.bits();
     return allocEntry(1, 2, (uint8_t*)&php.raw, (uint8_t*)&d);
 }
 
 BufferOffset
-Assembler::as_FImm32Pool(VFPRegister dest, wasm::RawF32 value, Condition c)
+Assembler::as_FImm32Pool(VFPRegister dest, float f, Condition c)
 {
     // Insert floats into the double pool as they have the same limitations on
     // immediate offset. This wastes 4 bytes padding per float. An alternative
@@ -2228,7 +2239,6 @@ Assembler::as_FImm32Pool(VFPRegister dest, wasm::RawF32 value, Condition c)
     MOZ_ASSERT(dest.isSingle());
     PoolHintPun php;
     php.phd.init(0, c, PoolHintData::PoolVDTR, dest);
-    uint32_t f = value.bits();
     return allocEntry(1, 1, (uint8_t*)&php.raw, (uint8_t*)&f);
 }
 

@@ -44,7 +44,7 @@ ToJSValue(JSContext* aCx,
           nsresult aArgument,
           JS::MutableHandle<JS::Value> aValue)
 {
-  RefPtr<Exception> exception = CreateException(aCx, aArgument);
+  RefPtr<Exception> exception = CreateException(aArgument);
   return ToJSValue(aCx, exception, aValue);
 }
 
@@ -69,7 +69,7 @@ ToJSValue(JSContext* aCx, Promise& aArgument,
           JS::MutableHandle<JS::Value> aValue)
 {
   aValue.setObject(*aArgument.PromiseObj());
-  return true;
+  return MaybeWrapObjectValue(aCx, aValue);
 }
 
 } // namespace dom

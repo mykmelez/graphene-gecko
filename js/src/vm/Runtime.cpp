@@ -179,6 +179,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     destroyZoneCallback(nullptr),
     sweepZoneCallback(nullptr),
     compartmentNameCallback(nullptr),
+    externalStringSizeofCallback(nullptr),
     activityCallback(nullptr),
     activityCallbackArg(nullptr),
     requestDepth(0),
@@ -196,7 +197,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     negativeInfinityValue(DoubleValue(NegativeInfinity<double>())),
     positiveInfinityValue(DoubleValue(PositiveInfinity<double>())),
     emptyString(nullptr),
-    spsProfiler(thisFromCtor()),
+    geckoProfiler(thisFromCtor()),
     profilingScripts(false),
     suppressProfilerSampling(false),
     hadOutOfMemory(false),
@@ -221,6 +222,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     keepAtoms_(0),
     trustedPrincipals_(nullptr),
     beingDestroyed_(false),
+    allowContentJS_(true),
     atoms_(nullptr),
     atomsCompartment_(nullptr),
     staticStrings(nullptr),
@@ -348,7 +350,7 @@ JSRuntime::init(uint32_t maxbytes, uint32_t maxNurseryBytes)
     if (!wasm::EnsureSignalHandlers(this))
         return false;
 
-    if (!spsProfiler.init())
+    if (!geckoProfiler.init())
         return false;
 
     if (!fx.initInstance())
@@ -448,6 +450,10 @@ JSRuntime::destroyRuntime()
 
     DebugOnly<size_t> oldCount = liveRuntimesCount--;
     MOZ_ASSERT(oldCount > 0);
+
+#ifdef JS_TRACE_LOGGING
+    DestroyTraceLoggerMainThread(this);
+#endif
 
     js::TlsPerThreadData.set(nullptr);
 
@@ -775,6 +781,32 @@ JSRuntime::removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promis
                                                    PromiseRejectionHandlingState::Handled, data);
 }
 
+mozilla::non_crypto::XorShift128PlusRNG&
+JSRuntime::randomKeyGenerator()
+{
+    MOZ_ASSERT(CurrentThreadCanAccessRuntime(this));
+    if (randomKeyGenerator_.isNothing()) {
+        mozilla::Array<uint64_t, 2> seed;
+        GenerateXorShift128PlusSeed(seed);
+        randomKeyGenerator_.emplace(seed[0], seed[1]);
+    }
+    return randomKeyGenerator_.ref();
+}
+
+mozilla::HashCodeScrambler
+JSRuntime::randomHashCodeScrambler()
+{
+    auto& rng = randomKeyGenerator();
+    return mozilla::HashCodeScrambler(rng.next(), rng.next());
+}
+
+mozilla::non_crypto::XorShift128PlusRNG
+JSRuntime::forkRandomKeyGenerator()
+{
+    auto& rng = randomKeyGenerator();
+    return mozilla::non_crypto::XorShift128PlusRNG(rng.next(), rng.next());
+}
+
 void
 JSRuntime::updateMallocCounter(size_t nbytes)
 {
@@ -846,6 +878,7 @@ void
 JSRuntime::setUsedByExclusiveThread(Zone* zone)
 {
     MOZ_ASSERT(!zone->usedByExclusiveThread);
+    MOZ_ASSERT(!zone->wasGCStarted());
     zone->usedByExclusiveThread = true;
     numExclusiveThreads++;
 }
@@ -898,7 +931,7 @@ JS_FRIEND_API(bool)
 JS::IsProfilingEnabledForContext(JSContext* cx)
 {
     MOZ_ASSERT(cx);
-    return cx->spsProfiler.enabled();
+    return cx->geckoProfiler.enabled();
 }
 
 JSRuntime::IonBuilderList&

@@ -17,10 +17,17 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Logging.h"
+#include "mozilla/TimeStamp.h"
 #include "nsAutoPtr.h"
 #include "nsDebug.h"
 #include "nsISupportsImpl.h"
 #include "nsContentUtils.h"
+#include <math.h>
+
+#ifdef MOZ_TASK_TRACER
+#include "GeckoTaskTracer.h"
+using namespace mozilla::tasktracer;
+#endif
 
 using mozilla::Move;
 
@@ -122,6 +129,10 @@ namespace mozilla {
 namespace ipc {
 
 static const uint32_t kMinTelemetryMessageSize = 8192;
+
+// Note: we round the time we spend waiting for a response to the nearest
+// millisecond. So a min value of 1 ms actually captures from 500us and above.
+static const uint32_t kMinTelemetrySyncIPCLatencyMs = 1;
 
 const int32_t MessageChannel::kNoTimeout = INT32_MIN;
 
@@ -979,6 +990,9 @@ MessageChannel::OnMessageReceivedFromLink(Message&& aMsg)
     // blocked. This is okay, since we always check for pending events before
     // blocking again.
 
+#ifdef MOZ_TASK_TRACER
+    aMsg.TaskTracerDispatch();
+#endif
     RefPtr<MessageTask> task = new MessageTask(this, Move(aMsg));
     mPending.insertBack(task);
 
@@ -1064,6 +1078,7 @@ MessageChannel::ProcessPendingRequests(AutoEnterTransaction& aTransaction)
 bool
 MessageChannel::Send(Message* aMsg, Message* aReply)
 {
+    mozilla::TimeStamp start = TimeStamp::Now();
     if (aMsg->size() >= kMinTelemetryMessageSize) {
         Telemetry::Accumulate(Telemetry::IPC_MESSAGE_SIZE,
                               nsDependentCString(aMsg->name()), aMsg->size());
@@ -1078,6 +1093,9 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
 #ifdef OS_WIN
     SyncStackFrame frame(this, false);
     NeuteredWindowRegion neuteredRgn(mFlags & REQUIRE_DEFERRED_MESSAGE_PROTECTION);
+#endif
+#ifdef MOZ_TASK_TRACER
+    AutoScopedLabel autolabel("sync message %s", aMsg->name());
 #endif
 
     CxxStackFrame f(*this, OUT_MESSAGE, msg);
@@ -1242,7 +1260,9 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
         return false;
     }
 
-    IPC_LOG("Got reply: seqno=%d, xid=%d", seqno, transaction);
+    uint32_t latencyMs = round((TimeStamp::Now() - start).ToMilliseconds());
+    IPC_LOG("Got reply: seqno=%d, xid=%d, msgName=%s, latency=%ums",
+            seqno, transaction, msgName, latencyMs);
 
     nsAutoPtr<Message> reply = transact.GetReply();
 
@@ -1258,6 +1278,11 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
         Telemetry::Accumulate(Telemetry::IPC_REPLY_SIZE,
                               nsDependentCString(msgName), aReply->size());
     }
+
+    if (latencyMs >= kMinTelemetrySyncIPCLatencyMs) {
+      Telemetry::Accumulate(Telemetry::IPC_SYNC_LATENCY_MS,
+                            nsDependentCString(msgName), latencyMs);
+    }
     return true;
 }
 
@@ -1270,6 +1295,9 @@ MessageChannel::Call(Message* aMsg, Message* aReply)
 
 #ifdef OS_WIN
     SyncStackFrame frame(this, true);
+#endif
+#ifdef MOZ_TASK_TRACER
+    AutoScopedLabel autolabel("sync message %s", aMsg->name());
 #endif
 
     // This must come before MonitorAutoLock, as its destructor acquires the
@@ -1416,6 +1444,9 @@ MessageChannel::Call(Message* aMsg, Message* aReply)
         // own the monitor.
         size_t stackDepth = InterruptStackDepth();
         {
+#ifdef MOZ_TASK_TRACER
+            Message::AutoTaskTracerRun tasktracerRun(recvd);
+#endif
             MonitorAutoUnlock unlock(*mMonitor);
 
             CxxStackFrame frame(*this, IN_MESSAGE, &recvd);
@@ -1574,6 +1605,14 @@ MessageChannel::RunMessage(MessageTask& aTask)
 
 NS_IMPL_ISUPPORTS_INHERITED(MessageChannel::MessageTask, CancelableRunnable, nsIRunnablePriority)
 
+MessageChannel::MessageTask::MessageTask(MessageChannel* aChannel, Message&& aMessage)
+  : CancelableRunnable(StringFromIPCMessageType(aMessage.type()))
+  , mChannel(aChannel)
+  , mMessage(Move(aMessage))
+  , mScheduled(false)
+{
+}
+
 nsresult
 MessageChannel::MessageTask::Run()
 {
@@ -1675,6 +1714,9 @@ MessageChannel::DispatchMessage(Message &&aMsg)
         MOZ_RELEASE_ASSERT(!aMsg.is_sync() || id == transaction.TransactionID());
 
         {
+#ifdef MOZ_TASK_TRACER
+            Message::AutoTaskTracerRun tasktracerRun(aMsg);
+#endif
             MonitorAutoUnlock unlock(*mMonitor);
             CxxStackFrame frame(*this, IN_MESSAGE, &aMsg);
 
@@ -1711,6 +1753,9 @@ MessageChannel::DispatchSyncMessage(const Message& aMsg, Message*& aReply)
     int nestedLevel = aMsg.nested_level();
 
     MOZ_RELEASE_ASSERT(nestedLevel == IPC::Message::NOT_NESTED || NS_IsMainThread());
+#ifdef MOZ_TASK_TRACER
+    AutoScopedLabel autolabel("sync message %s", aMsg.name());
+#endif
 
     MessageChannel* dummy;
     MessageChannel*& blockingVar = mSide == ChildSide && NS_IsMainThread() ? gParentProcessBlocker : dummy;

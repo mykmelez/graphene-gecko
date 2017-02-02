@@ -4,6 +4,7 @@
 
 #include "logging.h"
 
+#include "webrtc/config.h"
 #include "signaling/src/jsep/JsepSessionImpl.h"
 #include <string>
 #include <set>
@@ -116,15 +117,35 @@ JsepSessionImpl::AddTrack(const RefPtr<JsepTrack>& track)
 {
   mLastError.clear();
   MOZ_ASSERT(track->GetDirection() == sdp::kSend);
-
+  MOZ_MTLOG(ML_DEBUG, "Adding track.");
   if (track->GetMediaType() != SdpMediaSection::kApplication) {
     track->SetCNAME(mCNAME);
-
-    if (track->GetSsrcs().empty()) {
-      uint32_t ssrc;
+    // Establish minimum number of required SSRCs
+    // Note that AddTrack is only for send direction
+    size_t minimumSsrcCount = 0;
+    std::vector<JsepTrack::JsConstraints> constraints;
+    track->GetJsConstraints(&constraints);
+    for (auto constraint : constraints) {
+      if (constraint.rid != "") {
+        minimumSsrcCount++;
+      }
+    }
+    // We need at least 1 SSRC
+    minimumSsrcCount = std::max<size_t>(1, minimumSsrcCount);
+    size_t currSsrcCount = track->GetSsrcs().size();
+    if (currSsrcCount < minimumSsrcCount ) {
+      MOZ_MTLOG(ML_DEBUG,
+                "Adding " << (minimumSsrcCount - currSsrcCount) << " SSRCs.");
+    }
+    while (track->GetSsrcs().size() < minimumSsrcCount) {
+      uint32_t ssrc=0;
       nsresult rv = CreateSsrc(&ssrc);
       NS_ENSURE_SUCCESS(rv, rv);
-      track->AddSsrc(ssrc);
+      // Don't add duplicate ssrcs
+      std::vector<uint32_t> ssrcs = track->GetSsrcs();
+      if (std::find(ssrcs.begin(), ssrcs.end(), ssrc) == ssrcs.end()) {
+        track->AddSsrc(ssrc);
+      }
     }
   }
 
@@ -287,19 +308,66 @@ JsepSessionImpl::SetParameters(const std::string& streamId,
   // Add RtpStreamId Extmap
   // SdpDirectionAttribute::Direction is a bitmask
   SdpDirectionAttribute::Direction addVideoExt = SdpDirectionAttribute::kInactive;
+  SdpDirectionAttribute::Direction addAudioExt = SdpDirectionAttribute::kInactive;
   for (auto constraintEntry: constraints) {
     if (constraintEntry.rid != "") {
-      if (it->mTrack->GetMediaType() == SdpMediaSection::kVideo) {
-        addVideoExt = static_cast<SdpDirectionAttribute::Direction>(addVideoExt
-                                                                    | it->mTrack->GetDirection());
+      switch (it->mTrack->GetMediaType()) {
+        case SdpMediaSection::kVideo: {
+           addVideoExt = static_cast<SdpDirectionAttribute::Direction>(addVideoExt
+                                                                       | it->mTrack->GetDirection());
+          break;
+        }
+        case SdpMediaSection::kAudio: {
+          addAudioExt = static_cast<SdpDirectionAttribute::Direction>(addAudioExt
+                                                                      | it->mTrack->GetDirection());
+          break;
+        }
+        default: {
+          MOZ_ASSERT(false);
+          return NS_ERROR_INVALID_ARG;
+        }
       }
     }
   }
   if (addVideoExt != SdpDirectionAttribute::kInactive) {
     AddVideoRtpExtension("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id", addVideoExt);
   }
+  if (addAudioExt != SdpDirectionAttribute::kInactive) {
+    AddAudioRtpExtension("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id", addAudioExt);
+  }
 
   it->mTrack->SetJsConstraints(constraints);
+
+  auto track = it->mTrack;
+  if (track->GetDirection() == sdp::kSend) {
+    // Establish minimum number of required SSRCs
+    // Note that AddTrack is only for send direction
+    size_t minimumSsrcCount = 0;
+    std::vector<JsepTrack::JsConstraints> constraints;
+    track->GetJsConstraints(&constraints);
+    for (auto constraint : constraints) {
+      if (constraint.rid != "") {
+        minimumSsrcCount++;
+      }
+    }
+    // We need at least 1 SSRC
+    minimumSsrcCount = std::max<size_t>(1, minimumSsrcCount);
+    size_t currSsrcCount = track->GetSsrcs().size();
+    if (currSsrcCount < minimumSsrcCount ) {
+      MOZ_MTLOG(ML_DEBUG,
+                "Adding " << (minimumSsrcCount - currSsrcCount) << " SSRCs.");
+    }
+    while (track->GetSsrcs().size() < minimumSsrcCount) {
+      uint32_t ssrc=0;
+      nsresult rv = CreateSsrc(&ssrc);
+      NS_ENSURE_SUCCESS(rv, rv);
+      // Don't add duplicate ssrcs
+      std::vector<uint32_t> ssrcs = track->GetSsrcs();
+      if (std::find(ssrcs.begin(), ssrcs.end(), ssrc) == ssrcs.end()) {
+        track->AddSsrc(ssrc);
+      }
+    }
+  }
   return NS_OK;
 }
 
@@ -939,11 +1007,6 @@ JsepSessionImpl::CreateAnswerMSection(const JsepAnswerOptions& options,
 
   if (remoteMsection.IsSending()) {
     BindMatchingRemoteTrackToAnswer(&msection);
-  }
-
-  if (!msection.IsReceiving() && !msection.IsSending()) {
-    mSdpHelper.DisableMsection(sdp, &msection);
-    return NS_OK;
   }
 
   // Add extmap attributes.
@@ -1649,17 +1712,6 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
       return NS_ERROR_INVALID_ARG;
     }
 
-    auto& formats = parsed->GetMediaSection(i).GetFormats();
-    for (auto f = formats.begin(); f != formats.end(); ++f) {
-      uint16_t pt;
-      if (!SdpHelper::GetPtAsInt(*f, &pt)) {
-        JSEP_SET_ERROR("Payload type \""
-                       << *f << "\" is not a 16-bit unsigned int at level "
-                       << i);
-        return NS_ERROR_INVALID_ARG;
-      }
-    }
-
     std::string streamId;
     std::string trackId;
     nsresult rv = mSdpHelper.GetIdsFromMsid(*parsed,
@@ -1686,15 +1738,21 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
       // Sanity-check that payload type can work with RTP
       for (const std::string& fmt : msection.GetFormats()) {
         uint16_t payloadType;
-        // TODO (bug 1204099): Make this check for reserved ranges.
-        if (!SdpHelper::GetPtAsInt(fmt, &payloadType) || payloadType > 127) {
-          JSEP_SET_ERROR("audio/video payload type is too large: " << fmt);
+        if (!SdpHelper::GetPtAsInt(fmt, &payloadType)) {
+          JSEP_SET_ERROR("Payload type \"" << fmt <<
+                         "\" is not a 16-bit unsigned int at level " << i);
           return NS_ERROR_INVALID_ARG;
         }
-	if (forbidden.test(payloadType)) {
-	  JSEP_SET_ERROR("Illegal audio/video payload type: " << fmt);
+        if (payloadType > 127) {
+          JSEP_SET_ERROR("audio/video payload type \"" << fmt <<
+                         "\" is too large at level " << i);
           return NS_ERROR_INVALID_ARG;
-	}
+        }
+        if (forbidden.test(payloadType)) {
+          JSEP_SET_ERROR("Illegal audio/video payload type \"" << fmt <<
+                         "\" at level " << i);
+          return NS_ERROR_INVALID_ARG;
+        }
       }
     }
   }
@@ -2219,9 +2277,9 @@ JsepSessionImpl::SetupDefaultCodecs()
   mSupportedCodecs.values.push_back(ulpfec);
 
   mSupportedCodecs.values.push_back(new JsepApplicationCodecDescription(
-      "5000",
       "webrtc-datachannel",
-      WEBRTC_DATACHANNEL_STREAMS_DEFAULT
+      WEBRTC_DATACHANNEL_STREAMS_DEFAULT,
+      5000
       ));
 
   // Update the redundant encodings for the RED codec with the supported

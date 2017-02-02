@@ -27,7 +27,7 @@ XPCOMUtils.defineLazyGetter(this, "SimpleServiceDiscovery", function() {
   ssdp.registerDevice({
     id: "roku:ecp",
     target: "roku:ecp",
-    factory: function(aService) {
+    factory(aService) {
       Cu.import("resource://gre/modules/RokuApp.jsm");
       return new RokuApp(aService);
     },
@@ -98,21 +98,21 @@ addMessageListener("SecondScreen:tab-mirror", function(message) {
   if (app) {
     let width = content.innerWidth;
     let height = content.innerHeight;
-    let viewport = {cssWidth: width, cssHeight: height, width: width, height: height};
+    let viewport = {cssWidth: width, cssHeight: height, width, height};
     app.mirror(function() {}, content, viewport, function() {}, content);
   }
 });
 
 var AboutHomeListener = {
-  init: function(chromeGlobal) {
-    chromeGlobal.addEventListener('AboutHomeLoad', this, false, true);
+  init(chromeGlobal) {
+    chromeGlobal.addEventListener("AboutHomeLoad", this, false, true);
   },
 
   get isAboutHome() {
     return content.document.documentURI.toLowerCase() == "about:home";
   },
 
-  handleEvent: function(aEvent) {
+  handleEvent(aEvent) {
     if (!this.isAboutHome) {
       return;
     }
@@ -129,7 +129,7 @@ var AboutHomeListener = {
     }
   },
 
-  receiveMessage: function(aMessage) {
+  receiveMessage(aMessage) {
     if (!this.isAboutHome) {
       return;
     }
@@ -140,7 +140,7 @@ var AboutHomeListener = {
     }
   },
 
-  onUpdate: function(aData) {
+  onUpdate(aData) {
     let doc = content.document;
     if (aData.showRestoreLastSession && !PrivateBrowsingUtils.isContentWindowPrivate(content))
       doc.getElementById("launcher").setAttribute("session", "true");
@@ -154,7 +154,7 @@ var AboutHomeListener = {
     docElt.setAttribute("snippetsVersion", aData.snippetsVersion);
   },
 
-  onPageLoad: function() {
+  onPageLoad() {
     addMessageListener("AboutHome:Update", this);
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
@@ -163,7 +163,7 @@ var AboutHomeListener = {
     sendAsyncMessage("AboutHome:RequestUpdate");
   },
 
-  onClick: function(aEvent) {
+  onClick(aEvent) {
     if (!aEvent.isTrusted || // Don't trust synthetic events
         aEvent.button == 2 || aEvent.target.localName != "button") {
       return;
@@ -210,7 +210,7 @@ var AboutHomeListener = {
     }
   },
 
-  onPageHide: function(aEvent) {
+  onPageHide(aEvent) {
     if (aEvent.target.defaultView.frameElement) {
       return;
     }
@@ -260,7 +260,7 @@ var AboutReaderListener = {
 
   _isLeavingReaderMode: false,
 
-  init: function() {
+  init() {
     addEventListener("AboutReaderContentLoaded", this, false, true);
     addEventListener("DOMContentLoaded", this, false);
     addEventListener("pageshow", this, false);
@@ -269,7 +269,7 @@ var AboutReaderListener = {
     addMessageListener("Reader:PushState", this);
   },
 
-  receiveMessage: function(message) {
+  receiveMessage(message) {
     switch (message.name) {
       case "Reader:ToggleReaderMode":
         if (!this.isAboutReader) {
@@ -294,7 +294,7 @@ var AboutReaderListener = {
     return content.document.documentURI.startsWith("about:reader");
   },
 
-  handleEvent: function(aEvent) {
+  handleEvent(aEvent) {
     if (aEvent.originalTarget.defaultView != content) {
       return;
     }
@@ -344,7 +344,7 @@ var AboutReaderListener = {
    * this is a suitable document). Calling it on things which won't be
    * painted is not going to work.
    */
-  updateReaderButton: function(forceNonArticle) {
+  updateReaderButton(forceNonArticle) {
     if (!ReaderMode.isEnabledForParseOnLoad || this.isAboutReader ||
         !content || !(content.document instanceof content.HTMLDocument) ||
         content.document.mozSyntheticDocument) {
@@ -354,14 +354,14 @@ var AboutReaderListener = {
     this.scheduleReadabilityCheckPostPaint(forceNonArticle);
   },
 
-  cancelPotentialPendingReadabilityCheck: function() {
+  cancelPotentialPendingReadabilityCheck() {
     if (this._pendingReadabilityCheck) {
       removeEventListener("MozAfterPaint", this._pendingReadabilityCheck);
       delete this._pendingReadabilityCheck;
     }
   },
 
-  scheduleReadabilityCheckPostPaint: function(forceNonArticle) {
+  scheduleReadabilityCheckPostPaint(forceNonArticle) {
     if (this._pendingReadabilityCheck) {
       // We need to stop this check before we re-add one because we don't know
       // if forceNonArticle was true or false last time.
@@ -371,7 +371,7 @@ var AboutReaderListener = {
     addEventListener("MozAfterPaint", this._pendingReadabilityCheck);
   },
 
-  onPaintWhenWaitedFor: function(forceNonArticle, event) {
+  onPaintWhenWaitedFor(forceNonArticle, event) {
     // In non-e10s, we'll get called for paints other than ours, and so it's
     // possible that this page hasn't been laid out yet, in which case we
     // should wait until we get an event that does relate to our layout. We
@@ -401,18 +401,18 @@ var ContentSearchMediator = {
     "about:newtab",
   ]),
 
-  init: function(chromeGlobal) {
+  init(chromeGlobal) {
     chromeGlobal.addEventListener("ContentSearchClient", this, true, true);
     addMessageListener("ContentSearch", this);
   },
 
-  handleEvent: function(event) {
+  handleEvent(event) {
     if (this._contentWhitelisted) {
       this._sendMsg(event.detail.type, event.detail.data);
     }
   },
 
-  receiveMessage: function(msg) {
+  receiveMessage(msg) {
     if (msg.data.type == "AddToWhitelist") {
       for (let uri of msg.data.data) {
         this.whitelist.add(uri);
@@ -429,18 +429,18 @@ var ContentSearchMediator = {
     return this.whitelist.has(content.document.documentURI);
   },
 
-  _sendMsg: function(type, data = null) {
+  _sendMsg(type, data = null) {
     sendAsyncMessage("ContentSearch", {
-      type: type,
-      data: data,
+      type,
+      data,
     });
   },
 
-  _fireEvent: function(type, data = null) {
+  _fireEvent(type, data = null) {
     let event = Cu.cloneInto({
       detail: {
-        type: type,
-        data: data,
+        type,
+        data,
       },
     }, content);
     content.dispatchEvent(new content.CustomEvent("ContentSearchService",
@@ -450,7 +450,7 @@ var ContentSearchMediator = {
 ContentSearchMediator.init(this);
 
 var PageStyleHandler = {
-  init: function() {
+  init() {
     addMessageListener("PageStyle:Switch", this);
     addMessageListener("PageStyle:Disable", this);
     addEventListener("pageshow", () => this.sendStyleSheetInfo());
@@ -460,23 +460,23 @@ var PageStyleHandler = {
     return docShell.contentViewer;
   },
 
-  sendStyleSheetInfo: function() {
+  sendStyleSheetInfo() {
     let filteredStyleSheets = this._filterStyleSheets(this.getAllStyleSheets());
 
     sendAsyncMessage("PageStyle:StyleSheets", {
-      filteredStyleSheets: filteredStyleSheets,
+      filteredStyleSheets,
       authorStyleDisabled: this.markupDocumentViewer.authorStyleDisabled,
       preferredStyleSheetSet: content.document.preferredStyleSheetSet
     });
   },
 
-  getAllStyleSheets: function(frameset = content) {
+  getAllStyleSheets(frameset = content) {
     let selfSheets = Array.slice(frameset.document.styleSheets);
     let subSheets = Array.map(frameset.frames, frame => this.getAllStyleSheets(frame));
     return selfSheets.concat(...subSheets);
   },
 
-  receiveMessage: function(msg) {
+  receiveMessage(msg) {
     switch (msg.name) {
       case "PageStyle:Switch":
         this.markupDocumentViewer.authorStyleDisabled = false;
@@ -491,7 +491,7 @@ var PageStyleHandler = {
     this.sendStyleSheetInfo();
   },
 
-  _stylesheetSwitchAll: function(frameset, title) {
+  _stylesheetSwitchAll(frameset, title) {
     if (!title || this._stylesheetInFrame(frameset, title)) {
       this._stylesheetSwitchFrame(frameset, title);
     }
@@ -502,7 +502,7 @@ var PageStyleHandler = {
     }
   },
 
-  _stylesheetSwitchFrame: function(frame, title) {
+  _stylesheetSwitchFrame(frame, title) {
     var docStyleSheets = frame.document.styleSheets;
 
     for (let i = 0; i < docStyleSheets.length; ++i) {
@@ -515,11 +515,11 @@ var PageStyleHandler = {
     }
   },
 
-  _stylesheetInFrame: function(frame, title) {
+  _stylesheetInFrame(frame, title) {
     return Array.some(frame.document.styleSheets, (styleSheet) => styleSheet.title == title);
   },
 
-  _filterStyleSheets: function(styleSheets) {
+  _filterStyleSheets(styleSheets) {
     let result = [];
 
     for (let currentStyleSheet of styleSheets) {
@@ -539,7 +539,7 @@ var PageStyleHandler = {
         if (!currentStyleSheet.ownerNode ||
             // special-case style nodes, which have no href
             currentStyleSheet.ownerNode.nodeName.toLowerCase() != "style") {
-          URI = Services.io.newURI(currentStyleSheet.href, null, null);
+          URI = Services.io.newURI(currentStyleSheet.href);
         }
       } catch (e) {
         if (e.result != Cr.NS_ERROR_MALFORMED_URI) {
@@ -607,29 +607,134 @@ addMessageListener("Browser:AppTab", function(message) {
   }
 });
 
+let PrerenderContentHandler = {
+  init() {
+    this._pending = [];
+    this._idMonotonic = 0;
+    this._initialized = true;
+    addMessageListener("Prerender:Canceled", this);
+    addMessageListener("Prerender:Swapped", this);
+  },
+
+  get initialized() {
+    return !!this._initialized;
+  },
+
+  receiveMessage(aMessage) {
+    switch (aMessage.name) {
+      case "Prerender:Canceled": {
+        for (let i = 0; i < this._pending.length; ++i) {
+          if (this._pending[i].id === aMessage.data.id) {
+            if (this._pending[i].failure) {
+              this._pending[i].failure.run();
+            }
+            // Remove the item from the array
+            this._pending.splice(i, 1);
+            break;
+          }
+        }
+        break;
+      }
+      case "Prerender:Swapped": {
+        for (let i = 0; i < this._pending.length; ++i) {
+          if (this._pending[i].id === aMessage.data.id) {
+            if (this._pending[i].success) {
+              this._pending[i].success.run();
+            }
+            // Remove the item from the array
+            this._pending.splice(i, 1);
+            break;
+          }
+        }
+        break;
+      }
+    }
+  },
+
+  startPrerenderingDocument(aHref, aReferrer) {
+    // XXX: Make this constant a pref
+    if (this._pending.length >= 2) {
+      return;
+    }
+
+    let id = ++this._idMonotonic;
+    sendAsyncMessage("Prerender:Request", {
+      href: aHref.spec,
+      referrer: aReferrer ? aReferrer.spec : null,
+      id,
+    });
+
+    this._pending.push({
+      href: aHref,
+      referrer: aReferrer,
+      id,
+      success: null,
+      failure: null,
+    });
+  },
+
+  shouldSwitchToPrerenderedDocument(aHref, aReferrer, aSuccess, aFailure) {
+    // Check if we think there is a prerendering document pending for the given
+    // href and referrer. If we think there is one, we will send a message to
+    // the parent process asking it to do a swap, and hook up the success and
+    // failure listeners.
+    for (let i = 0; i < this._pending.length; ++i) {
+      let p = this._pending[i];
+      if (p.href.equals(aHref) && p.referrer.equals(aReferrer)) {
+        p.success = aSuccess;
+        p.failure = aFailure;
+        sendAsyncMessage("Prerender:Swap", {id: p.id});
+        return true;
+      }
+    }
+
+    return false;
+  }
+};
+
+if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+  // We only want to initialize the PrerenderContentHandler in the content
+  // process. Outside of the content process, this should be unused.
+  PrerenderContentHandler.init();
+}
+
 var WebBrowserChrome = {
-  onBeforeLinkTraversal: function(originalTarget, linkURI, linkNode, isAppTab) {
+  onBeforeLinkTraversal(originalTarget, linkURI, linkNode, isAppTab) {
     return BrowserUtils.onBeforeLinkTraversal(originalTarget, linkURI, linkNode, isAppTab);
   },
 
   // Check whether this URI should load in the current process
-  shouldLoadURI: function(aDocShell, aURI, aReferrer) {
+  shouldLoadURI(aDocShell, aURI, aReferrer, aTriggeringPrincipal) {
     if (!E10SUtils.shouldLoadURI(aDocShell, aURI, aReferrer)) {
-      E10SUtils.redirectLoad(aDocShell, aURI, aReferrer);
+      E10SUtils.redirectLoad(aDocShell, aURI, aReferrer, aTriggeringPrincipal, false);
       return false;
     }
 
     return true;
   },
 
-  shouldLoadURIInThisProcess: function(aURI) {
+  shouldLoadURIInThisProcess(aURI) {
     return E10SUtils.shouldLoadURIInThisProcess(aURI);
   },
 
   // Try to reload the currently active or currently loading page in a new process.
-  reloadInFreshProcess: function(aDocShell, aURI, aReferrer) {
-    E10SUtils.redirectLoad(aDocShell, aURI, aReferrer, true);
+  reloadInFreshProcess(aDocShell, aURI, aReferrer, aTriggeringPrincipal, aLoadFlags) {
+    E10SUtils.redirectLoad(aDocShell, aURI, aReferrer, aTriggeringPrincipal, true, aLoadFlags);
     return true;
+  },
+
+  startPrerenderingDocument(aHref, aReferrer) {
+    if (PrerenderContentHandler.initialized) {
+      PrerenderContentHandler.startPrerenderingDocument(aHref, aReferrer);
+    }
+  },
+
+  shouldSwitchToPrerenderedDocument(aHref, aReferrer, aSuccess, aFailure) {
+    if (PrerenderContentHandler.initialized) {
+      return PrerenderContentHandler.shouldSwitchToPrerenderedDocument(
+        aHref, aReferrer, aSuccess, aFailure);
+    }
+    return false;
   }
 };
 
@@ -642,7 +747,7 @@ if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
 
 var DOMFullscreenHandler = {
 
-  init: function() {
+  init() {
     addMessageListener("DOMFullscreen:Entered", this);
     addMessageListener("DOMFullscreen:CleanUp", this);
     addEventListener("MozDOMFullscreen:Request", this);
@@ -660,7 +765,7 @@ var DOMFullscreenHandler = {
                   .getInterface(Ci.nsIDOMWindowUtils);
   },
 
-  receiveMessage: function(aMessage) {
+  receiveMessage(aMessage) {
     let windowUtils = this._windowUtils;
     switch (aMessage.name) {
       case "DOMFullscreen:Entered": {
@@ -688,7 +793,7 @@ var DOMFullscreenHandler = {
     }
   },
 
-  handleEvent: function(aEvent) {
+  handleEvent(aEvent) {
     switch (aEvent.type) {
       case "MozDOMFullscreen:Request": {
         sendAsyncMessage("DOMFullscreen:Request");

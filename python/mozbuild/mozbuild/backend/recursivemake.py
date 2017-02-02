@@ -61,6 +61,7 @@ from ..frontend.data import (
     PerSourceFlag,
     Program,
     RustLibrary,
+    HostRustLibrary,
     RustProgram,
     SharedLibrary,
     SimpleProgram,
@@ -73,6 +74,7 @@ from ..frontend.data import (
 from ..util import (
     ensureParentDir,
     FileAvoidWrite,
+    OrderedDefaultDict,
 )
 from ..makeutil import Makefile
 from mozbuild.shellutil import quote as shell_quote
@@ -123,8 +125,6 @@ MOZBUILD_VARIABLES = [
     b'PREF_JS_EXPORTS',
     b'PROGRAM',
     b'RESOURCE_FILES',
-    b'SDK_HEADERS',
-    b'SDK_LIBRARY',
     b'SHARED_LIBRARY_LIBS',
     b'SHARED_LIBRARY_NAME',
     b'SIMPLE_PROGRAMS',
@@ -393,10 +393,9 @@ class RecursiveMakeBackend(CommonBackend):
         # used for a "magic" rm -rf.
         self._install_manifests['dist_public']
         self._install_manifests['dist_private']
-        self._install_manifests['dist_sdk']
 
         self._traversal = RecursiveMakeTraversal()
-        self._compile_graph = defaultdict(set)
+        self._compile_graph = OrderedDefaultDict(set)
 
         self._no_skip = {
             'export': set(),
@@ -538,13 +537,16 @@ class RecursiveMakeBackend(CommonBackend):
             backend_file.write('JAR_MANIFEST := %s\n' % obj.path.full_path)
 
         elif isinstance(obj, RustProgram):
-            # Note that for these and host Rust programs, we don't need to
-            # bother with linked libraries, because Cargo will take care of
-            # all of that for us.
             self._process_rust_program(obj, backend_file)
+            # Hook the program into the compile graph.
+            build_target = self._build_target_for_obj(obj)
+            self._compile_graph[build_target]
 
         elif isinstance(obj, HostRustProgram):
             self._process_host_rust_program(obj, backend_file)
+            # Hook the program into the compile graph.
+            build_target = self._build_target_for_obj(obj)
+            self._compile_graph[build_target]
 
         elif isinstance(obj, Program):
             self._process_program(obj.program, backend_file)
@@ -1145,7 +1147,7 @@ class RecursiveMakeBackend(CommonBackend):
                 (target, ' '.join(jar.sources)))
         if jar.generated_sources:
             backend_file.write('%s_PP_JAVAFILES := %s\n' %
-                (target, ' '.join(mozpath.join('generated', f) for f in jar.generated_sources)))
+                (target, ' '.join(jar.generated_sources)))
         if jar.extra_jars:
             backend_file.write('%s_EXTRA_JARS := %s\n' %
                 (target, ' '.join(sorted(set(jar.extra_jars)))))
@@ -1184,8 +1186,6 @@ class RecursiveMakeBackend(CommonBackend):
             backend_file.write('IS_COMPONENT := 1\n')
         if libdef.soname:
             backend_file.write('DSO_SONAME := %s\n' % libdef.soname)
-        if libdef.is_sdk:
-            backend_file.write('SDK_LIBRARY := %s\n' % libdef.import_name)
         if libdef.symbols_file:
             backend_file.write('SYMBOLS_FILE := %s\n' % libdef.symbols_file)
         if not libdef.cxx_link:
@@ -1195,16 +1195,19 @@ class RecursiveMakeBackend(CommonBackend):
         backend_file.write_once('LIBRARY_NAME := %s\n' % libdef.basename)
         backend_file.write('FORCE_STATIC_LIB := 1\n')
         backend_file.write('REAL_LIBRARY := %s\n' % libdef.lib_name)
-        if libdef.is_sdk:
-            backend_file.write('SDK_LIBRARY := %s\n' % libdef.import_name)
         if libdef.no_expand_lib:
             backend_file.write('NO_EXPAND_LIBS := 1\n')
 
     def _process_rust_library(self, libdef, backend_file):
-        backend_file.write_once('RUST_LIBRARY_FILE := %s\n' % libdef.import_name)
+        lib_var = 'RUST_LIBRARY_FILE'
+        feature_var = 'RUST_LIBRARY_FEATURES'
+        if isinstance(libdef, HostRustLibrary):
+            lib_var = 'HOST_RUST_LIBRARY_FILE'
+            feature_var = 'HOST_RUST_LIBRARY_FEATURES'
+        backend_file.write_once('%s := %s\n' % (libdef.LIB_FILE_VAR, libdef.import_name))
         backend_file.write('CARGO_FILE := $(srcdir)/Cargo.toml\n')
         if libdef.features:
-            backend_file.write('RUST_LIBRARY_FEATURES := %s\n' % ' '.join(libdef.features))
+            backend_file.write('%s := %s\n' % (libdef.FEATURES_VAR, ' '.join(libdef.features)))
 
     def _process_host_library(self, libdef, backend_file):
         backend_file.write('HOST_LIBRARY_NAME = %s\n' % libdef.basename)
@@ -1261,7 +1264,7 @@ class RecursiveMakeBackend(CommonBackend):
                     backend_file.write_once('SHARED_LIBS += %s/%s\n'
                                         % (relpath, lib.import_name))
             elif isinstance(obj, (HostLibrary, HostProgram, HostSimpleProgram)):
-                assert isinstance(lib, HostLibrary)
+                assert isinstance(lib, (HostLibrary, HostRustLibrary))
                 backend_file.write_once('HOST_LIBS += %s/%s\n'
                                    % (relpath, lib.import_name))
 
@@ -1305,7 +1308,6 @@ class RecursiveMakeBackend(CommonBackend):
             '_tests',
             'dist/include',
             'dist/branding',
-            'dist/sdk',
         ))
         if not path:
             raise Exception("Cannot install to " + target)
@@ -1423,7 +1425,7 @@ class RecursiveMakeBackend(CommonBackend):
     def _write_master_test_manifest(self, path, manifests):
         with self._write_file(path) as master:
             master.write(
-                '; THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.\n\n')
+                '# THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.\n\n')
 
             for manifest in sorted(manifests):
                 master.write('[include:%s]\n' % manifest)

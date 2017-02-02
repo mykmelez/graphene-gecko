@@ -55,6 +55,7 @@
 #include "mozilla/layers/APZEventState.h"
 #include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/ChromeProcessController.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/dom/ContentChild.h"
@@ -348,7 +349,7 @@ nsBaseWidget::OnRenderingDeviceReset(uint64_t aSeqNo)
   // accelerated layers again.
   RefPtr<ClientLayerManager> clm = mLayerManager->AsClientLayerManager();
   if (!ComputeShouldAccelerate() &&
-      clm->GetTextureFactoryIdentifier().mParentBackend != LayersBackend::LAYERS_BASIC)
+      clm->GetCompositorBackendType() == LayersBackend::LAYERS_BASIC)
   {
     return;
   }
@@ -364,7 +365,7 @@ nsBaseWidget::OnRenderingDeviceReset(uint64_t aSeqNo)
   FrameLayerBuilder::InvalidateAllLayers(mLayerManager);
 
   // Update the texture factory identifier.
-  clm->UpdateTextureFactoryIdentifier(identifier);
+  clm->UpdateTextureFactoryIdentifier(identifier, aSeqNo);
   ImageBridgeChild::IdentifyCompositorTextureHost(identifier);
   gfx::VRManagerChild::IdentifyTextureHost(identifier);
 }
@@ -537,18 +538,6 @@ void nsBaseWidget::Destroy()
   mScrollCaptureContainer = nullptr;
 #endif
 }
-
-
-//-------------------------------------------------------------------------
-//
-// Set this nsBaseWidget's parent
-//
-//-------------------------------------------------------------------------
-NS_IMETHODIMP nsBaseWidget::SetParent(nsIWidget* aNewParent)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
 
 //-------------------------------------------------------------------------
 //
@@ -753,14 +742,15 @@ nsCursor nsBaseWidget::GetCursor()
   return mCursor;
 }
 
-NS_IMETHODIMP nsBaseWidget::SetCursor(nsCursor aCursor)
+void
+nsBaseWidget::SetCursor(nsCursor aCursor)
 {
   mCursor = aCursor;
-  return NS_OK;
 }
 
-NS_IMETHODIMP nsBaseWidget::SetCursor(imgIContainer* aCursor,
-                                      uint32_t aHotspotX, uint32_t aHotspotY)
+nsresult
+nsBaseWidget::SetCursor(imgIContainer* aCursor,
+                        uint32_t aHotspotX, uint32_t aHotspotY)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -849,16 +839,6 @@ nsBaseWidget::SetWindowClipRegion(const nsTArray<LayoutDeviceIntRect>& aRects,
     StoreWindowClipRegion(rects);
   }
   return NS_OK;
-}
-
-//-------------------------------------------------------------------------
-//
-// Hide window borders/decorations for this widget
-//
-//-------------------------------------------------------------------------
-NS_IMETHODIMP nsBaseWidget::HideWindowChrome(bool aShouldHide)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /* virtual */ void
@@ -1318,20 +1298,20 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   RefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
 
-  bool useAPZ = UseAPZ();
+  CompositorOptions options(UseAPZ());
 
   gfx::GPUProcessManager* gpu = gfx::GPUProcessManager::Get();
   mCompositorSession = gpu->CreateTopLevelCompositor(
     this,
     lm,
     GetDefaultScale(),
-    useAPZ,
+    options,
     UseExternalCompositingSurface(),
     gfx::IntSize(aWidth, aHeight));
   mCompositorBridgeChild = mCompositorSession->GetCompositorBridgeChild();
   mCompositorWidgetDelegate = mCompositorSession->GetCompositorWidgetDelegate();
 
-  if (useAPZ) {
+  if (options.UseAPZ()) {
     mAPZC = mCompositorSession->GetAPZCTreeManager();
     ConfigureAPZCTreeManager();
   } else {
@@ -1371,7 +1351,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
     lf->SetShadowManager(shadowManager);
     if (ClientLayerManager* clm = lm->AsClientLayerManager()) {
-      clm->UpdateTextureFactoryIdentifier(textureFactoryIdentifier);
+      clm->UpdateTextureFactoryIdentifier(textureFactoryIdentifier, 0);
     }
     // Some popup or transparent widgets may use a different backend than the
     // compositors used with ImageBridge and VR (and more generally web content).
@@ -1474,7 +1454,8 @@ void nsBaseWidget::OnDestroy()
   ReleaseContentController();
 }
 
-NS_IMETHODIMP nsBaseWidget::MoveClient(double aX, double aY)
+void
+nsBaseWidget::MoveClient(double aX, double aY)
 {
   LayoutDeviceIntPoint clientOffset(GetClientOffset());
 
@@ -1482,15 +1463,14 @@ NS_IMETHODIMP nsBaseWidget::MoveClient(double aX, double aY)
   // if that's what this widget uses for the Move/Resize APIs
   if (BoundsUseDesktopPixels()) {
     DesktopPoint desktopOffset = clientOffset / GetDesktopToDeviceScale();
-    return Move(aX - desktopOffset.x, aY - desktopOffset.y);
+    Move(aX - desktopOffset.x, aY - desktopOffset.y);
   } else {
-    return Move(aX - clientOffset.x, aY - clientOffset.y);
+    Move(aX - clientOffset.x, aY - clientOffset.y);
   }
 }
 
-NS_IMETHODIMP nsBaseWidget::ResizeClient(double aWidth,
-                                         double aHeight,
-                                         bool aRepaint)
+void
+nsBaseWidget::ResizeClient(double aWidth, double aHeight, bool aRepaint)
 {
   NS_ASSERTION((aWidth >=0) , "Negative width passed to ResizeClient");
   NS_ASSERTION((aHeight >=0), "Negative height passed to ResizeClient");
@@ -1503,19 +1483,20 @@ NS_IMETHODIMP nsBaseWidget::ResizeClient(double aWidth,
     DesktopSize desktopDelta =
       (LayoutDeviceIntSize(mBounds.width, mBounds.height) -
        clientBounds.Size()) / GetDesktopToDeviceScale();
-    return Resize(aWidth + desktopDelta.width, aHeight + desktopDelta.height,
-                  aRepaint);
+    Resize(aWidth + desktopDelta.width, aHeight + desktopDelta.height,
+           aRepaint);
   } else {
-    return Resize(mBounds.width + (aWidth - clientBounds.width),
-                  mBounds.height + (aHeight - clientBounds.height), aRepaint);
+    Resize(mBounds.width + (aWidth - clientBounds.width),
+           mBounds.height + (aHeight - clientBounds.height), aRepaint);
   }
 }
 
-NS_IMETHODIMP nsBaseWidget::ResizeClient(double aX,
-                                         double aY,
-                                         double aWidth,
-                                         double aHeight,
-                                         bool aRepaint)
+void
+nsBaseWidget::ResizeClient(double aX,
+                           double aY,
+                           double aWidth,
+                           double aHeight,
+                           bool aRepaint)
 {
   NS_ASSERTION((aWidth >=0) , "Negative width passed to ResizeClient");
   NS_ASSERTION((aHeight >=0), "Negative height passed to ResizeClient");
@@ -1529,14 +1510,14 @@ NS_IMETHODIMP nsBaseWidget::ResizeClient(double aX,
     DesktopSize desktopDelta =
       (LayoutDeviceIntSize(mBounds.width, mBounds.height) -
        clientBounds.Size()) / scale;
-    return Resize(aX - desktopOffset.x, aY - desktopOffset.y,
-                  aWidth + desktopDelta.width, aHeight + desktopDelta.height,
-                  aRepaint);
+    Resize(aX - desktopOffset.x, aY - desktopOffset.y,
+           aWidth + desktopDelta.width, aHeight + desktopDelta.height,
+           aRepaint);
   } else {
-    return Resize(aX - clientOffset.x, aY - clientOffset.y,
-                  aWidth + mBounds.width - clientBounds.width,
-                  aHeight + mBounds.height - clientBounds.height,
-                  aRepaint);
+    Resize(aX - clientOffset.x, aY - clientOffset.y,
+           aWidth + mBounds.width - clientBounds.width,
+           aHeight + mBounds.height - clientBounds.height,
+           aRepaint);
   }
 }
 
@@ -1593,7 +1574,7 @@ nsBaseWidget::GetClientOffset()
   return LayoutDeviceIntPoint(0, 0);
 }
 
-NS_IMETHODIMP
+nsresult
 nsBaseWidget::SetNonClientMargins(LayoutDeviceIntMargin &margins)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -1604,21 +1585,10 @@ uint32_t nsBaseWidget::GetMaxTouchPoints() const
   return 0;
 }
 
-NS_IMETHODIMP
-nsBaseWidget::GetAttention(int32_t aCycleCount) {
-    return NS_OK;
-}
-
 bool
 nsBaseWidget::HasPendingInputEvent()
 {
   return false;
-}
-
-NS_IMETHODIMP
-nsBaseWidget::SetIcon(const nsAString&)
-{
-  return NS_OK;
 }
 
 bool
@@ -1692,20 +1662,6 @@ nsBaseWidget::ResolveIconName(const nsAString &aIconName,
               getter_AddRefs(file));
   if (file && ResolveIconNameHelper(file, aIconName, aIconSuffix))
     NS_ADDREF(*aResult = file);
-}
-
-NS_IMETHODIMP
-nsBaseWidget::BeginResizeDrag(WidgetGUIEvent* aEvent,
-                              int32_t aHorizontal,
-                              int32_t aVertical)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-nsBaseWidget::BeginMoveDrag(WidgetMouseEvent* aEvent)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 void nsBaseWidget::SetSizeConstraints(const SizeConstraints& aConstraints)
@@ -1804,7 +1760,7 @@ nsBaseWidget::NotifyUIStateChanged(UIStateChangeType aShowAccelerators,
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsBaseWidget::NotifyIME(const IMENotification& aIMENotification)
 {
   switch (aIMENotification.mMessage) {
@@ -1848,7 +1804,7 @@ nsBaseWidget::EnsureTextEventDispatcher()
   mTextEventDispatcher = new TextEventDispatcher(this);
 }
 
-NS_IMETHODIMP_(nsIWidget::TextEventDispatcher*)
+nsIWidget::TextEventDispatcher*
 nsBaseWidget::GetTextEventDispatcher()
 {
   EnsureTextEventDispatcher();
@@ -1865,7 +1821,7 @@ nsBaseWidget::GetPseudoIMEContext()
   return dispatcher->GetPseudoIMEContext();
 }
 
-NS_IMETHODIMP_(TextEventDispatcherListener*)
+TextEventDispatcherListener*
 nsBaseWidget::GetNativeTextEventDispatcherListener()
 {
   // TODO: If all platforms supported use of TextEventDispatcher for handling
@@ -2254,7 +2210,7 @@ nsBaseWidget::CreateScrollCaptureContainer()
     return ImageContainer::sInvalidAsyncContainerId;
   }
 
-  return mScrollCaptureContainer->GetAsyncContainerID();
+  return mScrollCaptureContainer->GetAsyncContainerHandle().Value();
 }
 
 void
@@ -2293,7 +2249,7 @@ nsBaseWidget::DefaultFillScrollCapture(DrawTarget* aSnapshotDrawTarget)
 }
 #endif
 
-NS_IMETHODIMP_(nsIWidget::NativeIMEContext)
+nsIWidget::NativeIMEContext
 nsIWidget::GetNativeIMEContext()
 {
   return NativeIMEContext(this);

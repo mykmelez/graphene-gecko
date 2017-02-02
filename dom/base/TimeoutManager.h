@@ -9,20 +9,21 @@
 
 #include "mozilla/dom/Timeout.h"
 
+class nsIEventTarget;
 class nsITimeoutHandler;
 class nsGlobalWindow;
 
 namespace mozilla {
-
-class ThrottledEventQueue;
-
 namespace dom {
+
+class OrderedTimeoutIterator;
 
 // This class manages the timeouts in a Window's setTimeout/setInterval pool.
 class TimeoutManager final
 {
 public:
   explicit TimeoutManager(nsGlobalWindow& aWindow);
+  ~TimeoutManager();
   TimeoutManager(const TimeoutManager& rhs) = delete;
   void operator=(const TimeoutManager& rhs) = delete;
 
@@ -31,7 +32,11 @@ public:
   static uint32_t GetNestingLevel() { return sNestingLevel; }
   static void SetNestingLevel(uint32_t aLevel) { sNestingLevel = aLevel; }
 
-  bool HasTimeouts() const { return !mTimeouts.IsEmpty(); }
+  bool HasTimeouts() const
+  {
+    return !mNormalTimeouts.IsEmpty() ||
+           !mTrackingTimeouts.IsEmpty();
+  }
 
   nsresult SetTimeout(nsITimeoutHandler* aHandler,
                       int32_t interval, bool aIsInterval,
@@ -63,7 +68,7 @@ public:
   // order to bound how many timers must be examined.
   nsresult ResetTimersForThrottleReduction();
 
-  int32_t DOMMinTimeoutValue() const;
+  int32_t DOMMinTimeoutValue(bool aIsTracking) const;
 
   // aTimeout is the timeout that we're about to start running.  This function
   // returns the current timeout.
@@ -83,26 +88,33 @@ public:
   // Initialize TimeoutManager before the first time it is accessed.
   static void Initialize();
 
-  // Run some code for each Timeout in our list.
+  // Exposed only for testing
+  bool IsTimeoutTracking(uint32_t aTimeoutId);
+
+  // Run some code for each Timeout in our list.  Note that this function
+  // doesn't guarantee that Timeouts are iterated in any particular order.
   template <class Callable>
-  void ForEachTimeout(Callable c)
+  void ForEachUnorderedTimeout(Callable c)
   {
-    mTimeouts.ForEach(c);
+    mNormalTimeouts.ForEach(c);
+    mTrackingTimeouts.ForEach(c);
   }
 
-  // Run some code for each Timeout in our list, but let the callback cancel
-  // the iteration by returning true.
+  // Run some code for each Timeout in our list, but let the callback cancel the
+  // iteration by returning true.  Note that this function doesn't guarantee
+  // that Timeouts are iterated in any particular order.
   template <class Callable>
-  void ForEachTimeoutAbortable(Callable c)
+  void ForEachUnorderedTimeoutAbortable(Callable c)
   {
-    mTimeouts.ForEachAbortable(c);
+    if (!mNormalTimeouts.ForEachAbortable(c)) {
+      mTrackingTimeouts.ForEachAbortable(c);
+    }
   }
 
 private:
   nsresult ResetTimersForThrottleReduction(int32_t aPreviousThrottleDelayMS);
 
 private:
-  typedef mozilla::LinkedList<mozilla::dom::Timeout> TimeoutList;
   struct Timeouts {
     Timeouts()
       : mTimeoutInsertionPoint(nullptr)
@@ -118,9 +130,9 @@ private:
     };
     void Insert(mozilla::dom::Timeout* aTimeout, SortBy aSortBy);
     nsresult ResetTimersForThrottleReduction(int32_t aPreviousThrottleDelayMS,
-                                             int32_t aMinTimeoutValueMS,
+                                             const TimeoutManager& aTimeoutManager,
                                              SortBy aSortBy,
-                                             mozilla::ThrottledEventQueue* aQueue);
+                                             nsIEventTarget* aQueue);
 
     const Timeout* GetFirst() const { return mTimeoutList.getFirst(); }
     Timeout* GetFirst() { return mTimeoutList.getFirst(); }
@@ -149,19 +161,25 @@ private:
       }
     }
 
+    // Returns true when a callback aborts iteration.
     template <class Callable>
-    void ForEachAbortable(Callable c)
+    bool ForEachAbortable(Callable c)
     {
       for (Timeout* timeout = GetFirst();
            timeout;
            timeout = timeout->getNext()) {
         if (c(timeout)) {
-          break;
+          return true;
         }
       }
+      return false;
     }
 
+    friend class OrderedTimeoutIterator;
+
   private:
+    typedef mozilla::LinkedList<mozilla::dom::Timeout> TimeoutList;
+
     // mTimeoutList is generally sorted by mWhen, unless mTimeoutInsertionPoint is
     // non-null.  In that case, the dummy timeout pointed to by
     // mTimeoutInsertionPoint may have a later mWhen than some of the timeouts
@@ -173,10 +191,15 @@ private:
     mozilla::dom::Timeout*    mTimeoutInsertionPoint;
   };
 
+  friend class OrderedTimeoutIterator;
+
   // Each nsGlobalWindow object has a TimeoutManager member.  This reference
   // points to that holder object.
   nsGlobalWindow&             mWindow;
-  Timeouts                    mTimeouts;
+  // The list of timeouts coming from non-tracking scripts.
+  Timeouts                    mNormalTimeouts;
+  // The list of timeouts coming from scripts on the tracking protection list.
+  Timeouts                    mTrackingTimeouts;
   uint32_t                    mTimeoutIdCounter;
   uint32_t                    mTimeoutFiringDepth;
   mozilla::dom::Timeout*      mRunningTimeout;

@@ -7,6 +7,7 @@
 #define mozilla_EditorBase_h
 
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc.
+#include "mozilla/FlushType.h"          // for FlushType enum
 #include "mozilla/OwningNonNull.h"      // for OwningNonNull
 #include "mozilla/SelectionState.h"     // for RangeUpdater, etc.
 #include "mozilla/StyleSheet.h"   // for StyleSheet
@@ -141,8 +142,7 @@ struct IMEState;
  * delegate the actual commands to the editor independent of the XPFE
  * implementation.
  */
-class EditorBase : public nsIEditor
-                 , public nsIEditorIMESupport
+class EditorBase : public nsIEditorIMESupport
                  , public nsSupportsWeakReference
                  , public nsIPhonetic
 {
@@ -234,6 +234,19 @@ public:
                         ErrorResult& aResult);
   nsresult JoinNodes(nsINode& aLeftNode, nsINode& aRightNode);
   nsresult MoveNode(nsIContent* aNode, nsINode* aParent, int32_t aOffset);
+
+  nsresult CloneAttribute(nsIAtom* aAttribute, Element* aDestElement,
+                          Element* aSourceElement);
+  nsresult RemoveAttribute(Element* aElement, nsIAtom* aAttribute);
+  virtual nsresult RemoveAttributeOrEquivalent(Element* aElement,
+                                               nsIAtom* aAttribute,
+                                               bool aSuppressTransaction) = 0;
+  nsresult SetAttribute(Element* aElement, nsIAtom* aAttribute,
+                        const nsAString& aValue);
+  virtual nsresult SetAttributeOrEquivalent(Element* aElement,
+                                            nsIAtom* aAttribute,
+                                            const nsAString& aValue,
+                                            bool aSuppressTransaction) = 0;
 
   /**
    * Method to replace certain CreateElementNS() calls.
@@ -327,16 +340,14 @@ protected:
   /**
    * Create a transaction for adding a style sheet.
    */
-  NS_IMETHOD CreateTxnForAddStyleSheet(
-               StyleSheet* aSheet,
-               AddStyleSheetTransaction** aTransaction);
+  already_AddRefed<mozilla::AddStyleSheetTransaction>
+    CreateTxnForAddStyleSheet(StyleSheet* aSheet);
 
   /**
    * Create a transaction for removing a style sheet.
    */
-  NS_IMETHOD CreateTxnForRemoveStyleSheet(
-               StyleSheet* aSheet,
-               RemoveStyleSheetTransaction** aTransaction);
+  already_AddRefed<mozilla::RemoveStyleSheetTransaction>
+    CreateTxnForRemoveStyleSheet(StyleSheet* aSheet);
 
   nsresult DeleteText(nsGenericDOMDataNode& aElement,
                       uint32_t aOffset, uint32_t aLength);
@@ -939,6 +950,14 @@ public:
    * nsCaret.  Therefore, this is stateless.
    */
   void HideCaret(bool aHide);
+
+  void FlushFrames()
+  {
+    nsCOMPtr<nsIDocument> doc = GetDocument();
+    if (doc) {
+      doc->FlushPendingNotifications(FlushType::Frames);
+    }
+  }
 
 protected:
   enum Tristate

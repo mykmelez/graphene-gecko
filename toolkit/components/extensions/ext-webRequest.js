@@ -20,7 +20,7 @@ var {
 // when invoking listeners.
 function WebRequestEventManager(context, eventName) {
   let name = `webRequest.${eventName}`;
-  let register = (callback, filter, info) => {
+  let register = (fire, filter, info) => {
     let listener = data => {
       // Prevent listening in on requests originating from system principal to
       // prevent tinkering with OCSP, app and addon updates, etc.
@@ -44,7 +44,7 @@ function WebRequestEventManager(context, eventName) {
         tabId: browserData.tabId,
         type: data.type,
         timeStamp: Date.now(),
-        frameId: ExtensionManagement.getFrameId(data.windowId),
+        frameId: data.type == "main_frame" ? 0 : ExtensionManagement.getFrameId(data.windowId),
         parentFrameId: ExtensionManagement.getParentFrameId(data.parentWindowId, data.windowId),
       };
 
@@ -58,14 +58,14 @@ function WebRequestEventManager(context, eventName) {
       }
 
       let optional = ["requestHeaders", "responseHeaders", "statusCode", "statusLine", "error", "redirectUrl",
-                      "requestBody"];
+                      "requestBody", "scheme", "realm", "isProxy", "challenger"];
       for (let opt of optional) {
         if (opt in data) {
           data2[opt] = data[opt];
         }
       }
 
-      return context.runSafe(callback, data2);
+      return fire.sync(data2);
     };
 
     let filter2 = {};
@@ -110,6 +110,7 @@ extensions.registerSchemaAPI("webRequest", "addon_parent", context => {
       onBeforeSendHeaders: new WebRequestEventManager(context, "onBeforeSendHeaders").api(),
       onSendHeaders: new WebRequestEventManager(context, "onSendHeaders").api(),
       onHeadersReceived: new WebRequestEventManager(context, "onHeadersReceived").api(),
+      onAuthRequired: new WebRequestEventManager(context, "onAuthRequired").api(),
       onBeforeRedirect: new WebRequestEventManager(context, "onBeforeRedirect").api(),
       onResponseStarted: new WebRequestEventManager(context, "onResponseStarted").api(),
       onErrorOccurred: new WebRequestEventManager(context, "onErrorOccurred").api(),

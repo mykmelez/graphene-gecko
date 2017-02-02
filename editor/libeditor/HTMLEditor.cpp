@@ -17,7 +17,6 @@
 #include "HTMLEditRules.h"
 #include "HTMLEditUtils.h"
 #include "HTMLURIRefObject.h"
-#include "SetDocumentTitleTransaction.h"
 #include "StyleSheetTransactions.h"
 #include "TextEditUtils.h"
 #include "TypeInState.h"
@@ -811,22 +810,6 @@ HTMLEditor::IsBlockNode(nsINode* aNode)
   return aNode && NodeIsBlockStatic(aNode);
 }
 
-// Non-static version for the nsIEditor interface and JavaScript
-NS_IMETHODIMP
-HTMLEditor::SetDocumentTitle(const nsAString& aTitle)
-{
-  RefPtr<SetDocumentTitleTransaction> transaction =
-    new SetDocumentTitleTransaction();
-  NS_ENSURE_TRUE(transaction, NS_ERROR_OUT_OF_MEMORY);
-
-  nsresult rv = transaction->Init(this, &aTitle);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  //Don't let Rules System change the selection
-  AutoTransactionsConserveSelection dontChangeSelection(this);
-  return EditorBase::DoTransaction(transaction);
-}
-
 /**
  * GetBlockNodeParent returns enclosing block level ancestor, if any.
  */
@@ -1145,6 +1128,38 @@ HTMLEditor::CreateBR(nsIDOMNode* aNode,
   nsCOMPtr<nsIDOMNode> parent = aNode;
   int32_t offset = aOffset;
   return CreateBRImpl(address_of(parent), &offset, outBRNode, aSelect);
+}
+
+nsresult
+HTMLEditor::InsertBR(nsCOMPtr<nsIDOMNode>* outBRNode)
+{
+  NS_ENSURE_TRUE(outBRNode, NS_ERROR_NULL_POINTER);
+  *outBRNode = nullptr;
+
+  // calling it text insertion to trigger moz br treatment by rules
+  AutoRules beginRulesSniffing(this, EditAction::insertText, nsIEditor::eNext);
+
+  RefPtr<Selection> selection = GetSelection();
+  NS_ENSURE_STATE(selection);
+
+  if (!selection->Collapsed()) {
+    nsresult rv = DeleteSelection(nsIEditor::eNone, nsIEditor::eStrip);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  nsCOMPtr<nsIDOMNode> selNode;
+  int32_t selOffset;
+  nsresult rv =
+    GetStartNodeAndOffset(selection, getter_AddRefs(selNode), &selOffset);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = CreateBR(selNode, selOffset, outBRNode);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // position selection after br
+  selNode = GetNodeLocation(*outBRNode, &selOffset);
+  selection->SetInterlinePosition(true);
+  return selection->Collapse(selNode, selOffset+1);
 }
 
 void
@@ -1536,7 +1551,6 @@ HTMLEditor::InsertElementAtSelection(nsIDOMElement* aElement,
   // hand off to the rules system, see if it has anything to say about this
   bool cancel, handled;
   TextRulesInfo ruleInfo(EditAction::insertElement);
-  ruleInfo.insertElement = aElement;
   nsresult rv = rules->WillDoAction(selection, &ruleInfo, &cancel, &handled);
   if (cancel || NS_FAILED(rv)) {
     return rv;
@@ -1590,12 +1604,10 @@ HTMLEditor::InsertElementAtSelection(nsIDOMElement* aElement,
         rv = SetCaretAfterElement(aElement);
         NS_ENSURE_SUCCESS(rv, rv);
       }
-      // check for inserting a whole table at the end of a block. If so insert a br after it.
+      // check for inserting a whole table at the end of a block. If so insert
+      // a br after it.
       if (HTMLEditUtils::IsTable(node)) {
-        bool isLast;
-        rv = IsLastEditableChild(node, &isLast);
-        NS_ENSURE_SUCCESS(rv, rv);
-        if (isLast) {
+        if (IsLastEditableChild(element)) {
           nsCOMPtr<nsIDOMNode> brNode;
           rv = CreateBR(parentSelectedNode, offsetForInsert + 1,
                         address_of(brNode));
@@ -2596,7 +2608,7 @@ HTMLEditor::CreateElementWithDefaults(const nsAString& aTagName)
 
   // New call to use instead to get proper HTML element, bug 39919
   nsCOMPtr<nsIAtom> realTagAtom = NS_Atomize(realTagName);
-  nsCOMPtr<Element> newElement = CreateHTMLContent(realTagAtom);
+  RefPtr<Element> newElement = CreateHTMLContent(realTagAtom);
   if (!newElement) {
     return nullptr;
   }
@@ -2628,8 +2640,7 @@ HTMLEditor::CreateElementWithDefaults(const nsAString& aTagName)
   } else if (tagName.EqualsLiteral("td")) {
     nsresult rv =
       SetAttributeOrEquivalent(
-        static_cast<nsIDOMElement*>(newElement->AsDOMNode()),
-        NS_LITERAL_STRING("valign"), NS_LITERAL_STRING("top"), true);
+        newElement, nsGkAtoms::valign, NS_LITERAL_STRING("top"), true);
     NS_ENSURE_SUCCESS(rv, nullptr);
   }
   // ADD OTHER TAGS HERE
@@ -2862,22 +2873,18 @@ HTMLEditor::RemoveStyleSheet(const nsAString& aURL)
   RefPtr<StyleSheet> sheet = GetStyleSheetForURL(aURL);
   NS_ENSURE_TRUE(sheet, NS_ERROR_UNEXPECTED);
 
-  RefPtr<RemoveStyleSheetTransaction> transaction;
-  nsresult rv =
-    CreateTxnForRemoveStyleSheet(sheet, getter_AddRefs(transaction));
+  RefPtr<RemoveStyleSheetTransaction> transaction =
+    CreateTxnForRemoveStyleSheet(sheet);
   if (!transaction) {
-    rv = NS_ERROR_NULL_POINTER;
-  }
-  if (NS_SUCCEEDED(rv)) {
-    rv = DoTransaction(transaction);
-    if (NS_SUCCEEDED(rv)) {
-      mLastStyleSheetURL.Truncate();        // forget it
-    }
-    // Remove it from our internal list
-    rv = RemoveStyleSheetFromList(aURL);
+    return NS_ERROR_NULL_POINTER;
   }
 
-  return rv;
+  nsresult rv = DoTransaction(transaction);
+  if (NS_SUCCEEDED(rv)) {
+    mLastStyleSheetURL.Truncate();        // forget it
+  }
+  // Remove it from our internal list
+  return RemoveStyleSheetFromList(aURL);
 }
 
 
@@ -2973,7 +2980,7 @@ HTMLEditor::EnableStyleSheet(const nsAString& aURL,
 
   // Ensure the style sheet is owned by our document.
   nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocWeak);
-  sheet->SetOwningDocument(doc);
+  sheet->SetAssociatedDocument(doc, StyleSheet::NotOwnedByDocument);
 
   if (sheet->IsServo()) {
     // XXXheycam ServoStyleSheets don't support being enabled/disabled yet.
@@ -2995,7 +3002,7 @@ HTMLEditor::EnableExistingStyleSheet(const nsAString& aURL)
 
   // Ensure the style sheet is owned by our document.
   nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocWeak);
-  sheet->SetOwningDocument(doc);
+  sheet->SetAssociatedDocument(doc, StyleSheet::NotOwnedByDocument);
 
   if (sheet->IsServo()) {
     // XXXheycam ServoStyleSheets don't support being enabled/disabled yet.
@@ -3464,31 +3471,29 @@ HTMLEditor::StyleSheetLoaded(StyleSheet* aSheet,
                              bool aWasAlternate,
                              nsresult aStatus)
 {
-  nsresult rv = NS_OK;
   AutoEditBatch batchIt(this);
 
   if (!mLastStyleSheetURL.IsEmpty())
     RemoveStyleSheet(mLastStyleSheetURL);
 
-  RefPtr<AddStyleSheetTransaction> transaction;
-  rv = CreateTxnForAddStyleSheet(aSheet, getter_AddRefs(transaction));
+  RefPtr<AddStyleSheetTransaction> transaction =
+    CreateTxnForAddStyleSheet(aSheet);
   if (!transaction) {
-    rv = NS_ERROR_NULL_POINTER;
+    return NS_OK;
   }
+
+  nsresult rv = DoTransaction(transaction);
   if (NS_SUCCEEDED(rv)) {
-    rv = DoTransaction(transaction);
+    // Get the URI, then url spec from the sheet
+    nsAutoCString spec;
+    rv = aSheet->GetSheetURI()->GetSpec(spec);
+
     if (NS_SUCCEEDED(rv)) {
-      // Get the URI, then url spec from the sheet
-      nsAutoCString spec;
-      rv = aSheet->GetSheetURI()->GetSpec(spec);
+      // Save it so we can remove before applying the next one
+      mLastStyleSheetURL.AssignWithConversion(spec.get());
 
-      if (NS_SUCCEEDED(rv)) {
-        // Save it so we can remove before applying the next one
-        mLastStyleSheetURL.AssignWithConversion(spec.get());
-
-        // Also save in our arrays of urls and sheets
-        AddNewStyleSheetToList(mLastStyleSheetURL, aSheet);
-      }
+      // Also save in our arrays of urls and sheets
+      AddNewStyleSheetToList(mLastStyleSheetURL, aSheet);
     }
   }
 
@@ -4171,40 +4176,28 @@ HTMLEditor::GetNextHTMLNode(nsIDOMNode* aNode,
   return NS_OK;
 }
 
-nsresult
-HTMLEditor::IsFirstEditableChild(nsIDOMNode* aNode,
-                                 bool* aOutIsFirst)
+bool
+HTMLEditor::IsFirstEditableChild(nsINode* aNode)
 {
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  NS_ENSURE_TRUE(aOutIsFirst && node, NS_ERROR_NULL_POINTER);
-
-  // init out parms
-  *aOutIsFirst = false;
-
+  MOZ_ASSERT(aNode);
   // find first editable child and compare it to aNode
-  nsCOMPtr<nsINode> parent = node->GetParentNode();
-  NS_ENSURE_TRUE(parent, NS_ERROR_FAILURE);
-
-  *aOutIsFirst = (GetFirstEditableChild(*parent) == node);
-  return NS_OK;
+  nsCOMPtr<nsINode> parent = aNode->GetParentNode();
+  if (NS_WARN_IF(!parent)) {
+    return false;
+  }
+  return (GetFirstEditableChild(*parent) == aNode);
 }
 
-nsresult
-HTMLEditor::IsLastEditableChild(nsIDOMNode* aNode,
-                                bool* aOutIsLast)
+bool
+HTMLEditor::IsLastEditableChild(nsINode* aNode)
 {
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  NS_ENSURE_TRUE(aOutIsLast && node, NS_ERROR_NULL_POINTER);
-
-  // init out parms
-  *aOutIsLast = false;
-
+  MOZ_ASSERT(aNode);
   // find last editable child and compare it to aNode
-  nsCOMPtr<nsINode> parent = node->GetParentNode();
-  NS_ENSURE_TRUE(parent, NS_ERROR_FAILURE);
-
-  *aOutIsLast = (GetLastEditableChild(*parent) == node);
-  return NS_OK;
+  nsCOMPtr<nsINode> parent = aNode->GetParentNode();
+  if (NS_WARN_IF(!parent)) {
+    return false;
+  }
+  return (GetLastEditableChild(*parent) == aNode);
 }
 
 nsIContent*
@@ -4447,93 +4440,83 @@ HTMLEditor::IsEmptyNodeImpl(nsINode* aNode,
 // add to aElement the CSS inline styles corresponding to the HTML attribute
 // aAttribute with its value aValue
 nsresult
-HTMLEditor::SetAttributeOrEquivalent(nsIDOMElement* aElement,
-                                     const nsAString& aAttribute,
+HTMLEditor::SetAttributeOrEquivalent(Element* aElement,
+                                     nsIAtom* aAttribute,
                                      const nsAString& aValue,
                                      bool aSuppressTransaction)
 {
+  MOZ_ASSERT(aElement);
+  MOZ_ASSERT(aAttribute);
+
   nsAutoScriptBlocker scriptBlocker;
 
-  if (IsCSSEnabled() && mCSSEditUtils) {
-    nsCOMPtr<dom::Element> element = do_QueryInterface(aElement);
-    MOZ_ASSERT(element);
-
-    nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
-    MOZ_ASSERT(attribute);
-
-    int32_t count =
-      mCSSEditUtils->SetCSSEquivalentToHTMLStyle(element, nullptr,
-                                                 attribute, &aValue,
-                                                 aSuppressTransaction);
-    if (count) {
-      // we found an equivalence ; let's remove the HTML attribute itself if it is set
-      nsAutoString existingValue;
-      bool wasSet = false;
-      nsresult rv =
-        GetAttributeValue(aElement, aAttribute, existingValue, &wasSet);
-      NS_ENSURE_SUCCESS(rv, rv);
-      if (!wasSet) {
-        return NS_OK;
-      }
-      return aSuppressTransaction ?
-               element->UnsetAttr(kNameSpaceID_None, attribute, true) :
-               RemoveAttribute(aElement, aAttribute);
-    }
-
-    // count is an integer that represents the number of CSS declarations applied to the
-    // element. If it is zero, we found no equivalence in this implementation for the
-    // attribute
-    if (attribute == nsGkAtoms::style) {
-      // if it is the style attribute, just add the new value to the existing style
-      // attribute's value
-      nsAutoString existingValue;
-      bool wasSet = false;
-      nsresult rv = GetAttributeValue(aElement, NS_LITERAL_STRING("style"),
-                                      existingValue, &wasSet);
-      NS_ENSURE_SUCCESS(rv, rv);
-      existingValue.Append(' ');
-      existingValue.Append(aValue);
-      return aSuppressTransaction ?
-        element->SetAttr(kNameSpaceID_None, attribute, existingValue, true) :
-        SetAttribute(aElement, aAttribute, existingValue);
-    }
-
-    // we have no CSS equivalence for this attribute and it is not the style
-    // attribute; let's set it the good'n'old HTML way
+  if (!IsCSSEnabled() || !mCSSEditUtils) {
+    // we are not in an HTML+CSS editor; let's set the attribute the HTML way
     return aSuppressTransaction ?
-             element->SetAttr(kNameSpaceID_None, attribute, aValue, true) :
+             aElement->SetAttr(kNameSpaceID_None, aAttribute, aValue, true) :
              SetAttribute(aElement, aAttribute, aValue);
   }
 
-  // we are not in an HTML+CSS editor; let's set the attribute the HTML way
-  return aSuppressTransaction ? aElement->SetAttribute(aAttribute, aValue) :
-                                SetAttribute(aElement, aAttribute, aValue);
+  int32_t count =
+    mCSSEditUtils->SetCSSEquivalentToHTMLStyle(aElement, nullptr,
+                                               aAttribute, &aValue,
+                                               aSuppressTransaction);
+  if (count) {
+    // we found an equivalence ; let's remove the HTML attribute itself if it
+    // is set
+    nsAutoString existingValue;
+    if (!aElement->GetAttr(kNameSpaceID_None, aAttribute, existingValue)) {
+      return NS_OK;
+    }
+
+    return aSuppressTransaction ?
+             aElement->UnsetAttr(kNameSpaceID_None, aAttribute, true) :
+             RemoveAttribute(aElement, aAttribute);
+  }
+
+  // count is an integer that represents the number of CSS declarations applied
+  // to the element. If it is zero, we found no equivalence in this
+  // implementation for the attribute
+  if (aAttribute == nsGkAtoms::style) {
+    // if it is the style attribute, just add the new value to the existing
+    // style attribute's value
+    nsAutoString existingValue;
+    aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::style, existingValue);
+    existingValue.Append(' ');
+    existingValue.Append(aValue);
+    return aSuppressTransaction ?
+       aElement->SetAttr(kNameSpaceID_None, aAttribute, existingValue, true) :
+      SetAttribute(aElement, aAttribute, existingValue);
+  }
+
+  // we have no CSS equivalence for this attribute and it is not the style
+  // attribute; let's set it the good'n'old HTML way
+  return aSuppressTransaction ?
+           aElement->SetAttr(kNameSpaceID_None, aAttribute, aValue, true) :
+           SetAttribute(aElement, aAttribute, aValue);
 }
 
 nsresult
-HTMLEditor::RemoveAttributeOrEquivalent(nsIDOMElement* aElement,
-                                        const nsAString& aAttribute,
+HTMLEditor::RemoveAttributeOrEquivalent(Element* aElement,
+                                        nsIAtom* aAttribute,
                                         bool aSuppressTransaction)
 {
-  nsCOMPtr<dom::Element> element = do_QueryInterface(aElement);
-  NS_ENSURE_TRUE(element, NS_OK);
-
-  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
-  MOZ_ASSERT(attribute);
+  MOZ_ASSERT(aElement);
+  MOZ_ASSERT(aAttribute);
 
   if (IsCSSEnabled() && mCSSEditUtils) {
     nsresult rv =
       mCSSEditUtils->RemoveCSSEquivalentToHTMLStyle(
-        element, nullptr, attribute, nullptr, aSuppressTransaction);
+        aElement, nullptr, aAttribute, nullptr, aSuppressTransaction);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  if (!element->HasAttr(kNameSpaceID_None, attribute)) {
+  if (!aElement->HasAttr(kNameSpaceID_None, aAttribute)) {
     return NS_OK;
   }
 
   return aSuppressTransaction ?
-    element->UnsetAttr(kNameSpaceID_None, attribute, /* aNotify = */ true) :
+    aElement->UnsetAttr(kNameSpaceID_None, aAttribute, /* aNotify = */ true) :
     RemoveAttribute(aElement, aAttribute);
 }
 

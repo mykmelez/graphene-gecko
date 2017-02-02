@@ -12,7 +12,7 @@ function clickClearReports(browser) {
     return Promise.resolve();
   }
 
-  let style = doc.defaultView.getComputedStyle(button, "");
+  let style = doc.defaultView.getComputedStyle(button);
 
   Assert.notEqual(style.display, "none", "Clear reports button visible");
 
@@ -43,7 +43,7 @@ var promptShown = false;
 
 var oldPrompt = Services.prompt;
 Services.prompt = {
-  confirm: function() {
+  confirm() {
     promptShown = true;
     return true;
   },

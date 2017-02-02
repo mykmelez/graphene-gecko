@@ -124,7 +124,7 @@ UNITTEST_ALIASES = {
 # substrings.  This is intended only for backward-compatibility.  New test
 # platforms should have their `test_platform` spelled out fully in try syntax.
 UNITTEST_PLATFORM_PRETTY_NAMES = {
-    'Ubuntu': ['linux', 'linux64', 'linux64-asan'],
+    'Ubuntu': ['linux32', 'linux64', 'linux64-asan'],
     'x64': ['linux64', 'linux64-asan'],
     'Android 4.3': ['android-4.3-arm7-api-15'],
     # other commonly-used substrings for platforms not yet supported with
@@ -227,7 +227,7 @@ class TryOptionSyntax(object):
                             dest='platforms', const='all', default='all')
         parser.add_argument('-u', '--unittests', nargs='?',
                             dest='unittests', const='all', default='all')
-        parser.add_argument('-t', '--talos', nargs='?', dest='talos', const='all', default='all')
+        parser.add_argument('-t', '--talos', nargs='?', dest='talos', default='none')
         parser.add_argument('-i', '--interactive',
                             dest='interactive', action='store_true', default=False)
         parser.add_argument('-e', '--all-emails',
@@ -523,7 +523,7 @@ class TryOptionSyntax(object):
                 return False
             return True
 
-        if attr('kind') in ('desktop-test', 'android-test'):
+        if attr('kind') == 'test':
             return match_test(self.unittests, 'unittest_try_name') \
                  or match_test(self.talos, 'talos_try_name')
         elif attr('kind') in JOB_KINDS:
@@ -559,5 +559,5 @@ class TryOptionSyntax(object):
             "jobs: " + none_for_all(self.jobs),
             "trigger_tests: " + str(self.trigger_tests),
             "interactive: " + str(self.interactive),
-            "notifications: " + self.notifications,
+            "notifications: " + str(self.notifications),
         ])

@@ -77,6 +77,9 @@ namespace layers {
 class ContainerLayer;
 class LayerManager;
 } // namespace layers
+namespace dom {
+class Element;
+} // namespace dom
 } // namespace mozilla
 
 // supported values for cached bool types
@@ -144,7 +147,6 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIOBSERVER
-  NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
   NS_DECL_CYCLE_COLLECTION_CLASS(nsPresContext)
   MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsPresContext)
 
@@ -229,7 +231,7 @@ public:
   }
 
 #ifdef MOZILLA_INTERNAL_API
-  mozilla::StyleSetHandle StyleSet() { return GetPresShell()->StyleSet(); }
+  mozilla::StyleSetHandle StyleSet() const { return GetPresShell()->StyleSet(); }
 
   nsFrameManager* FrameManager()
     { return PresShell()->FrameManager(); }
@@ -248,7 +250,7 @@ public:
     return mRestyleManager;
   }
 
-  mozilla::CounterStyleManager* CounterStyleManager() {
+  mozilla::CounterStyleManager* CounterStyleManager() const {
     return mCounterStyleManager;
   }
 #endif
@@ -544,12 +546,12 @@ public:
   float GetPrintPreviewScale() { return mPPScale; }
   void SetPrintPreviewScale(float aScale) { mPPScale = aScale; }
 
-  nsDeviceContext* DeviceContext() { return mDeviceContext; }
+  nsDeviceContext* DeviceContext() const { return mDeviceContext; }
   mozilla::EventStateManager* EventStateManager() { return mEventManager; }
   nsIAtom* GetLanguageFromCharset() const { return mLanguage; }
   already_AddRefed<nsIAtom> GetContentLanguage() const;
 
-  float TextZoom() { return mTextZoom; }
+  float TextZoom() const { return mTextZoom; }
   void SetTextZoom(float aZoom) {
     MOZ_ASSERT(aZoom > 0.0f, "invalid zoom factor");
     if (aZoom == mTextZoom)
@@ -722,6 +724,12 @@ public:
   }
 
   /**
+   * Check whether the given element would propagate its scrollbar styles to the
+   * viewport in non-paginated mode.  Must only be called if IsPaginated().
+   */
+  bool ElementWouldPropagateScrollbarStyles(mozilla::dom::Element* aElement);
+
+  /**
    * Set and get methods for controlling the background drawing
   */
   bool GetBackgroundImageDraw() const { return mDrawImageBackground; }
@@ -783,6 +791,20 @@ public:
    *  @lina 05/02/2000
    */
   bool IsVisualMode() const { return mIsVisual; }
+
+  enum class InteractionType : uint32_t {
+    eClickInteraction,
+    eKeyInteraction,
+    eMouseMoveInteraction,
+    eScrollInteraction
+  };
+
+  void RecordInteractionTime(InteractionType aType);
+
+  void DisableInteractionTimeRecording()
+  {
+    mInteractionTimeEnabled = false;
+  }
 
 //Mohamed
 
@@ -930,7 +952,7 @@ public:
 
   bool             SuppressingResizeReflow() const { return mSuppressResizeReflow; }
 
-  gfxUserFontSet* GetUserFontSet();
+  gfxUserFontSet* GetUserFontSet(bool aFlushUserFontSet = true);
 
   // Should be called whenever the set of fonts available in the user
   // font set changes (e.g., because a new font loads, or because the
@@ -955,7 +977,8 @@ public:
   // aFlags are nsIPresShell::PAINT_ flags
   void NotifyDidPaintForSubtree(uint32_t aFlags, uint64_t aTransactionId = 0,
                                 const mozilla::TimeStamp& aTimeStamp = mozilla::TimeStamp());
-  void FireDOMPaintEvent(nsInvalidateRequestList* aList, uint64_t aTransactionId);
+  void FireDOMPaintEvent(nsInvalidateRequestList* aList, uint64_t aTransactionId,
+                         mozilla::TimeStamp aTimeStamp = mozilla::TimeStamp());
 
   // Callback for catching invalidations in ContainerLayers
   // Passed to LayerProperties::ComputeDifference
@@ -1336,6 +1359,15 @@ protected:
 
   mozilla::TimeStamp    mReflowStartTime;
 
+  // Time of various first interaction types, used to report time from
+  // first paint of the top level content pres shell to first interaction.
+  mozilla::TimeStamp    mFirstPaintTime;
+  mozilla::TimeStamp    mFirstClickTime;
+  mozilla::TimeStamp    mFirstKeyTime;
+  mozilla::TimeStamp    mFirstMouseMoveTime;
+  mozilla::TimeStamp    mFirstScrollTime;
+  bool                  mInteractionTimeEnabled;
+
   // last time we did a full style flush
   mozilla::TimeStamp    mLastStyleUpdateForAllAnimations;
 
@@ -1492,6 +1524,8 @@ public:
    * This needs to be called even when aFrame is a popup, since although
    * windowed plugins aren't allowed in popups, windowless plugins are
    * and ComputePluginGeometryUpdates needs to be called for them.
+   * aBuilder and aList can be null. This indicates that all plugins are
+   * hidden because we're in a background tab.
    */
   void ComputePluginGeometryUpdates(nsIFrame* aFrame,
                                     nsDisplayListBuilder* aBuilder,
@@ -1521,9 +1555,6 @@ public:
 
   /**
    * Get the current DOM generation counter.
-   *
-   * See nsFrameManagerBase::GetGlobalGenerationNumber() for a
-   * global generation number.
    */
   uint32_t GetDOMGeneration() { return mDOMGeneration; }
 

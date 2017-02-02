@@ -49,7 +49,6 @@ async function setup() {
 
 async function cleanup(server) {
   Svc.Obs.notify("weave:engine:stop-tracking");
-  Services.prefs.setBoolPref("services.sync-testing.startOverKeepIdentity", true);
   let promiseStartOver = promiseOneObserver("weave:service:start-over:finish");
   Service.startOver();
   await promiseStartOver;
@@ -107,7 +106,7 @@ async function validate(collection, expectedFailures = []) {
   let summary = problems.getSummary().filter(prob => prob.count != 0);
 
   // split into 2 arrays - expected and unexpected.
-  let isInExpectedFailures = elt =>  {
+  let isInExpectedFailures = elt => {
     for (let i = 0; i < expectedFailures.length; i++) {
       if (elt.name == expectedFailures[i].name && elt.count == expectedFailures[i].count) {
         return true;
@@ -141,7 +140,7 @@ add_task(async function test_dupe_bookmark() {
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
 
     engine.sync();
 
@@ -192,7 +191,7 @@ add_task(async function test_dupe_reparented_bookmark() {
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
     // Another parent folder *with the same name*
     let {id: folder2_id, guid: folder2_guid } = createFolder(bms.toolbarFolder, "Folder 1");
 
@@ -258,7 +257,7 @@ add_task(async function test_dupe_reparented_locally_changed_bookmark() {
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
     // Another parent folder *with the same name*
     let {id: folder2_id, guid: folder2_guid } = createFolder(bms.toolbarFolder, "Folder 1");
 
@@ -335,9 +334,9 @@ add_task(async function test_dupe_reparented_to_earlier_appearing_parent_bookmar
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
     // One more folder we'll use later.
-    let {id: folder2_id, guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
+    let {guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
 
     do_print(`folder1=${folder1_guid}, bmk1=${bmk1_guid} folder2=${folder2_guid}`);
 
@@ -412,9 +411,9 @@ add_task(async function test_dupe_reparented_to_later_appearing_parent_bookmark(
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
     // One more folder we'll use later.
-    let {id: folder2_id, guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
+    let {guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
 
     do_print(`folder1=${folder1_guid}, bmk1=${bmk1_guid} folder2=${folder2_guid}`);
 
@@ -489,9 +488,9 @@ add_task(async function test_dupe_reparented_to_future_arriving_parent_bookmark(
   try {
     // The parent folder and one bookmark in it.
     let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
-    let {id: bmk1_id, guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
+    let {guid: bmk1_guid} = createBookmark(folder1_id, "http://getfirefox.com/", "Get Firefox!");
     // One more folder we'll use later.
-    let {id: folder2_id, guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
+    let {guid: folder2_guid} = createFolder(bms.toolbarFolder, "A second folder");
 
     do_print(`folder1=${folder1_guid}, bmk1=${bmk1_guid} folder2=${folder2_guid}`);
 
@@ -608,7 +607,7 @@ add_task(async function test_dupe_empty_folder() {
 
   try {
     // The folder we will end up duping away.
-    let {id: folder1_id, guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
+    let {guid: folder1_guid } = createFolder(bms.toolbarFolder, "Folder 1");
 
     engine.sync();
 

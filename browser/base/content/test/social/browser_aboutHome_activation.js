@@ -10,8 +10,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "AboutHomeUtils",
   "resource:///modules/AboutHome.jsm");
 
 var snippet =
-'     <script>' +
-'       var manifest = {' +
+"     <script>" +
+"       var manifest = {" +
 '         "name": "Demo Social Service",' +
 '         "origin": "https://example.com",' +
 '         "iconURL": "chrome://branding/content/icon16.png",' +
@@ -19,21 +19,21 @@ var snippet =
 '         "icon64URL": "chrome://branding/content/icon64.png",' +
 '         "shareURL": "https://example.com/browser/browser/base/content/test/social/social_share.html",' +
 '         "postActivationURL": "https://example.com/browser/browser/base/content/test/social/social_postActivation.html",' +
-'       };' +
-'       function activateProvider(node) {' +
+"       };" +
+"       function activateProvider(node) {" +
 '         node.setAttribute("data-service", JSON.stringify(manifest));' +
 '         var event = new CustomEvent("ActivateSocialFeature");' +
-'         node.dispatchEvent(event);' +
-'       }' +
-'     </script>' +
+"         node.dispatchEvent(event);" +
+"       }" +
+"     </script>" +
 '     <div id="activationSnippet" onclick="activateProvider(this)">' +
 '     <img src="chrome://branding/content/icon32.png"></img>' +
-'     </div>';
+"     </div>";
 
 // enable one-click activation
 var snippet2 =
-'     <script>' +
-'       var manifest = {' +
+"     <script>" +
+"       var manifest = {" +
 '         "name": "Demo Social Service",' +
 '         "origin": "https://example.com",' +
 '         "iconURL": "chrome://branding/content/icon16.png",' +
@@ -42,22 +42,22 @@ var snippet2 =
 '         "shareURL": "https://example.com/browser/browser/base/content/test/social/social_share.html",' +
 '         "postActivationURL": "https://example.com/browser/browser/base/content/test/social/social_postActivation.html",' +
 '         "oneclick": true' +
-'       };' +
-'       function activateProvider(node) {' +
+"       };" +
+"       function activateProvider(node) {" +
 '         node.setAttribute("data-service", JSON.stringify(manifest));' +
 '         var event = new CustomEvent("ActivateSocialFeature");' +
-'         node.dispatchEvent(event);' +
-'       }' +
-'     </script>' +
+"         node.dispatchEvent(event);" +
+"       }" +
+"     </script>" +
 '     <div id="activationSnippet" onclick="activateProvider(this)">' +
 '     <img src="chrome://branding/content/icon32.png"></img>' +
-'     </div>';
+"     </div>";
 
 var gTests = [
 
 {
   desc: "Test activation with enable panel",
-  snippet: snippet,
+  snippet,
   panel: true
 },
 
@@ -68,8 +68,7 @@ var gTests = [
 }
 ];
 
-function test()
-{
+function test() {
   waitForExplicitFinish();
   requestLongerTimeout(2);
   ignoreAllUncaughtExceptions();
@@ -130,8 +129,7 @@ function test()
  *        The load event type to wait for.  Defaults to "load".
  * @return {Promise} resolved when the event is handled.
  */
-function promiseTabLoadEvent(aTab, aURL, aEventType = "load")
-{
+function promiseTabLoadEvent(aTab, aURL, aEventType = "load") {
   return new Promise(resolve => {
     info("Wait tab event: " + aEventType);
     aTab.linkedBrowser.addEventListener(aEventType, function load(event) {
@@ -158,8 +156,7 @@ function promiseTabLoadEvent(aTab, aURL, aEventType = "load")
  *        The setup function to be run.
  * @return {Promise} resolved when the snippets are ready.  Gets the snippets map.
  */
-function promiseSetupSnippetsMap(aTab, aSnippet)
-{
+function promiseSetupSnippetsMap(aTab, aSnippet) {
   info("Waiting for snippets map");
 
   return ContentTask.spawn(aTab.linkedBrowser,

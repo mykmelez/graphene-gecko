@@ -6,14 +6,14 @@
 
 "use strict";
 
-const {toolboxConfig} = require("devtools-local-toolbox/index");
+const {toolboxConfig} = require("devtools-launchpad/index");
 
 const path = require("path");
 const webpack = require("webpack");
 
 module.exports = envConfig => {
   let webpackConfig = {
-    bail: true,
+    bail: false,
     entry: [
       path.join(__dirname, "local-toolbox.js")
     ],
@@ -42,7 +42,7 @@ module.exports = envConfig => {
         }, {
           // Replace all references to this.browserRequire() by require() in
           // client/inspector/*.js files
-          test: /client\/inspector\/.*\.js$/,
+          test: /client(\/|\\)inspector(\/|\\).*\.js$/,
           loaders: [path.join(__dirname, "./webpack/rewrite-browser-require")],
         }
       ]
@@ -82,6 +82,8 @@ module.exports = envConfig => {
         "Services": path.join(__dirname, "../shared/shim/Services.js"),
         "toolkit/locales":
           path.join(__dirname, "../../../toolkit/locales/en-US/chrome/global"),
+        "react": "devtools/client/shared/vendor/react",
+        "react-dom": "devtools/client/shared/vendor/react-dom",
       },
     },
 
@@ -95,7 +97,7 @@ module.exports = envConfig => {
                       lazyGetter: () => {}
                     }`,
         "dump": "console.log",
-      }),
+      })
     ]
   };
 
@@ -130,7 +132,7 @@ module.exports = envConfig => {
   ];
 
   // Exclude all files from devtools/ or addon-sdk/ or modules/ .
-  webpackConfig.babelExcludes = /(devtools\/|addon-sdk\/|modules\/)/;
+  webpackConfig.babelExcludes = /(devtools(\/|\\)|addon-sdk(\/|\\)|modules(\/|\\))/;
 
   return toolboxConfig(webpackConfig, envConfig);
 };

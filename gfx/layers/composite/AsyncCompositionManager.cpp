@@ -589,9 +589,8 @@ SampleValue(float aPortion, const Animation& aAnimation,
             uint64_t aCurrentIteration,
             const StyleAnimationValue& aUnderlyingValue)
 {
-  NS_ASSERTION(aStart.mValue.GetUnit() == aEnd.mValue.GetUnit() ||
-               aStart.mValue.GetUnit() == StyleAnimationValue::eUnit_None ||
-               aEnd.mValue.GetUnit() == StyleAnimationValue::eUnit_None,
+  NS_ASSERTION(aStart.mValue.IsNull() || aEnd.mValue.IsNull() ||
+               aStart.mValue.GetUnit() == aEnd.mValue.GetUnit(),
                "Must have same unit");
 
   StyleAnimationValue startValue =
@@ -614,12 +613,16 @@ SampleValue(float aPortion, const Animation& aAnimation,
     // below StyleAnimationValues.
     startValue =
       StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue,
+                                      aLastValue.IsNull()
+                                        ? aUnderlyingValue
+                                        : aLastValue,
                                       Move(startValue),
                                       aCurrentIteration);
     endValue =
       StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue,
+                                      aLastValue.IsNull()
+                                        ? aUnderlyingValue
+                                        : aLastValue,
                                       Move(endValue),
                                       aCurrentIteration);
   }
@@ -690,6 +693,119 @@ ApplyAnimatedValue(Layer* aLayer,
 }
 
 static bool
+SampleAnimationForEachNode(TimeStamp aPoint,
+                           AnimationArray& aAnimations,
+                           InfallibleTArray<AnimData>& aAnimationData,
+                           StyleAnimationValue& aAnimationValue,
+                           bool& aHasInEffectAnimations)
+{
+  bool activeAnimations = false;
+
+  if (aAnimations.IsEmpty()) {
+    return activeAnimations;
+  }
+
+  // Process in order, since later aAnimations override earlier ones.
+  for (size_t i = 0, iEnd = aAnimations.Length(); i < iEnd; ++i) {
+    Animation& animation = aAnimations[i];
+    AnimData& animData = aAnimationData[i];
+
+    activeAnimations = true;
+
+    MOZ_ASSERT(!animation.startTime().IsNull() ||
+               animation.isNotPlaying(),
+               "Failed to resolve start time of play-pending animations");
+    // If the animation is not currently playing , e.g. paused or
+    // finished, then use the hold time to stay at the same position.
+    TimeDuration elapsedDuration = animation.isNotPlaying()
+      ? animation.holdTime()
+      : (aPoint - animation.startTime())
+          .MultDouble(animation.playbackRate());
+    TimingParams timing;
+    timing.mDuration.emplace(animation.duration());
+    timing.mDelay = animation.delay();
+    timing.mEndDelay = animation.endDelay();
+    timing.mIterations = animation.iterations();
+    timing.mIterationStart = animation.iterationStart();
+    timing.mDirection =
+      static_cast<dom::PlaybackDirection>(animation.direction());
+    timing.mFill = static_cast<dom::FillMode>(animation.fillMode());
+    timing.mFunction =
+      AnimationUtils::TimingFunctionToComputedTimingFunction(
+        animation.easingFunction());
+
+    ComputedTiming computedTiming =
+      dom::AnimationEffectReadOnly::GetComputedTimingAt(
+        Nullable<TimeDuration>(elapsedDuration), timing,
+        animation.playbackRate());
+
+    if (computedTiming.mProgress.IsNull()) {
+      continue;
+    }
+
+    uint32_t segmentIndex = 0;
+    size_t segmentSize = animation.segments().Length();
+    AnimationSegment* segment = animation.segments().Elements();
+    while (segment->endPortion() < computedTiming.mProgress.Value() &&
+           segmentIndex < segmentSize - 1) {
+      ++segment;
+      ++segmentIndex;
+    }
+
+    double positionInSegment =
+      (computedTiming.mProgress.Value() - segment->startPortion()) /
+      (segment->endPortion() - segment->startPortion());
+
+    double portion =
+      ComputedTimingFunction::GetPortion(animData.mFunctions[segmentIndex],
+                                         positionInSegment,
+                                     computedTiming.mBeforeFlag);
+
+    StyleAnimationValueCompositePair from {
+      animData.mStartValues[segmentIndex],
+      static_cast<dom::CompositeOperation>(segment->startComposite())
+    };
+    StyleAnimationValueCompositePair to {
+      animData.mEndValues[segmentIndex],
+      static_cast<dom::CompositeOperation>(segment->endComposite())
+    };
+    // interpolate the property
+    aAnimationValue = SampleValue(portion,
+                                 animation,
+                                 from, to,
+                                 animData.mEndValues.LastElement(),
+                                 computedTiming.mCurrentIteration,
+                                 aAnimationValue);
+    aHasInEffectAnimations = true;
+  }
+
+#ifdef DEBUG
+  // Sanity check that all of animation data are the same.
+  const AnimationData& lastData = aAnimations.LastElement().data();
+  for (const Animation& animation : aAnimations) {
+    const AnimationData& data = animation.data();
+    MOZ_ASSERT(data.type() == lastData.type(),
+               "The type of AnimationData should be the same");
+    if (data.type() == AnimationData::Tnull_t) {
+      continue;
+    }
+
+    MOZ_ASSERT(data.type() == AnimationData::TTransformData);
+    const TransformData& transformData = data.get_TransformData();
+    const TransformData& lastTransformData = lastData.get_TransformData();
+    MOZ_ASSERT(transformData.origin() == lastTransformData.origin() &&
+               transformData.transformOrigin() ==
+                 lastTransformData.transformOrigin() &&
+               transformData.bounds() == lastTransformData.bounds() &&
+               transformData.appUnitsPerDevPixel() ==
+                 lastTransformData.appUnitsPerDevPixel(),
+               "All of members of TransformData should be the same");
+  }
+#endif
+  return activeAnimations;
+}
+
+static bool
 SampleAnimations(Layer* aLayer, TimeStamp aPoint)
 {
   bool activeAnimations = false;
@@ -698,116 +814,15 @@ SampleAnimations(Layer* aLayer, TimeStamp aPoint)
       aLayer,
       [&activeAnimations, &aPoint] (Layer* layer)
       {
-        AnimationArray& animations = layer->GetAnimations();
-        if (animations.IsEmpty()) {
-          return;
-        }
-
-        InfallibleTArray<AnimData>& animationData = layer->GetAnimationData();
-
-        StyleAnimationValue animationValue = layer->GetBaseAnimationStyle();
         bool hasInEffectAnimations = false;
-
-        // Process in order, since later animations override earlier ones.
-        for (size_t i = 0, iEnd = animations.Length(); i < iEnd; ++i) {
-          Animation& animation = animations[i];
-          AnimData& animData = animationData[i];
-
-          activeAnimations = true;
-
-          MOZ_ASSERT(!animation.startTime().IsNull() ||
-                     animation.isNotPlaying(),
-                     "Failed to resolve start time of play-pending animations");
-          // If the animation is not currently playing , e.g. paused or
-          // finished, then use the hold time to stay at the same position.
-          TimeDuration elapsedDuration = animation.isNotPlaying()
-            ? animation.holdTime()
-            : (aPoint - animation.startTime())
-                .MultDouble(animation.playbackRate());
-          TimingParams timing;
-          timing.mDuration.emplace(animation.duration());
-          timing.mDelay = animation.delay();
-          timing.mEndDelay = animation.endDelay();
-          timing.mIterations = animation.iterations();
-          timing.mIterationStart = animation.iterationStart();
-          timing.mDirection =
-            static_cast<dom::PlaybackDirection>(animation.direction());
-          timing.mFill = static_cast<dom::FillMode>(animation.fillMode());
-          timing.mFunction =
-            AnimationUtils::TimingFunctionToComputedTimingFunction(
-              animation.easingFunction());
-
-          ComputedTiming computedTiming =
-            dom::AnimationEffectReadOnly::GetComputedTimingAt(
-              Nullable<TimeDuration>(elapsedDuration), timing,
-              animation.playbackRate());
-
-          if (computedTiming.mProgress.IsNull()) {
-            continue;
-          }
-
-          uint32_t segmentIndex = 0;
-          size_t segmentSize = animation.segments().Length();
-          AnimationSegment* segment = animation.segments().Elements();
-          while (segment->endPortion() < computedTiming.mProgress.Value() &&
-                 segmentIndex < segmentSize - 1) {
-            ++segment;
-            ++segmentIndex;
-          }
-
-          double positionInSegment =
-            (computedTiming.mProgress.Value() - segment->startPortion()) /
-            (segment->endPortion() - segment->startPortion());
-
-          double portion =
-            ComputedTimingFunction::GetPortion(animData.mFunctions[segmentIndex],
-                                               positionInSegment,
-                                           computedTiming.mBeforeFlag);
-
-          StyleAnimationValueCompositePair from {
-            animData.mStartValues[segmentIndex],
-            static_cast<dom::CompositeOperation>(segment->startComposite())
-          };
-          StyleAnimationValueCompositePair to {
-            animData.mEndValues[segmentIndex],
-            static_cast<dom::CompositeOperation>(segment->endComposite())
-          };
-          // interpolate the property
-          animationValue = SampleValue(portion,
-                                       animation,
-                                       from, to,
-                                       animData.mEndValues.LastElement(),
-                                       computedTiming.mCurrentIteration,
-                                       animationValue);
-          hasInEffectAnimations = true;
-        }
-
-#ifdef DEBUG
-        // Sanity check that all of animation data are the same.
-        const AnimationData& lastData = animations.LastElement().data();
-        for (const Animation& animation : animations) {
-          const AnimationData& data = animation.data();
-          MOZ_ASSERT(data.type() == lastData.type(),
-                     "The type of AnimationData should be the same");
-          if (data.type() == AnimationData::Tnull_t) {
-            continue;
-          }
-
-          MOZ_ASSERT(data.type() == AnimationData::TTransformData);
-          const TransformData& transformData = data.get_TransformData();
-          const TransformData& lastTransformData = lastData.get_TransformData();
-          MOZ_ASSERT(transformData.origin() == lastTransformData.origin() &&
-                     transformData.transformOrigin() ==
-                       lastTransformData.transformOrigin() &&
-                     transformData.bounds() == lastTransformData.bounds() &&
-                     transformData.appUnitsPerDevPixel() ==
-                       lastTransformData.appUnitsPerDevPixel(),
-                     "All of members of TransformData should be the same");
-        }
-#endif
-        // If all of animations are 
+        StyleAnimationValue animationValue = layer->GetBaseAnimationStyle();
+        activeAnimations |= SampleAnimationForEachNode(aPoint,
+                                                       layer->GetAnimations(),
+                                                       layer->GetAnimationData(),
+                                                       animationValue,
+                                                       hasInEffectAnimations);
         if (hasInEffectAnimations) {
-          Animation& animation = animations.LastElement();
+          Animation& animation = layer->GetAnimations().LastElement();
           ApplyAnimatedValue(layer,
                              animation.property(),
                              animation.data(),
@@ -918,7 +933,7 @@ MoveScrollbarForLayerMargin(Layer* aRoot, FrameMetrics::ViewID aRootScrollId,
   // adjustment on the layer tree.
   Layer* scrollbar = BreadthFirstSearch<ReverseIterator>(aRoot,
     [aRootScrollId](Layer* aNode) {
-      return (aNode->GetScrollbarDirection() == Layer::HORIZONTAL &&
+      return (aNode->GetScrollbarDirection() == ScrollDirection::HORIZONTAL &&
               aNode->GetScrollbarTargetContainerId() == aRootScrollId);
     });
   if (scrollbar) {
@@ -1197,7 +1212,7 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer,
 
         ExpandRootClipRect(layer, fixedLayerMargins);
 
-        if (layer->GetScrollbarDirection() != Layer::NONE) {
+        if (layer->GetScrollbarDirection() != ScrollDirection::NONE) {
           ApplyAsyncTransformToScrollbar(layer);
         }
       });
@@ -1245,7 +1260,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
   // on the painted content, we need to adjust it based on asyncTransform so that
   // it reflects what the user is actually seeing now.
   AsyncTransformComponentMatrix scrollbarTransform;
-  if (aScrollbar->GetScrollbarDirection() == Layer::VERTICAL) {
+  if (aScrollbar->GetScrollbarDirection() == ScrollDirection::VERTICAL) {
     const ParentLayerCoord asyncScrollY = asyncTransform._42;
     const float asyncZoomY = asyncTransform._22;
 
@@ -1297,7 +1312,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     scrollbarTransform.PostScale(1.f, yScale, 1.f);
     scrollbarTransform.PostTranslate(0, yTranslation, 0);
   }
-  if (aScrollbar->GetScrollbarDirection() == Layer::HORIZONTAL) {
+  if (aScrollbar->GetScrollbarDirection() == ScrollDirection::HORIZONTAL) {
     // See detailed comments under the VERTICAL case.
 
     const ParentLayerCoord asyncScrollX = asyncTransform._41;

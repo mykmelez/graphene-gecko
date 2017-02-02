@@ -12,7 +12,9 @@
 #include "nsICacheEntry.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/ipc/FileDescriptorSetChild.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/net/NeckoChild.h"
@@ -20,6 +22,7 @@
 
 #include "nsISupportsPrimitives.h"
 #include "nsChannelClassifier.h"
+#include "nsGlobalWindow.h"
 #include "nsStringStream.h"
 #include "nsHttpHandler.h"
 #include "nsNetUtil.h"
@@ -38,6 +41,8 @@
 #include "nsContentSecurityManager.h"
 #include "nsIDeprecationWarner.h"
 #include "nsICompressConvStats.h"
+#include "nsIDocument.h"
+#include "nsIDOMWindowUtils.h"
 #include "nsStreamUtils.h"
 
 #ifdef OS_POSIX
@@ -872,8 +877,6 @@ HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
   LOG(("HttpChannelChild::OnStopRequest [this=%p status=%x]\n",
        this, channelStatus));
 
-  mUploadStream = nullptr;
-
   if (mDivertingToParent) {
     MOZ_RELEASE_ASSERT(!mFlushedForDiversion,
       "Should not be processing any more callbacks from parent!");
@@ -901,14 +904,7 @@ HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
   mTransactionTimings.requestStart = timing.requestStart;
   mTransactionTimings.responseStart = timing.responseStart;
   mTransactionTimings.responseEnd = timing.responseEnd;
-
-  // Do not overwrite or adjust the original mAsyncOpenTime.  We must use the
-  // original child process time in order to account for child side work and IPC
-  // transit overhead.  This depends on TimeStamp being equivalent across
-  // processes.  We work hard to ensure this on modern hardware, but there could
-  // be some variance on older devices.
-  MOZ_DIAGNOSTIC_ASSERT(mAsyncOpenTime <= timing.fetchStart);
-
+  mAsyncOpenTime = timing.fetchStart;
   mRedirectStartTimeStamp = timing.redirectStart;
   mRedirectEndTimeStamp = timing.redirectEnd;
   mTransferSize = timing.transferSize;
@@ -1210,6 +1206,10 @@ HttpChannelChild::RecvFinishInterceptedRedirect()
   RefPtr<HttpChannelChild> self(this);
   Send__delete__(this);
 
+  // Reset the event target to which queued messages are delivered. Otherwise
+  // we'll get an assertion when we re-use the channel later on.
+  mEventQ->ResetDeliveryTarget();
+
   // The IPDL connection was torn down by a interception logic in
   // CompleteRedirectSetup, and we need to call FinishInterceptedRedirect.
   NS_DispatchToMainThread(NewRunnableMethod(this, &HttpChannelChild::FinishInterceptedRedirect));
@@ -1495,6 +1495,13 @@ HttpChannelChild::RecvNotifyTrackingProtectionDisabled()
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+HttpChannelChild::RecvNotifyTrackingResource()
+{
+  SetIsTrackingResource();
+  return IPC_OK();
+}
+
 void
 HttpChannelChild::FlushedForDiversion()
 {
@@ -1612,6 +1619,11 @@ HttpChannelChild::ConnectParent(uint32_t registrarId)
   // until OnStopRequest, or we do a redirect, or we hit an IPDL error.
   AddIPDLReference();
 
+  // This must happen before the constructor message is sent. Otherwise messages
+  // from the parent could arrive quickly and be delivered to the wrong event
+  // target.
+  SetEventTarget();
+
   HttpChannelConnectArgs connectArgs(registrarId, mShouldParentIntercept);
   PBrowserOrId browser = static_cast<ContentChild*>(gNeckoChild->Manager())
                          ->GetBrowserOrId(tabChild);
@@ -1694,7 +1706,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
   nsresult rv;
   OptionalURIParams redirectURI;
 
-  uint32_t referrerPolicy = REFERRER_POLICY_NO_REFERRER_WHEN_DOWNGRADE;
+  uint32_t referrerPolicy = REFERRER_POLICY_UNSET;
   OptionalURIParams referrerURI;
   SerializeURI(nullptr, referrerURI);
 
@@ -2011,6 +2023,55 @@ HttpChannelChild::AsyncOpen2(nsIStreamListener *aListener)
   return AsyncOpen(listener, nullptr);
 }
 
+// Assigns an nsIEventTarget to our IPDL actor so that IPC messages are sent to
+// the correct DocGroup/TabGroup.
+void
+HttpChannelChild::SetEventTarget()
+{
+  nsCOMPtr<nsILoadInfo> loadInfo;
+  GetLoadInfo(getter_AddRefs(loadInfo));
+  if (!loadInfo) {
+    return;
+  }
+
+  nsCOMPtr<nsIDOMDocument> domDoc;
+  loadInfo->GetLoadingDocument(getter_AddRefs(domDoc));
+  nsCOMPtr<nsIDocument> doc = do_QueryInterface(domDoc);
+  RefPtr<Dispatcher> dispatcher;
+  if (doc) {
+    dispatcher = doc->GetDocGroup();
+  } else {
+    // There's no document yet, but this might be a top-level load where we can
+    // find a TabGroup.
+    uint64_t outerWindowId;
+    if (NS_FAILED(loadInfo->GetOuterWindowID(&outerWindowId))) {
+      // No window. This might be an add-on XHR, a service worker request, or
+      // something else.
+      return;
+    }
+    RefPtr<nsGlobalWindow> window = nsGlobalWindow::GetOuterWindowWithId(outerWindowId);
+    if (!window) {
+      return;
+    }
+
+#ifdef DEBUG
+    // We have a TabGroup. This must be a top-level load.
+    bool isMainDocumentChannel;
+    GetIsMainDocumentChannel(&isMainDocumentChannel);
+    MOZ_ASSERT(isMainDocumentChannel);
+#endif
+
+    dispatcher = window->TabGroup();
+  }
+
+  if (dispatcher) {
+    nsCOMPtr<nsIEventTarget> target =
+      dispatcher->EventTargetFor(TaskCategory::Network);
+    gNeckoChild->SetEventTargetForActor(this, target);
+    mEventQ->RetargetDeliveryTo(target);
+  }
+}
+
 nsresult
 HttpChannelChild::ContinueAsyncOpen()
 {
@@ -2043,6 +2104,18 @@ HttpChannelChild::ContinueAsyncOpen()
   if (MissingRequiredTabChild(tabChild, "http")) {
     return NS_ERROR_ILLEGAL_VALUE;
   }
+
+  // This id identifies the inner window's top-level document,
+  // which changes on every new load or navigation.
+  uint64_t contentWindowId = 0;
+  if (tabChild) {
+    MOZ_ASSERT(tabChild->WebNavigation());
+    nsCOMPtr<nsIDocument> document = tabChild->GetDocument();
+    if (document) {
+      contentWindowId = document->InnerWindowID();
+    }
+  }
+  SetTopLevelContentWindowId(contentWindowId);
 
   HttpChannelOpenArgs openArgs;
   // No access to HttpChannelOpenArgs members, but they each have a
@@ -2138,6 +2211,8 @@ HttpChannelChild::ContinueAsyncOpen()
   mChannelId.ToProvidedString(chid);
   openArgs.channelId().AssignASCII(chid);
 
+  openArgs.contentWindowId() = contentWindowId;
+
   if (tabChild && !tabChild->IPCOpen()) {
     return NS_ERROR_FAILURE;
   }
@@ -2146,6 +2221,11 @@ HttpChannelChild::ContinueAsyncOpen()
   if (cc->IsShuttingDown()) {
     return NS_ERROR_FAILURE;
   }
+
+  // This must happen before the constructor message is sent. Otherwise messages
+  // from the parent could arrive quickly and be delivered to the wrong event
+  // target.
+  SetEventTarget();
 
   // The socket transport in the chrome process now holds a logical ref to us
   // until OnStopRequest, or we do a redirect, or we hit an IPDL error.
@@ -2878,6 +2958,13 @@ HttpChannelChild::ShouldInterceptURI(nsIURI* aURI,
   }
 
   return ShouldIntercept(upgradedURI ? upgradedURI.get() : aURI);
+}
+
+mozilla::ipc::IPCResult
+HttpChannelChild::RecvSetPriority(const uint16_t& aPriority)
+{
+  mPriority = aPriority;
+  return IPC_OK();
 }
 
 } // namespace net

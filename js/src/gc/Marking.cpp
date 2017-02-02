@@ -46,9 +46,9 @@ using JS::MapTypeToTraceKind;
 
 using mozilla::ArrayLength;
 using mozilla::DebugOnly;
+using mozilla::IntegerRange;
 using mozilla::IsBaseOf;
 using mozilla::IsSame;
-using mozilla::MakeRange;
 using mozilla::PodCopy;
 
 // Tracing Overview
@@ -175,6 +175,17 @@ template <> bool ThingIsPermanentAtomOrWellKnownSymbol<JS::Symbol>(JS::Symbol* s
     return sym->isWellKnownSymbol();
 }
 
+template <typename T>
+static inline bool
+IsOwnedByOtherRuntime(JSRuntime* rt, T thing)
+{
+    bool other = thing->runtimeFromAnyThread() != rt;
+    MOZ_ASSERT_IF(other,
+                  ThingIsPermanentAtomOrWellKnownSymbol(thing) ||
+                  thing->zoneFromAnyThread()->isSelfHostingZone());
+    return other;
+}
+
 template<typename T>
 void
 js::CheckTracedThing(JSTracer* trc, T* thing)
@@ -196,10 +207,10 @@ js::CheckTracedThing(JSTracer* trc, T* thing)
     MOZ_ASSERT_IF(!IsMovingTracer(trc) && !trc->isTenuringTracer(), !IsForwarded(thing));
 
     /*
-     * Permanent atoms are not associated with this runtime, but will be
-     * ignored during marking.
+     * Permanent atoms and things in the self-hosting zone are not associated
+     * with this runtime, but will be ignored during marking.
      */
-    if (ThingIsPermanentAtomOrWellKnownSymbol(thing))
+    if (IsOwnedByOtherRuntime(trc->runtime(), thing))
         return;
 
     Zone* zone = thing->zoneFromAnyThread();
@@ -317,7 +328,7 @@ ShouldTraceCrossCompartment(JSTracer* trc, JSObject* src, Cell* cell)
 static bool
 ShouldTraceCrossCompartment(JSTracer* trc, JSObject* src, const Value& val)
 {
-    return val.isMarkable() && ShouldTraceCrossCompartment(trc, src, (Cell*)val.toGCThing());
+    return val.isGCThing() && ShouldTraceCrossCompartment(trc, src, val.toGCThing());
 }
 
 static void
@@ -491,7 +502,7 @@ void
 js::TraceNullableRoot(JSTracer* trc, T* thingp, const char* name)
 {
     AssertRootMarkingPhase(trc);
-    if (InternalBarrierMethods<T>::isMarkableTaggedPointer(*thingp))
+    if (InternalBarrierMethods<T>::isMarkable(*thingp))
         DispatchToTracer(trc, ConvertToBase(thingp), name);
 }
 
@@ -515,7 +526,7 @@ void
 js::TraceRange(JSTracer* trc, size_t len, WriteBarrieredBase<T>* vec, const char* name)
 {
     JS::AutoTracingIndex index(trc);
-    for (auto i : MakeRange(len)) {
+    for (auto i : IntegerRange(len)) {
         if (InternalBarrierMethods<T>::isMarkable(vec[i].get()))
             DispatchToTracer(trc, ConvertToBase(vec[i].unsafeUnbarrieredForTracing()), name);
         ++index;
@@ -528,7 +539,7 @@ js::TraceRootRange(JSTracer* trc, size_t len, T* vec, const char* name)
 {
     AssertRootMarkingPhase(trc);
     JS::AutoTracingIndex index(trc);
-    for (auto i : MakeRange(len)) {
+    for (auto i : IntegerRange(len)) {
         if (InternalBarrierMethods<T>::isMarkable(vec[i]))
             DispatchToTracer(trc, ConvertToBase(&vec[i]), name);
         ++index;
@@ -740,16 +751,24 @@ GCMarker::markImplicitEdges(T* thing)
 
 template <typename T>
 static inline bool
-MustSkipMarking(T thing)
+MustSkipMarking(GCMarker* gcmarker, T thing)
 {
+    // Don't trace things that are owned by another runtime.
+    if (IsOwnedByOtherRuntime(gcmarker->runtime(), thing))
+        return true;
+
     // Don't mark things outside a zone if we are in a per-zone GC.
     return !thing->zone()->isGCMarking();
 }
 
 template <>
 bool
-MustSkipMarking<JSObject*>(JSObject* obj)
+MustSkipMarking<JSObject*>(GCMarker* gcmarker, JSObject* obj)
 {
+    // Don't trace things that are owned by another runtime.
+    if (IsOwnedByOtherRuntime(gcmarker->runtime(), obj))
+        return true;
+
     // We may mark a Nursery thing outside the context of the
     // MinorCollectionTracer because of a pre-barrier. The pre-barrier is not
     // needed in this case because we perform a minor collection before each
@@ -763,34 +782,12 @@ MustSkipMarking<JSObject*>(JSObject* obj)
     return !TenuredCell::fromPointer(obj)->zone()->isGCMarking();
 }
 
-template <>
-bool
-MustSkipMarking<JSString*>(JSString* str)
-{
-    // Don't mark permanent atoms, as they may be associated with another
-    // runtime. Note that traverse() also checks this, but we need to not
-    // run the isGCMarking test from off-main-thread, so have to check it here
-    // too.
-    return str->isPermanentAtom() ||
-           !str->zone()->isGCMarking();
-}
-
-template <>
-bool
-MustSkipMarking<JS::Symbol*>(JS::Symbol* sym)
-{
-    // As for JSString, don't touch a globally owned well-known symbol from
-    // off-main-thread.
-    return sym->isWellKnownSymbol() ||
-           !sym->zone()->isGCMarking();
-}
-
 template <typename T>
 void
 DoMarking(GCMarker* gcmarker, T* thing)
 {
     // Do per-type marking precondition checks.
-    if (MustSkipMarking(thing))
+    if (MustSkipMarking(gcmarker, thing))
         return;
 
     CheckTracedThing(gcmarker, thing);
@@ -817,13 +814,13 @@ void
 NoteWeakEdge(GCMarker* gcmarker, T** thingp)
 {
     // Do per-type marking precondition checks.
-    if (MustSkipMarking(*thingp))
+    if (MustSkipMarking(gcmarker, *thingp))
         return;
 
     CheckTracedThing(gcmarker, *thingp);
 
     // If the target is already marked, there's no need to store the edge.
-    if (IsMarkedUnbarriered(thingp))
+    if (IsMarkedUnbarriered(gcmarker->runtime(), thingp))
         return;
 
     gcmarker->noteWeakEdge(thingp);
@@ -931,6 +928,13 @@ CheckTraversedEdge(S source, T* target)
     MOZ_ASSERT_IF(!ThingIsPermanentAtomOrWellKnownSymbol(target),
                   target->zone()->isAtomsZone() || target->zone() == source->zone());
 
+    // If we are marking an atom, that atom must be marked in the source zone's
+    // atom bitmap.
+    MOZ_ASSERT_IF(!ThingIsPermanentAtomOrWellKnownSymbol(target) &&
+                  target->zone()->isAtomsZone() && !source->zone()->isAtomsZone(),
+                  target->runtimeFromAnyThread()->gc.atomMarking
+                      .atomIsMarked(source->zone(), reinterpret_cast<TenuredCell*>(target)));
+
     // Atoms and Symbols do not have access to a compartment pointer, or we'd need
     // to adjust the subsequent check to catch that case.
     MOZ_ASSERT_IF(ThingIsPermanentAtomOrWellKnownSymbol(target), !target->maybeCompartment());
@@ -996,13 +1000,13 @@ LazyScript::traceChildren(JSTracer* trc)
 
     // We rely on the fact that atoms are always tenured.
     JSAtom** closedOverBindings = this->closedOverBindings();
-    for (auto i : MakeRange(numClosedOverBindings())) {
+    for (auto i : IntegerRange(numClosedOverBindings())) {
         if (closedOverBindings[i])
             TraceManuallyBarrieredEdge(trc, &closedOverBindings[i], "closedOverBinding");
     }
 
     GCPtrFunction* innerFunctions = this->innerFunctions();
-    for (auto i : MakeRange(numInnerFunctions()))
+    for (auto i : IntegerRange(numInnerFunctions()))
         TraceEdge(trc, &innerFunctions[i], "lazyScriptInnerFunction");
 }
 inline void
@@ -1022,13 +1026,13 @@ js::GCMarker::eagerlyMarkChildren(LazyScript *thing)
 
     // We rely on the fact that atoms are always tenured.
     JSAtom** closedOverBindings = thing->closedOverBindings();
-    for (auto i : MakeRange(thing->numClosedOverBindings())) {
+    for (auto i : IntegerRange(thing->numClosedOverBindings())) {
         if (closedOverBindings[i])
             traverseEdge(thing, static_cast<JSString*>(closedOverBindings[i]));
     }
 
     GCPtrFunction* innerFunctions = thing->innerFunctions();
-    for (auto i : MakeRange(thing->numInnerFunctions()))
+    for (auto i : IntegerRange(thing->numInnerFunctions()))
         traverseEdge(thing, static_cast<JSObject*>(innerFunctions[i]));
 }
 
@@ -1264,6 +1268,12 @@ ModuleScope::Data::trace(JSTracer* trc)
     TraceBindingNames(trc, names, length);
 }
 void
+WasmFunctionScope::Data::trace(JSTracer* trc)
+{
+    TraceNullableEdge(trc, &instance, "wasm function");
+    TraceBindingNames(trc, names, length);
+}
+void
 Scope::traceChildren(JSTracer* trc)
 {
     TraceNullableEdge(trc, &enclosing_, "scope enclosing");
@@ -1295,6 +1305,9 @@ Scope::traceChildren(JSTracer* trc)
         reinterpret_cast<ModuleScope::Data*>(data_)->trace(trc);
         break;
       case ScopeKind::With:
+        break;
+      case ScopeKind::WasmFunction:
+        reinterpret_cast<WasmFunctionScope::Data*>(data_)->trace(trc);
         break;
     }
 }
@@ -1361,6 +1374,14 @@ js::GCMarker::eagerlyMarkChildren(Scope* scope)
 
       case ScopeKind::With:
         break;
+
+      case ScopeKind::WasmFunction: {
+        WasmFunctionScope::Data* data = reinterpret_cast<WasmFunctionScope::Data*>(scope->data_);
+        traverseEdge(scope, static_cast<JSObject*>(data->instance));
+        names = data->names;
+        length = data->length;
+        break;
+      }
     }
     if (scope->kind_ == ScopeKind::Function) {
         for (uint32_t i = 0; i < length; i++) {
@@ -1545,15 +1566,13 @@ GCMarker::drainMarkStack(SliceBudget& budget)
     auto acc = mozilla::MakeScopeExit([&] {strictCompartmentChecking = false;});
 #endif
 
-    JSContext* cx = runtime()->contextFromMainThread();
-
-    if (budget.isOverBudget(cx))
+    if (budget.isOverBudget())
         return false;
 
     for (;;) {
         while (!stack.isEmpty()) {
             processMarkStackTop(budget);
-            if (budget.isOverBudget(cx)) {
+            if (budget.isOverBudget()) {
                 saveValueRanges();
                 return false;
             }
@@ -1604,7 +1623,7 @@ ObjectDenseElementsMayBeMarkable(NativeObject* nobj)
     if (!mayBeMarkable) {
         const Value* elements = nobj->getDenseElementsAllowCopyOnWrite();
         for (unsigned i = 0; i < nobj->getDenseInitializedLength(); i++)
-            MOZ_ASSERT(!elements[i].isMarkable());
+            MOZ_ASSERT(!elements[i].isGCThing());
     }
 #endif
 
@@ -1627,8 +1646,6 @@ GCMarker::processMarkStackTop(SliceBudget& budget)
     uintptr_t addr = stack.pop();
     uintptr_t tag = addr & StackTagMask;
     addr &= ~StackTagMask;
-
-    JSContext* cx = runtime()->contextFromMainThread();
 
     // Dispatch
     switch (tag) {
@@ -1683,7 +1700,7 @@ GCMarker::processMarkStackTop(SliceBudget& budget)
     MOZ_ASSERT(vp <= end);
     while (vp != end) {
         budget.step();
-        if (budget.isOverBudget(cx)) {
+        if (budget.isOverBudget()) {
             pushValueArray(obj, vp, end);
             return;
         }
@@ -1713,7 +1730,7 @@ GCMarker::processMarkStackTop(SliceBudget& budget)
         AssertZoneIsMarking(obj);
 
         budget.step();
-        if (budget.isOverBudget(cx)) {
+        if (budget.isOverBudget()) {
             repush(obj);
             return;
         }
@@ -2161,7 +2178,7 @@ GCMarker::markDelayedChildren(SliceBudget& budget)
         markDelayedChildren(arena);
 
         budget.step(150);
-        if (budget.isOverBudget(runtime()->contextFromMainThread()))
+        if (budget.isOverBudget())
             return false;
     } while (unmarkedArenaStackTop);
     MOZ_ASSERT(!markLaterArenas);
@@ -2344,8 +2361,8 @@ js::gc::StoreBuffer::traceWholeCells(TenuringTracer& mover)
     for (ArenaCellSet* cells = bufferWholeCell; cells; cells = cells->next) {
         Arena* arena = cells->arena;
 
-        MOZ_ASSERT(arena->bufferedCells == cells);
-        arena->bufferedCells = &ArenaCellSet::Empty;
+        MOZ_ASSERT(arena->bufferedCells() == cells);
+        arena->bufferedCells() = &ArenaCellSet::Empty;
 
         JS::TraceKind kind = MapAllocToTraceKind(arena->getAllocKind());
         switch (kind) {
@@ -2685,17 +2702,22 @@ IsMarkedInternalCommon(T* thingp)
 
 template <typename T>
 static bool
-IsMarkedInternal(T** thingp)
+IsMarkedInternal(JSRuntime* rt, T** thingp)
 {
+    if (IsOwnedByOtherRuntime(rt, *thingp))
+        return true;
+
     return IsMarkedInternalCommon(thingp);
 }
 
 template <>
 /* static */ bool
-IsMarkedInternal(JSObject** thingp)
+IsMarkedInternal(JSRuntime* rt, JSObject** thingp)
 {
+    if (IsOwnedByOtherRuntime(rt, *thingp))
+        return true;
+
     if (IsInsideNursery(*thingp)) {
-        JSRuntime* rt = (*thingp)->runtimeFromAnyThread();
         MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
         return rt->gc.nursery.getForwardedPointer(thingp);
     }
@@ -2704,18 +2726,18 @@ IsMarkedInternal(JSObject** thingp)
 
 template <typename S>
 struct IsMarkedFunctor : public IdentityDefaultAdaptor<S> {
-    template <typename T> S operator()(T* t, bool* rv) {
-        *rv = IsMarkedInternal(&t);
+    template <typename T> S operator()(T* t, JSRuntime* rt, bool* rv) {
+        *rv = IsMarkedInternal(rt, &t);
         return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 
 template <typename T>
 static bool
-IsMarkedInternal(T* thingp)
+IsMarkedInternal(JSRuntime* rt, T* thingp)
 {
     bool rv = true;
-    *thingp = DispatchTyped(IsMarkedFunctor<T>(), *thingp, &rv);
+    *thingp = DispatchTyped(IsMarkedFunctor<T>(), *thingp, rt, &rv);
     return rv;
 }
 
@@ -2780,16 +2802,16 @@ namespace gc {
 
 template <typename T>
 bool
-IsMarkedUnbarriered(T* thingp)
+IsMarkedUnbarriered(JSRuntime* rt, T* thingp)
 {
-    return IsMarkedInternal(ConvertToBase(thingp));
+    return IsMarkedInternal(rt, ConvertToBase(thingp));
 }
 
 template <typename T>
 bool
-IsMarked(WriteBarrieredBase<T>* thingp)
+IsMarked(JSRuntime* rt, WriteBarrieredBase<T>* thingp)
 {
-    return IsMarkedInternal(ConvertToBase(thingp->unsafeUnbarrieredForTracing()));
+    return IsMarkedInternal(rt, ConvertToBase(thingp->unsafeUnbarrieredForTracing()));
 }
 
 template <typename T>
@@ -2822,8 +2844,8 @@ EdgeNeedsSweep(JS::Heap<T>* thingp)
 
 // Instantiate a copy of the Tracing templates for each derived type.
 #define INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS(type) \
-    template bool IsMarkedUnbarriered<type>(type*); \
-    template bool IsMarked<type>(WriteBarrieredBase<type>*); \
+    template bool IsMarkedUnbarriered<type>(JSRuntime*, type*);                \
+    template bool IsMarked<type>(JSRuntime*, WriteBarrieredBase<type>*); \
     template bool IsAboutToBeFinalizedUnbarriered<type>(type*); \
     template bool IsAboutToBeFinalized<type>(WriteBarrieredBase<type>*); \
     template bool IsAboutToBeFinalized<type>(ReadBarrieredBase<type>*);
@@ -2917,7 +2939,7 @@ UnmarkGrayTracer::onChild(const JS::GCCellPtr& thing)
          * If we run out of stack, we take a more drastic measure: require that
          * we GC again before the next CC.
          */
-        runtime()->gc.setGrayBitsInvalid();
+        runtime()->setGCGrayBitsValid(false);
         return;
     }
 

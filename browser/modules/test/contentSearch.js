@@ -18,22 +18,22 @@ content.addEventListener(SERVICE_EVENT_TYPE, event => {
 
 // Forward messages from the test to the in-content service.
 addMessageListener(TEST_MSG, msg => {
-  content.dispatchEvent(
-    new content.CustomEvent(CLIENT_EVENT_TYPE, {
-      detail: msg.data,
-    })
-  );
-
   // If the message is a search, stop the page from loading and then tell the
   // test that it loaded.
   if (msg.data.type == "Search") {
     waitForLoadAndStopIt(msg.data.expectedURL, url => {
       sendAsyncMessage(TEST_MSG, {
         type: "loadStopped",
-        url: url,
+        url,
       });
     });
   }
+
+  content.dispatchEvent(
+    new content.CustomEvent(CLIENT_EVENT_TYPE, {
+      detail: msg.data,
+    })
+  );
 });
 
 function waitForLoadAndStopIt(expectedURL, callback) {
@@ -41,7 +41,7 @@ function waitForLoadAndStopIt(expectedURL, callback) {
   let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                             .getInterface(Ci.nsIWebProgress);
   let listener = {
-    onStateChange: function(webProg, req, flags, status) {
+    onStateChange(webProg, req, flags, status) {
       if (req instanceof Ci.nsIChannel) {
         let url = req.originalURI.spec;
         dump("waitForLoadAndStopIt: onStateChange " + url + "\n");

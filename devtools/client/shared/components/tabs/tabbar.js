@@ -22,9 +22,12 @@ let Tabbar = createClass({
   displayName: "Tabbar",
 
   propTypes: {
+    children: PropTypes.object,
     onSelect: PropTypes.func,
     showAllTabsMenu: PropTypes.bool,
+    activeTabId: PropTypes.string,
     toolbox: PropTypes.object,
+    renderOnlySelected: PropTypes.bool,
   },
 
   getDefaultProps: function () {
@@ -34,10 +37,40 @@ let Tabbar = createClass({
   },
 
   getInitialState: function () {
+    let { activeTabId, children = [] } = this.props;
+    let tabs = this.createTabs(children);
+    let activeTab = tabs.findIndex((tab, index) => tab.id === activeTabId);
+
     return {
-      tabs: [],
-      activeTab: 0
+      activeTab: activeTab === -1 ? 0 : activeTab,
+      tabs,
     };
+  },
+
+  componentWillReceiveProps: function (nextProps) {
+    let { activeTabId, children = [] } = nextProps;
+    let tabs = this.createTabs(children);
+    let activeTab = tabs.findIndex((tab, index) => tab.id === activeTabId);
+
+    if (activeTab !== this.state.activeTab ||
+        (children !== this.props.children)) {
+      this.setState({
+        activeTab: activeTab === -1 ? 0 : activeTab,
+        tabs,
+      });
+    }
+  },
+
+  createTabs: function (children) {
+    return children
+      .filter((panel) => panel)
+      .map((panel, index) =>
+        Object.assign({}, children[index], {
+          id: panel.props.id || index,
+          panel,
+          title: panel.props.title,
+        })
+      );
   },
 
   // Public API
@@ -113,7 +146,7 @@ let Tabbar = createClass({
   getTabIndex: function (tabId) {
     let tabIndex = -1;
     this.state.tabs.forEach((tab, index) => {
-      if (tab.id == tabId) {
+      if (tab.id === tabId) {
         tabIndex = index;
       }
     });
@@ -145,11 +178,11 @@ let Tabbar = createClass({
     let target = event.target;
 
     // Generate list of menu items from the list of tabs.
-    this.state.tabs.forEach(tab => {
+    this.state.tabs.forEach((tab) => {
       menu.append(new MenuItem({
         label: tab.title,
         type: "checkbox",
-        checked: this.getCurrentTabId() == tab.id,
+        checked: this.getCurrentTabId() === tab.id,
         click: () => this.select(tab.id),
       }));
     });
@@ -183,17 +216,17 @@ let Tabbar = createClass({
   },
 
   render: function () {
-    let tabs = this.state.tabs.map(tab => {
-      return this.renderTab(tab);
-    });
+    let tabs = this.state.tabs.map((tab) => this.renderTab(tab));
 
     return (
       div({className: "devtools-sidebar-tabs"},
         Tabs({
           onAllTabsMenuClick: this.onAllTabsMenuClick,
+          renderOnlySelected: this.props.renderOnlySelected,
           showAllTabsMenu: this.props.showAllTabsMenu,
           tabActive: this.state.activeTab,
-          onAfterChange: this.onTabChanged},
+          onAfterChange: this.onTabChanged,
+        },
           tabs
         )
       )

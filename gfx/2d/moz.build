@@ -24,10 +24,12 @@ EXPORTS.mozilla.gfx += [
     'CriticalSection.h',
     'DataSurfaceHelpers.h',
     'DrawEventRecorder.h',
+    'DrawTargetRecording.h',
     'DrawTargetTiled.h',
     'Filters.h',
     'Helpers.h',
     'HelpersCairo.h',
+    'InlineTranslator.h',
     'IterableArena.h',
     'JobScheduler.h',
     'JobScheduler_posix.h',
@@ -90,6 +92,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'windows':
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3'):
     SOURCES += [
+        'NativeFontResourceFontconfig.cpp',
         'ScaledFontFontconfig.cpp',
     ]
 
@@ -178,6 +181,7 @@ UNIFIED_SOURCES += [
 
 SOURCES += [
     'Factory.cpp', # Need to suppress warnings in Skia header files.
+    'InlineTranslator.cpp',
 ]
 
 if CONFIG['CLANG_CXX']:

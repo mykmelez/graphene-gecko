@@ -24,13 +24,13 @@
 #include "AudioNodeExternalInputStream.h"
 #include "MediaStreamListener.h"
 #include "MediaStreamVideoSink.h"
-#include "mozilla/dom/AudioContextBinding.h"
+#include "mozilla/dom/BaseAudioContextBinding.h"
 #include "mozilla/media/MediaUtils.h"
 #include <algorithm>
 #include "GeckoProfiler.h"
 #include "VideoFrameContainer.h"
+#include "mozilla/AbstractThread.h"
 #include "mozilla/Unused.h"
-#include "mozilla/media/MediaUtils.h"
 #ifdef MOZ_WEBRTC
 #include "AudioOutputObserver.h"
 #endif
@@ -1256,6 +1256,8 @@ MediaStreamGraphImpl::UpdateGraph(GraphTime aEndBlockingDecisions)
   // been woken up right after having been to sleep.
   MOZ_ASSERT(aEndBlockingDecisions >= mStateComputedTime);
 
+  UpdateStreamOrder();
+
   bool ensureNextIteration = false;
 
   // Grab pending stream input and compute blocking time
@@ -1406,22 +1408,7 @@ MediaStreamGraphImpl::OneIteration(GraphTime aStateEnd)
   // Process graph message from the main thread for this iteration.
   RunMessagesInQueue();
 
-  UpdateStreamOrder();
-
-  bool switchingFromSystemClockDriver = false;
-  {
-    MonitorAutoLock mon(mMonitor);
-    switchingFromSystemClockDriver = CurrentDriver()->AsSystemClockDriver() && CurrentDriver()->Switching();
-  }
-
   GraphTime stateEnd = std::min(aStateEnd, mEndTime);
-
-  // See Bug 1228226 - If we're switching from the SystemClockDriver, we
-  // don't want time to advance until after the switch.
-  if (switchingFromSystemClockDriver) {
-    stateEnd = mProcessedTime;
-  }
-
   UpdateGraph(stateEnd);
 
   mStateComputedTime = stateEnd;
@@ -1730,6 +1717,10 @@ MediaStreamGraphImpl::RunInStableState(bool aSourceIsMSG)
         RefPtr<GraphDriver> driver = CurrentDriver();
         MonitorAutoUnlock unlock(mMonitor);
         driver->Start();
+        // It's not safe to Shutdown() a thread from StableState, and
+        // releasing this may shutdown a SystemClockDriver thread.
+        // Proxy the release to outside of StableState.
+        NS_ReleaseOnMainThread(driver.forget(), true); // always proxy
       }
     }
 
@@ -1769,16 +1760,6 @@ MediaStreamGraphImpl::RunInStableState(bool aSourceIsMSG)
 
   for (uint32_t i = 0; i < runnables.Length(); ++i) {
     runnables[i]->Run();
-    // "Direct" tail dispatcher are supposed to run immediately following the
-    // execution of the current task. So the meta-tasking that we do here in
-    // RunInStableState() breaks that abstraction a bit unless we handle it here.
-    //
-    // This is particularly important because we can end up with a "stream
-    // ended" notification immediately following a "stream available" notification,
-    // and we need to make sure that the watcher responding to "stream available"
-    // has a chance to run before the second notification starts tearing things
-    // down.
-    AbstractThread::MainThread()->TailDispatcher().DrainDirectTasks();
   }
 }
 
@@ -1848,7 +1829,7 @@ MediaStreamGraphImpl::AppendMessage(UniquePtr<ControlMessage> aMessage)
   EnsureRunInStableState();
 }
 
-MediaStream::MediaStream()
+MediaStream::MediaStream(AbstractThread* aMainThread)
   : mTracksStartTime(0)
   , mStartBlocking(GRAPH_TIME_MAX)
   , mSuspendedCount(0)
@@ -1864,6 +1845,7 @@ MediaStream::MediaStream()
   , mNrOfMainThreadUsers(0)
   , mGraph(nullptr)
   , mAudioChannelType(dom::AudioChannel::Normal)
+  , mAbstractMainThread(aMainThread)
 {
   MOZ_COUNT_CTOR(MediaStream);
 }
@@ -2508,14 +2490,18 @@ MediaStream::RunAfterPendingUpdates(already_AddRefed<nsIRunnable> aRunnable)
 
   class Message : public ControlMessage {
   public:
-    explicit Message(MediaStream* aStream,
-                     already_AddRefed<nsIRunnable> aRunnable)
+    Message(MediaStream* aStream,
+            already_AddRefed<nsIRunnable> aRunnable,
+            AbstractThread* aMainThread)
       : ControlMessage(aStream)
-      , mRunnable(aRunnable) {}
+      , mRunnable(aRunnable)
+      , mAbstractMainThread(aMainThread)
+      {}
     void Run() override
     {
       mStream->Graph()->
-        DispatchToMainThreadAfterStreamStateUpdate(mRunnable.forget());
+        DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
+                                                   mRunnable.forget());
     }
     void RunDuringShutdown() override
     {
@@ -2526,9 +2512,11 @@ MediaStream::RunAfterPendingUpdates(already_AddRefed<nsIRunnable> aRunnable)
     }
   private:
     nsCOMPtr<nsIRunnable> mRunnable;
+    const RefPtr<AbstractThread> mAbstractMainThread;
   };
 
-  graph->AppendMessage(MakeUnique<Message>(this, runnable.forget()));
+  graph->AppendMessage(
+    MakeUnique<Message>(this, runnable.forget(), mAbstractMainThread));
 }
 
 void
@@ -2642,8 +2630,8 @@ MediaStream::AddMainThreadListener(MainThreadMediaStreamListener* aListener)
   Unused << NS_WARN_IF(NS_FAILED(NS_DispatchToMainThread(runnable.forget())));
 }
 
-SourceMediaStream::SourceMediaStream() :
-  MediaStream(),
+SourceMediaStream::SourceMediaStream(AbstractThread* aMainThread) :
+  MediaStream(aMainThread),
   mMutex("mozilla::media::SourceMediaStream"),
   mUpdateKnownTracksTime(0),
   mPullEnabled(false),
@@ -2899,8 +2887,8 @@ SourceMediaStream::AddDirectTrackListenerImpl(already_AddRefed<DirectMediaStream
                                               TrackID aTrackID)
 {
   MOZ_ASSERT(IsTrackIDExplicit(aTrackID));
-  TrackData* data;
-  bool found = false;
+  TrackData* updateData = nullptr;
+  StreamTracks::Track* track = nullptr;
   bool isAudio = false;
   bool isVideo = false;
   RefPtr<DirectMediaStreamTrackListener> listener = aListener;
@@ -2909,44 +2897,29 @@ SourceMediaStream::AddDirectTrackListenerImpl(already_AddRefed<DirectMediaStream
 
   {
     MutexAutoLock lock(mMutex);
-    data = FindDataForTrack(aTrackID);
-    found = !!data;
-    if (found) {
-      isAudio = data->mData->GetType() == MediaSegment::AUDIO;
-      isVideo = data->mData->GetType() == MediaSegment::VIDEO;
+    updateData = FindDataForTrack(aTrackID);
+    track = FindTrack(aTrackID);
+    if (track) {
+      isAudio = track->GetType() == MediaSegment::AUDIO;
+      isVideo = track->GetType() == MediaSegment::VIDEO;
     }
 
-    // The track might be removed from mUpdateTrack but still exist in
-    // mTracks.
-    auto streamTrack = FindTrack(aTrackID);
-    bool foundTrack = !!streamTrack;
-    if (foundTrack) {
-      MediaStreamVideoSink* videoSink = listener->AsMediaStreamVideoSink();
+    if (track && isVideo && listener->AsMediaStreamVideoSink()) {
       // Re-send missed VideoSegment to new added MediaStreamVideoSink.
-      if (streamTrack->GetType() == MediaSegment::VIDEO && videoSink) {
-        VideoSegment videoSegment;
-        if (mTracks.GetForgottenDuration() < streamTrack->GetSegment()->GetDuration()) {
-          videoSegment.AppendSlice(*streamTrack->GetSegment(),
-                                   mTracks.GetForgottenDuration(),
-                                   streamTrack->GetSegment()->GetDuration());
-        } else {
-          VideoSegment* streamTrackSegment = static_cast<VideoSegment*>(streamTrack->GetSegment());
-          VideoChunk* lastChunk = streamTrackSegment->GetLastChunk();
-          if (lastChunk) {
-            StreamTime startTime = streamTrackSegment->GetDuration() - lastChunk->GetDuration();
-            videoSegment.AppendSlice(*streamTrackSegment,
-                                     startTime,
-                                     streamTrackSegment->GetDuration());
-          }
-        }
-        if (found) {
-          videoSegment.AppendSlice(*data->mData, 0, data->mData->GetDuration());
-        }
-        videoSink->SetCurrentFrames(videoSegment);
+      VideoSegment* trackSegment = static_cast<VideoSegment*>(track->GetSegment());
+      VideoSegment videoSegment;
+      if (mTracks.GetForgottenDuration() < trackSegment->GetDuration()) {
+        videoSegment.AppendSlice(*trackSegment,
+                                 mTracks.GetForgottenDuration(),
+                                 trackSegment->GetDuration());
       }
+      if (updateData) {
+        videoSegment.AppendSlice(*updateData->mData, 0, updateData->mData->GetDuration());
+      }
+      listener->NotifyRealtimeTrackData(Graph(), 0, videoSegment);
     }
 
-    if (found && (isAudio || isVideo)) {
+    if (track && (isAudio || isVideo)) {
       for (auto entry : mDirectTrackListeners) {
         if (entry.mListener == listener &&
             (entry.mTrackID == TRACK_ANY || entry.mTrackID == aTrackID)) {
@@ -2962,7 +2935,7 @@ SourceMediaStream::AddDirectTrackListenerImpl(already_AddRefed<DirectMediaStream
       sourceListener->mTrackID = aTrackID;
     }
   }
-  if (!found) {
+  if (!track) {
     STREAM_LOG(LogLevel::Warning, ("Couldn't find source track for direct track listener %p",
                                    listener.get()));
     listener->NotifyDirectListenerInstalled(
@@ -2976,9 +2949,15 @@ SourceMediaStream::AddDirectTrackListenerImpl(already_AddRefed<DirectMediaStream
     MOZ_ASSERT(true);
     return;
   }
-  STREAM_LOG(LogLevel::Debug, ("Added direct track listener %p", listener.get()));
+  STREAM_LOG(LogLevel::Debug, ("Added direct track listener %p. ended=%d",
+                               listener.get(), !updateData));
   listener->NotifyDirectListenerInstalled(
     DirectMediaStreamTrackListener::InstallationResult::SUCCESS);
+  if (!updateData) {
+    // The track exists but the mUpdateTracks entry was removed.
+    // This means that the track has ended.
+    listener->NotifyEnded();
+  }
 }
 
 void
@@ -3225,18 +3204,21 @@ MediaInputPort::BlockSourceTrackId(TrackID aTrackId, BlockingMode aBlockingMode)
 {
   class Message : public ControlMessage {
   public:
-    explicit Message(MediaInputPort* aPort,
-                     TrackID aTrackId,
-                     BlockingMode aBlockingMode,
-                     already_AddRefed<nsIRunnable> aRunnable)
+    Message(MediaInputPort* aPort,
+            TrackID aTrackId,
+            BlockingMode aBlockingMode,
+            already_AddRefed<nsIRunnable> aRunnable,
+            AbstractThread* aMainThread)
       : ControlMessage(aPort->GetDestination()),
         mPort(aPort), mTrackId(aTrackId), mBlockingMode(aBlockingMode),
-        mRunnable(aRunnable) {}
+        mRunnable(aRunnable), mAbstractMainThread(aMainThread) {}
     void Run() override
     {
       mPort->BlockSourceTrackIdImpl(mTrackId, mBlockingMode);
       if (mRunnable) {
-        mStream->Graph()->DispatchToMainThreadAfterStreamStateUpdate(mRunnable.forget());
+        mStream->Graph()->
+          DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
+                                                     mRunnable.forget());
       }
     }
     void RunDuringShutdown() override
@@ -3247,6 +3229,7 @@ MediaInputPort::BlockSourceTrackId(TrackID aTrackId, BlockingMode aBlockingMode)
     TrackID mTrackId;
     BlockingMode mBlockingMode;
     nsCOMPtr<nsIRunnable> mRunnable;
+    const RefPtr<AbstractThread> mAbstractMainThread;
   };
 
   MOZ_ASSERT(IsTrackIDExplicit(aTrackId),
@@ -3258,7 +3241,9 @@ MediaInputPort::BlockSourceTrackId(TrackID aTrackId, BlockingMode aBlockingMode)
     pledge->Resolve(true);
     return NS_OK;
   });
-  GraphImpl()->AppendMessage(MakeUnique<Message>(this, aTrackId, aBlockingMode, runnable.forget()));
+  GraphImpl()->AppendMessage(MakeUnique<Message>(this, aTrackId, aBlockingMode,
+                                                 runnable.forget(),
+                                                 mAbstractMainThread));
   return pledge.forget();
 }
 
@@ -3298,7 +3283,7 @@ ProcessedMediaStream::AllocateInputPort(MediaStream* aStream, TrackID aTrackID,
              "Generic MediaInputPort cannot produce a single destination track");
   RefPtr<MediaInputPort> port =
     new MediaInputPort(aStream, aTrackID, this, aDestTrackID,
-                       aInputNumber, aOutputNumber);
+                       aInputNumber, aOutputNumber, mAbstractMainThread);
   if (aBlockedTracks) {
     for (TrackID trackID : *aBlockedTracks) {
       port->BlockSourceTrackIdImpl(trackID, BlockingMode::CREATION);
@@ -3652,25 +3637,25 @@ FinishCollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
 }
 
 SourceMediaStream*
-MediaStreamGraph::CreateSourceStream()
+MediaStreamGraph::CreateSourceStream(AbstractThread* aMainThread)
 {
-  SourceMediaStream* stream = new SourceMediaStream();
+  SourceMediaStream* stream = new SourceMediaStream(aMainThread);
   AddStream(stream);
   return stream;
 }
 
 ProcessedMediaStream*
-MediaStreamGraph::CreateTrackUnionStream()
+MediaStreamGraph::CreateTrackUnionStream(AbstractThread* aMainThread)
 {
-  TrackUnionStream* stream = new TrackUnionStream();
+  TrackUnionStream* stream = new TrackUnionStream(aMainThread);
   AddStream(stream);
   return stream;
 }
 
 ProcessedMediaStream*
-MediaStreamGraph::CreateAudioCaptureStream(TrackID aTrackId)
+MediaStreamGraph::CreateAudioCaptureStream(TrackID aTrackId, AbstractThread* aMainThread)
 {
-  AudioCaptureStream* stream = new AudioCaptureStream(aTrackId);
+  AudioCaptureStream* stream = new AudioCaptureStream(aTrackId, aMainThread);
   AddStream(stream);
   return stream;
 }
@@ -4069,6 +4054,17 @@ MediaStreamGraphImpl::ConnectToCaptureStream(uint64_t aWindowId,
     }
   }
   return nullptr;
+}
+
+void
+MediaStreamGraph::
+DispatchToMainThreadAfterStreamStateUpdate(AbstractThread* aMainThread,
+                                           already_AddRefed<nsIRunnable> aRunnable)
+{
+  MOZ_ASSERT(aMainThread);
+  AssertOnGraphThreadOrNotRunning();
+  *mPendingUpdateRunnables.AppendElement() =
+    aMainThread->CreateDirectTaskDrainer(Move(aRunnable));
 }
 
 } // namespace mozilla

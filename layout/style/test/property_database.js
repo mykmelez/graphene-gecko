@@ -1481,113 +1481,10 @@ var gCSSProperties = {
     initial_values: [
       "medium",
       "3px",
-      "-moz-calc(3px)",
-      "-moz-calc(5em + 3px - 5em)",
       "calc(3px)",
       "calc(5em + 3px - 5em)",
     ],
     other_values: [ "thin", "15px",
-      /* valid -moz-calc() values */
-      "-moz-calc(-2px)",
-      "-moz-calc(2px)",
-      "-moz-calc(3em)",
-      "-moz-calc(3em + 2px)",
-      "-moz-calc( 3em + 2px)",
-      "-moz-calc(3em + 2px )",
-      "-moz-calc( 3em + 2px )",
-      "-moz-calc(3*25px)",
-      "-moz-calc(3 *25px)",
-      "-moz-calc(3 * 25px)",
-      "-moz-calc(3* 25px)",
-      "-moz-calc(25px*3)",
-      "-moz-calc(25px *3)",
-      "-moz-calc(25px* 3)",
-      "-moz-calc(25px * 3)",
-      "-moz-calc(25px * 3 / 4)",
-      "-moz-calc((25px * 3) / 4)",
-      "-moz-calc(25px * (3 / 4))",
-      "-moz-calc(3 * 25px / 4)",
-      "-moz-calc((3 * 25px) / 4)",
-      "-moz-calc(3 * (25px / 4))",
-      "-moz-calc(3em + 25px * 3 / 4)",
-      "-moz-calc(3em + (25px * 3) / 4)",
-      "-moz-calc(3em + 25px * (3 / 4))",
-      "-moz-calc(25px * 3 / 4 + 3em)",
-      "-moz-calc((25px * 3) / 4 + 3em)",
-      "-moz-calc(25px * (3 / 4) + 3em)",
-      "-moz-calc(3em + (25px * 3 / 4))",
-      "-moz-calc(3em + ((25px * 3) / 4))",
-      "-moz-calc(3em + (25px * (3 / 4)))",
-      "-moz-calc((25px * 3 / 4) + 3em)",
-      "-moz-calc(((25px * 3) / 4) + 3em)",
-      "-moz-calc((25px * (3 / 4)) + 3em)",
-      "-moz-calc(3*25px + 1in)",
-      "-moz-calc(1in - 3em + 2px)",
-      "-moz-calc(1in - (3em + 2px))",
-      "-moz-calc((1in - 3em) + 2px)",
-      "-moz-calc(50px/2)",
-      "-moz-calc(50px/(2 - 1))",
-      "-moz-calc(-3px)",
-      /* numeric reduction cases */
-      "-moz-calc(5 * 3 * 2em)",
-      "-moz-calc(2em * 5 * 3)",
-      "-moz-calc((5 * 3) * 2em)",
-      "-moz-calc(2em * (5 * 3))",
-      "-moz-calc((5 + 3) * 2em)",
-      "-moz-calc(2em * (5 + 3))",
-      "-moz-calc(2em / (5 + 3))",
-      "-moz-calc(2em * (5*2 + 3))",
-      "-moz-calc(2em * ((5*2) + 3))",
-      "-moz-calc(2em * (5*(2 + 3)))",
-
-      "-moz-calc((5 + 7) * 3em)",
-      "-moz-calc((5em + 3em) - 2em)",
-      "-moz-calc((5em - 3em) + 2em)",
-      "-moz-calc(2em - (5em - 3em))",
-      "-moz-calc(2em + (5em - 3em))",
-      "-moz-calc(2em - (5em + 3em))",
-      "-moz-calc(2em + (5em + 3em))",
-      "-moz-calc(2em + 5em - 3em)",
-      "-moz-calc(2em - 5em - 3em)",
-      "-moz-calc(2em + 5em + 3em)",
-      "-moz-calc(2em - 5em + 3em)",
-
-      "-moz-calc(2em / 4 * 3)",
-      "-moz-calc(2em * 4 / 3)",
-      "-moz-calc(2em * 4 * 3)",
-      "-moz-calc(2em / 4 / 3)",
-      "-moz-calc(4 * 2em / 3)",
-      "-moz-calc(4 / 3 * 2em)",
-
-      "-moz-calc((2em / 4) * 3)",
-      "-moz-calc((2em * 4) / 3)",
-      "-moz-calc((2em * 4) * 3)",
-      "-moz-calc((2em / 4) / 3)",
-      "-moz-calc((4 * 2em) / 3)",
-      "-moz-calc((4 / 3) * 2em)",
-
-      "-moz-calc(2em / (4 * 3))",
-      "-moz-calc(2em * (4 / 3))",
-      "-moz-calc(2em * (4 * 3))",
-      "-moz-calc(2em / (4 / 3))",
-      "-moz-calc(4 * (2em / 3))",
-
-      // Valid cases with unitless zero (which is never
-      // a length).
-      "-moz-calc(0 * 2em)",
-      "-moz-calc(2em * 0)",
-      "-moz-calc(3em + 0 * 2em)",
-      "-moz-calc(3em + 2em * 0)",
-      "-moz-calc((0 + 2) * 2em)",
-      "-moz-calc((2 + 0) * 2em)",
-      // And test zero lengths while we're here.
-      "-moz-calc(2 * 0px)",
-      "-moz-calc(0 * 0px)",
-      "-moz-calc(2 * 0em)",
-      "-moz-calc(0 * 0em)",
-      "-moz-calc(0px * 0)",
-      "-moz-calc(0px * 2)",
-
       /* valid calc() values */
       "calc(-2px)",
       "calc(2px)",
@@ -1691,13 +1588,6 @@ var gCSSProperties = {
 
     ],
     invalid_values: [ "20", "-1px", "red", "50%",
-      /* invalid -moz-calc() values */
-      "-moz-calc(2em+ 2px)",
-      "-moz-calc(2em +2px)",
-      "-moz-calc(2em+2px)",
-      "-moz-calc(2em- 2px)",
-      "-moz-calc(2em -2px)",
-      "-moz-calc(2em-2px)",
       /* invalid calc() values */
       "calc(2em+ 2px)",
       "calc(2em +2px)",
@@ -2339,7 +2229,7 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "border-box" ],
     other_values: [ "content-box", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "margin-box", "border-box border-box" ]
+    invalid_values: [ "margin-box", "border-box border-box", "fill-box", "stroke-box", "view-box", "no-clip" ]
   },
   "background-color": {
     domProp: "backgroundColor",
@@ -2374,7 +2264,7 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "padding-box" ],
     other_values: [ "border-box", "content-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "margin-box", "padding-box padding-box" ]
+    invalid_values: [ "margin-box", "padding-box padding-box", "fill-box", "stroke-box", "view-box", "no-clip" ]
   },
   "background-position": {
     domProp: "backgroundPosition",
@@ -2835,6 +2725,18 @@ var gCSSProperties = {
     initial_values: [ "top" ],
     other_values: [ "bottom", "left", "right", "top-outside", "bottom-outside" ],
     invalid_values: []
+  },
+  "caret-color": {
+    domProp: "caretColor",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    prerequisites: { "color": "black" },
+    // Though "auto" is an independent computed-value time keyword value,
+    // it is not distinguishable from currentcolor because getComputedStyle
+    // always returns used value for <color>.
+    initial_values: [ "auto", "currentcolor", "black", "rgb(0,0,0)" ],
+    other_values: [ "green", "transparent", "rgba(128,128,128,.5)", "#123" ],
+    invalid_values: [ "#0", "#00", "#00000", "cc00ff" ]
   },
   "clear": {
     domProp: "clear",
@@ -4057,8 +3959,13 @@ var gCSSProperties = {
     domProp: "width",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    /* computed value tests for width test more with display:block */
-    prerequisites: { "display": "block" },
+    prerequisites: {
+      // computed value tests for width test more with display:block
+      "display": "block",
+      // add some margin to avoid the initial "auto" value getting
+      // resolved to the same length as the parent element.
+      "margin-left": "5px",
+    },
     initial_values: [ " auto" ],
     /* XXX these have prerequisites */
     other_values: [ "15px", "3em", "15%",
@@ -4074,32 +3981,6 @@ var gCSSProperties = {
       "3.2e1px", "3.2e+1px", "3.2e0px", "3.2e+0px", "3.2e-0px", "3.2e-1px",
       "3e1%", "3e+1%", "3e0%", "3e+0%", "3e-0%", "3e-1%",
       "3.2e1%", "3.2e+1%", "3.2e0%", "3.2e+0%", "3.2e-0%", "3.2e-1%",
-      /* valid -moz-calc() values */
-      "-moz-calc(-2px)",
-      "-moz-calc(2px)",
-      "-moz-calc(50%)",
-      "-moz-calc(50% + 2px)",
-      "-moz-calc( 50% + 2px)",
-      "-moz-calc(50% + 2px )",
-      "-moz-calc( 50% + 2px )",
-      "-moz-calc(50% - -2px)",
-      "-moz-calc(2px - -50%)",
-      "-moz-calc(3*25px)",
-      "-moz-calc(3 *25px)",
-      "-moz-calc(3 * 25px)",
-      "-moz-calc(3* 25px)",
-      "-moz-calc(25px*3)",
-      "-moz-calc(25px *3)",
-      "-moz-calc(25px* 3)",
-      "-moz-calc(25px * 3)",
-      "-moz-calc(3*25px + 50%)",
-      "-moz-calc(50% - 3em + 2px)",
-      "-moz-calc(50% - (3em + 2px))",
-      "-moz-calc((50% - 3em) + 2px)",
-      "-moz-calc(2em)",
-      "-moz-calc(50%)",
-      "-moz-calc(50px/2)",
-      "-moz-calc(50px/(2 - 1))",
       /* valid calc() values */
       "calc(-2px)",
       "calc(2px)",
@@ -4128,10 +4009,6 @@ var gCSSProperties = {
       "calc(50px/(2 - 1))",
     ],
     invalid_values: [ "none", "-2px",
-      /* invalid -moz-calc() values */
-      "-moz-calc(50%+ 2px)",
-      "-moz-calc(50% +2px)",
-      "-moz-calc(50%+2px)",
       /* invalid calc() values */
       "calc(50%+ 2px)",
       "calc(50% +2px)",
@@ -5234,7 +5111,12 @@ var gCSSProperties = {
     get_computed: logical_axis_prop_get_computed,
     /* XXX testing auto has prerequisites */
     initial_values: [ "auto" ],
-    prerequisites: { "display": "block" },
+    prerequisites: {
+      "display": "block",
+      // add some margin to avoid the initial "auto" value getting
+      // resolved to the same length as the parent element.
+      "margin-left": "5px",
+    },
     other_values: [ "15px", "3em", "15%",
       // these three keywords compute to the initial value only when the
       // writing mode is vertical, and we're testing with a horizontal
@@ -7149,8 +7031,8 @@ if (SupportsMaskShorthand()) {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "border-box" ],
-    other_values: [ "content-box", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "margin-box", "content-box content-box" ]
+    other_values: [ "content-box", "fill-box", "stroke-box", "view-box", "no-clip", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
+    invalid_values: [ "content-box content-box", "margin-box" ]
   };
   gCSSProperties["mask-image"] = {
     domProp: "maskImage",
@@ -7192,8 +7074,8 @@ if (SupportsMaskShorthand()) {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "border-box" ],
-    other_values: [ "padding-box", "content-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "margin-box", "padding-box padding-box" ]
+    other_values: [ "padding-box", "content-box", "fill-box", "stroke-box", "view-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
+    invalid_values: [ "padding-box padding-box", "no-clip", "margin-box" ]
   };
   gCSSProperties["mask-position"] = {
     domProp: "maskPosition",
@@ -7889,6 +7771,10 @@ if (IsCSSPropertyPrefEnabled("layout.css.background-clip-text.enabled")) {
     "url(404.png) green padding-box text",
     "content-box text url(404.png) blue"
   );
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.display-flow-root.enabled")) {
+  gCSSProperties["display"].other_values.push("flow-root");
 }
 
 // Copy aliased properties' fields from their alias targets.

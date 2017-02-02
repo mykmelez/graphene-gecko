@@ -66,7 +66,6 @@ function BrowserElementParent() {
   this._domRequestReady = false;
   this._pendingAPICalls = [];
   this._pendingDOMRequests = {};
-  this._pendingSetInputMethodActive = [];
   this._nextPaintListeners = [];
   this._pendingDOMFullscreen = false;
 
@@ -225,11 +224,11 @@ BrowserElementParent.prototype = {
   _isAlive: function() {
     return !Cu.isDeadWrapper(this._frameElement) &&
            !Cu.isDeadWrapper(this._frameElement.ownerDocument) &&
-           !Cu.isDeadWrapper(this._frameElement.ownerDocument.defaultView);
+           !Cu.isDeadWrapper(this._frameElement.ownerGlobal);
   },
 
   get _window() {
-    return this._frameElement.ownerDocument.defaultView;
+    return this._frameElement.ownerGlobal;
   },
 
   get _windowUtils() {
@@ -693,7 +692,7 @@ BrowserElementParent.prototype = {
       return null;
     }
 
-    let uri = Services.io.newURI(_url, null, null);
+    let uri = Services.io.newURI(_url);
     let url = uri.QueryInterface(Ci.nsIURL);
 
     debug('original _options = ' + uneval(_options));
@@ -782,7 +781,7 @@ BrowserElementParent.prototype = {
                                              Ci.nsIRequestObserver])
     };
 
-    let referrer = Services.io.newURI(_options.referrer, null, null);
+    let referrer = Services.io.newURI(_options.referrer);
     let principal =
       Services.scriptSecurityManager.createCodebasePrincipal(
         referrer, this._frameLoader.loadContext.originAttributes);
@@ -895,21 +894,6 @@ BrowserElementParent.prototype = {
     } else {
       run();
     }
-  },
-
-  setInputMethodActive: function(isActive) {
-    if (!this._isAlive()) {
-      throw Components.Exception("Dead content process",
-                                 Cr.NS_ERROR_DOM_INVALID_STATE_ERR);
-    }
-
-    if (typeof isActive !== 'boolean') {
-      throw Components.Exception("Invalid argument",
-                                 Cr.NS_ERROR_INVALID_ARG);
-    }
-
-    return this._sendDOMRequest('set-input-method-active',
-                                {isActive: isActive});
   },
 
   getAudioChannelVolume: function(aAudioChannel) {

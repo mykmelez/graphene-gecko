@@ -495,18 +495,6 @@ class TestRecursiveMakeBackend(BackendTester):
         self.assertIn('quux.png', m)
         self.assertIn('icons/foo.ico', m)
 
-    def test_sdk_files(self):
-        """Ensure SDK_FILES is handled properly."""
-        env = self._consume('sdk-files', RecursiveMakeBackend)
-
-        #SDK_FILES should appear in the dist_sdk install manifest.
-        m = InstallManifest(path=os.path.join(env.topobjdir,
-            '_build_manifests', 'install', 'dist_sdk'))
-        self.assertEqual(len(m), 3)
-        self.assertIn('bar.ico', m)
-        self.assertIn('quux.png', m)
-        self.assertIn('icons/foo.ico', m)
-
     def test_test_manifests_files_written(self):
         """Ensure test manifests get turned into files."""
         env = self._consume('test-manifests-written', RecursiveMakeBackend)
@@ -519,7 +507,7 @@ class TestRecursiveMakeBackend(BackendTester):
 
         lines = [l.strip() for l in open(x_master, 'rt').readlines()]
         self.assertEqual(lines, [
-            '; THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.',
+            '# THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.',
             '',
             '[include:dir1/xpcshell.ini]',
             '[include:xpcshell.ini]',
@@ -749,6 +737,35 @@ class TestRecursiveMakeBackend(BackendTester):
 
         self.assertEqual(lines, expected)
 
+    def test_host_rust_library(self):
+        """Test that a Rust library is written to backend.mk correctly."""
+        env = self._consume('host-rust-library', RecursiveMakeBackend)
+
+        backend_path = mozpath.join(env.topobjdir, 'backend.mk')
+        lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
+
+        expected = [
+            'HOST_RUST_LIBRARY_FILE := x86_64-unknown-linux-gnu/release/libhostrusttool.a',
+            'CARGO_FILE := $(srcdir)/Cargo.toml',
+        ]
+
+        self.assertEqual(lines, expected)
+
+    def test_host_rust_library_with_features(self):
+        """Test that a host Rust library with features is written to backend.mk correctly."""
+        env = self._consume('host-rust-library-features', RecursiveMakeBackend)
+
+        backend_path = mozpath.join(env.topobjdir, 'backend.mk')
+        lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
+
+        expected = [
+            'HOST_RUST_LIBRARY_FILE := x86_64-unknown-linux-gnu/release/libhostrusttool.a',
+            'CARGO_FILE := $(srcdir)/Cargo.toml',
+            'HOST_RUST_LIBRARY_FEATURES := musthave cantlivewithout',
+        ]
+
+        self.assertEqual(lines, expected)
+
     def test_rust_library_with_features(self):
         """Test that a Rust library with features is written to backend.mk correctly."""
         env = self._consume('rust-library-features', RecursiveMakeBackend)
@@ -768,11 +785,11 @@ class TestRecursiveMakeBackend(BackendTester):
         """Test that {HOST_,}RUST_PROGRAMS are written to backend.mk correctly."""
         env = self._consume('rust-programs', RecursiveMakeBackend)
 
-        backend_path = mozpath.join(env.topobjdir, 'backend.mk')
+        backend_path = mozpath.join(env.topobjdir, 'code/backend.mk')
         lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
 
         expected = [
-            'CARGO_FILE := %s/Cargo.toml' % env.topsrcdir,
+            'CARGO_FILE := %s/code/Cargo.toml' % env.topsrcdir,
             'RUST_PROGRAMS += i686-pc-windows-msvc/release/target.exe',
             'RUST_CARGO_PROGRAMS += target',
             'HOST_RUST_PROGRAMS += i686-pc-windows-msvc/release/host.exe',
@@ -780,6 +797,11 @@ class TestRecursiveMakeBackend(BackendTester):
         ]
 
         self.assertEqual(lines, expected)
+
+        root_deps_path = mozpath.join(env.topobjdir, 'root-deps.mk')
+        lines = [l.strip() for l in open(root_deps_path, 'rt').readlines()]
+
+        self.assertTrue(any(l == 'recurse_compile: code/host code/target' for l in lines))
 
     def test_final_target(self):
         """Test that FINAL_TARGET is written to backend.mk correctly."""

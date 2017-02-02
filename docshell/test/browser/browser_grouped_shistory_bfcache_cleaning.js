@@ -6,11 +6,10 @@ add_task(function* () {
   // Wait for a process change and then fulfil the promise.
   function awaitProcessChange(browser) {
     return new Promise(resolve => {
-      browser.addEventListener("BrowserChangedProcess", function bcp(e) {
-        browser.removeEventListener("BrowserChangedProcess", bcp);
+      browser.addEventListener("BrowserChangedProcess", function(e) {
         ok(true, "The browser changed process!");
         resolve();
-      });
+      }, {once: true});
     });
   }
 
@@ -23,14 +22,13 @@ add_task(function* () {
   yield BrowserTestUtils.withNewTab({ gBrowser, url: "data:text/html,a" }, function* (browser1) {
     // Set up the grouped SHEntry setup
     let tab2 = gBrowser.loadOneTab("data:text/html,b", {
-      referrerPolicy: Ci.nsIHttpChannel.REFERRER_POLICY_DEFAULT,
+      referrerPolicy: Ci.nsIHttpChannel.REFERRER_POLICY_UNSET,
       allowThirdPartyFixup: true,
       relatedToCurrent: true,
       isPrerendered: true,
     });
     yield BrowserTestUtils.browserLoaded(tab2.linkedBrowser);
-    browser1.frameLoader.appendPartialSessionHistoryAndSwap(
-      tab2.linkedBrowser.frameLoader);
+    browser1.frameLoader.appendPartialSHistoryAndSwap(tab2.linkedBrowser.frameLoader);
     yield awaitProcessChange(browser1);
     ok(isAlive(tab2));
 
@@ -48,11 +46,10 @@ add_task(function* () {
     // The 4th navigation should kill the frameloader
     browser1.loadURI("data:text/html,f", null, null);
     yield new Promise(resolve => {
-      tab2.addEventListener("TabClose", function f() {
-        tab2.removeEventListener("TabClose", f);
+      tab2.addEventListener("TabClose", function() {
         ok(true, "The tab is being closed!\n");
         resolve();
-      });
+      }, {once: true});
     });
     // We don't check for !isAlive() as TabClose is called during
     // _beginRemoveTab, which means that the frameloader may not be dead yet. We

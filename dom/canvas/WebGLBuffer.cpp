@@ -18,6 +18,8 @@ WebGLBuffer::WebGLBuffer(WebGLContext* webgl, GLuint buf)
     , mContent(Kind::Undefined)
     , mUsage(LOCAL_GL_STATIC_DRAW)
     , mByteLength(0)
+    , mTFBindCount(0)
+    , mNonTFBindCount(0)
 {
     mContext->mBuffers.insertBack(this);
 }
@@ -173,6 +175,9 @@ bool
 WebGLBuffer::ElementArrayCacheBufferData(const void* ptr,
                                          size_t bufferSizeInBytes)
 {
+    if (mContext->IsWebGL2())
+        return true;
+
     if (mContent == Kind::ElementArray)
         return mCache->BufferData(ptr, bufferSizeInBytes);
 
@@ -183,6 +188,9 @@ void
 WebGLBuffer::ElementArrayCacheBufferSubData(size_t pos, const void* ptr,
                                             size_t updateSizeInBytes)
 {
+    if (mContext->IsWebGL2())
+        return;
+
     if (mContent == Kind::ElementArray)
         mCache->BufferSubData(pos, ptr, updateSizeInBytes);
 }
@@ -198,14 +206,22 @@ WebGLBuffer::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
 bool
 WebGLBuffer::Validate(GLenum type, uint32_t maxAllowed, size_t first, size_t count) const
 {
+    if (mContext->IsWebGL2())
+        return true;
+
     return mCache->Validate(type, maxAllowed, first, count);
 }
 
 bool
 WebGLBuffer::IsElementArrayUsedWithMultipleTypes() const
 {
+    if (mContext->IsWebGL2())
+        return false;
+
     return mCache->BeenUsedWithMultipleTypes();
 }
+
+////
 
 bool
 WebGLBuffer::ValidateCanBindToTarget(const char* funcName, GLenum target)

@@ -13,12 +13,10 @@ namespace mozilla {
 extern LazyLogModule gMediaDecoderLog;
 
 #undef FMT
-#undef DUMP_LOG
 
 #define FMT(x, ...) "VideoSink=%p " x, this, ##__VA_ARGS__
 #define VSINK_LOG(x, ...)   MOZ_LOG(gMediaDecoderLog, LogLevel::Debug,   (FMT(x, ##__VA_ARGS__)))
 #define VSINK_LOG_V(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Verbose, (FMT(x, ##__VA_ARGS__)))
-#define DUMP_LOG(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString(FMT(x, ##__VA_ARGS__)).get(), nullptr, nullptr, -1)
 
 using namespace mozilla::layers;
 
@@ -185,7 +183,7 @@ VideoSink::Start(int64_t aStartTime, const MediaInfo& aInfo)
     RefPtr<GenericPromise> p = mAudioSink->OnEnded(TrackInfo::kVideoTrack);
     if (p) {
       RefPtr<VideoSink> self = this;
-      mVideoSinkEndRequest.Begin(p->Then(mOwnerThread, __func__,
+      p->Then(mOwnerThread, __func__,
         [self] () {
           self->mVideoSinkEndRequest.Complete();
           self->TryUpdateRenderedVideoFrames();
@@ -197,7 +195,8 @@ VideoSink::Start(int64_t aStartTime, const MediaInfo& aInfo)
           self->mVideoSinkEndRequest.Complete();
           self->TryUpdateRenderedVideoFrames();
           self->MaybeResolveEndPromise();
-        }));
+        })
+        ->Track(mVideoSinkEndRequest);
     }
 
     ConnectListener();
@@ -472,17 +471,17 @@ VideoSink::MaybeResolveEndPromise()
   }
 }
 
-void
-VideoSink::DumpDebugInfo()
+nsCString
+VideoSink::GetDebugInfo()
 {
   AssertOwnerThread();
-  DUMP_LOG(
+  return nsPrintfCString(
     "IsStarted=%d IsPlaying=%d, VideoQueue: finished=%d size=%d, "
     "mVideoFrameEndTime=%lld mHasVideo=%d mVideoSinkEndRequest.Exists()=%d "
-    "mEndPromiseHolder.IsEmpty()=%d",
+    "mEndPromiseHolder.IsEmpty()=%d\n",
     IsStarted(), IsPlaying(), VideoQueue().IsFinished(), VideoQueue().GetSize(),
-    mVideoFrameEndTime, mHasVideo, mVideoSinkEndRequest.Exists(), mEndPromiseHolder.IsEmpty());
-  mAudioSink->DumpDebugInfo();
+    mVideoFrameEndTime, mHasVideo, mVideoSinkEndRequest.Exists(), mEndPromiseHolder.IsEmpty())
+    + mAudioSink->GetDebugInfo();
 }
 
 } // namespace media

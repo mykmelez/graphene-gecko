@@ -34,8 +34,6 @@ const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const nodeConstants = require("devtools/shared/dom-node-constants");
 const {l10n, isContentStylesheet, shortSource, FILTER, STATUS} = require("devtools/shared/inspector/css-logic");
 
-loader.lazyRequireGetter(this, "CSSLexer", "devtools/shared/css/lexer");
-
 /**
  * @param {function} isInherited A function that determines if the CSS property
  *                   is inherited.
@@ -684,14 +682,12 @@ CssLogic.getComputedStyle = function (node) {
   if (!node ||
       Cu.isDeadWrapper(node) ||
       node.nodeType !== nodeConstants.ELEMENT_NODE ||
-      !node.ownerDocument ||
-      !node.ownerDocument.defaultView) {
+      !node.ownerGlobal) {
     return null;
   }
 
   let {bindingElement, pseudo} = CssLogic.getBindingElementAndPseudo(node);
-  return node.ownerDocument.defaultView.getComputedStyle(bindingElement,
-                                                         pseudo);
+  return node.ownerGlobal.getComputedStyle(bindingElement, pseudo);
 };
 
 /**

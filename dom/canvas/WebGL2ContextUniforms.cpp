@@ -161,7 +161,7 @@ ValidateUniformEnum(WebGLContext* webgl, GLenum pname, const char* info)
         return true;
 
     default:
-        webgl->ErrorInvalidEnum("%s: invalid pname: %s", info, webgl->EnumName(pname));
+        webgl->ErrorInvalidEnumArg(info, "pname", pname);
         return false;
     }
 }
@@ -181,6 +181,14 @@ WebGL2Context::GetActiveUniforms(JSContext* cx, const WebGLProgram& program,
 
     if (!ValidateObject("getActiveUniforms: program", program))
         return;
+
+    const auto& numActiveUniforms = program.LinkInfo()->uniforms.size();
+    for (const auto& curIndex : uniformIndices) {
+        if (curIndex >= numActiveUniforms) {
+            ErrorInvalidValue("%s: Too-large active uniform index queried.", funcName);
+            return;
+        }
+    }
 
     const auto& count = uniformIndices.Length();
 

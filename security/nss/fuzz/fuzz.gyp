@@ -4,79 +4,173 @@
 {
   'includes': [
     '../coreconf/config.gypi',
-    '../cmd/platlibs.gypi'
   ],
+  'target_defaults': {
+    'variables': {
+      'debug_optimization_level': '2',
+    },
+    'target_conditions': [
+      [ '_type=="executable"', {
+        'libraries!': [
+          '<@(nspr_libs)',
+        ],
+        'libraries': [
+          '<(nss_dist_obj_dir)/lib/libplds4.a',
+          '<(nss_dist_obj_dir)/lib/libnspr4.a',
+          '<(nss_dist_obj_dir)/lib/libplc4.a',
+        ],
+      }],
+    ],
+  },
   'targets': [
     {
-      'target_name': 'libFuzzer',
-      'type': 'static_library',
-      'sources': [
-        'libFuzzer/FuzzerCrossOver.cpp',
-        'libFuzzer/FuzzerDriver.cpp',
-        'libFuzzer/FuzzerExtFunctionsDlsym.cpp',
-        'libFuzzer/FuzzerExtFunctionsWeak.cpp',
-        'libFuzzer/FuzzerIO.cpp',
-        'libFuzzer/FuzzerLoop.cpp',
-        'libFuzzer/FuzzerMutate.cpp',
-        'libFuzzer/FuzzerSHA1.cpp',
-        'libFuzzer/FuzzerTracePC.cpp',
-        'libFuzzer/FuzzerTraceState.cpp',
-        'libFuzzer/FuzzerUtil.cpp',
-        'libFuzzer/FuzzerUtilDarwin.cpp',
-        'libFuzzer/FuzzerUtilLinux.cpp',
+      'target_name': 'fuzz_base',
+      'dependencies': [
+        '<(DEPTH)/lib/certdb/certdb.gyp:certdb',
+        '<(DEPTH)/lib/certhigh/certhigh.gyp:certhi',
+        '<(DEPTH)/lib/cryptohi/cryptohi.gyp:cryptohi',
+        '<(DEPTH)/lib/base/base.gyp:nssb',
+        '<(DEPTH)/lib/dev/dev.gyp:nssdev',
+        '<(DEPTH)/lib/pki/pki.gyp:nsspki',
+        '<(DEPTH)/lib/util/util.gyp:nssutil',
+        '<(DEPTH)/lib/nss/nss.gyp:nss_static',
+        '<(DEPTH)/lib/pkcs7/pkcs7.gyp:pkcs7',
+        # This is a static build of pk11wrap, softoken, and freebl.
+        '<(DEPTH)/lib/pk11wrap/pk11wrap.gyp:pk11wrap_static',
       ],
-      'cflags': [
-        '-O2',
+      'conditions': [
+        ['fuzz_oss==0', {
+          'type': 'static_library',
+          'sources': [
+            'libFuzzer/FuzzerCrossOver.cpp',
+            'libFuzzer/FuzzerDriver.cpp',
+            'libFuzzer/FuzzerExtFunctionsDlsym.cpp',
+            'libFuzzer/FuzzerExtFunctionsWeak.cpp',
+            'libFuzzer/FuzzerExtFunctionsWeakAlias.cpp',
+            'libFuzzer/FuzzerIO.cpp',
+            'libFuzzer/FuzzerIOPosix.cpp',
+            'libFuzzer/FuzzerIOWindows.cpp',
+            'libFuzzer/FuzzerLoop.cpp',
+            'libFuzzer/FuzzerMain.cpp',
+            'libFuzzer/FuzzerMerge.cpp',
+            'libFuzzer/FuzzerMutate.cpp',
+            'libFuzzer/FuzzerSHA1.cpp',
+            'libFuzzer/FuzzerTracePC.cpp',
+            'libFuzzer/FuzzerTraceState.cpp',
+            'libFuzzer/FuzzerUtil.cpp',
+            'libFuzzer/FuzzerUtilDarwin.cpp',
+            'libFuzzer/FuzzerUtilLinux.cpp',
+            'libFuzzer/FuzzerUtilPosix.cpp',
+            'libFuzzer/FuzzerUtilWindows.cpp',
+          ],
+          'cflags/': [
+            ['exclude', '-fsanitize-coverage'],
+          ],
+          'xcode_settings': {
+            'OTHER_CFLAGS/': [
+              ['exclude', '-fsanitize-coverage'],
+            ],
+          },
+          'direct_dependent_settings': {
+            'include_dirs': [
+              'libFuzzer',
+            ],
+          },
+        }, {
+          'type': 'none',
+          'direct_dependent_settings': {
+            'libraries': ['-lFuzzingEngine'],
+          }
+        }]
       ],
-      'cflags!': [
-        '-O1',
-      ],
-      'cflags/': [
-        ['exclude', '-fsanitize'],
-      ],
-      'xcode_settings': {
-        'GCC_OPTIMIZATION_LEVEL': '2', # -O2
-        'OTHER_CFLAGS/': [
-          ['exclude', '-fsanitize'],
-        ],
-      },
     },
     {
-      'target_name': 'nssfuzz',
+      'target_name': 'nssfuzz-pkcs8',
       'type': 'executable',
       'sources': [
         'asn1_mutators.cc',
-        'nssfuzz.cc',
         'pkcs8_target.cc',
-        'quickder_targets.cc',
       ],
       'dependencies': [
         '<(DEPTH)/exports.gyp:nss_exports',
-        'libFuzzer',
+        'fuzz_base',
       ],
-      'cflags': [
-        '-O2',
+    },
+    {
+      'target_name': 'nssfuzz-quickder',
+      'type': 'executable',
+      'sources': [
+        'asn1_mutators.cc',
+        'quickder_target.cc',
       ],
-      'cflags!': [
-        '-O1',
+      'dependencies': [
+        '<(DEPTH)/exports.gyp:nss_exports',
+        'fuzz_base',
       ],
-      'cflags/': [
-        ['exclude', '-fsanitize-coverage'],
+    },
+    {
+      'target_name': 'nssfuzz-hash',
+      'type': 'executable',
+      'sources': [
+        'hash_target.cc',
       ],
-      'xcode_settings': {
-        'GCC_OPTIMIZATION_LEVEL': '2', # -O2
-        'OTHER_CFLAGS/': [
-          ['exclude', '-fsanitize-coverage'],
-        ],
-      },
+      'dependencies': [
+        '<(DEPTH)/exports.gyp:nss_exports',
+        'fuzz_base',
+      ],
+    },
+    {
+      'target_name': 'nssfuzz-mpi',
+      'type': 'executable',
+      'sources': [
+        'mpi_target.cc',
+      ],
+      'dependencies': [
+        '<(DEPTH)/exports.gyp:nss_exports',
+        'fuzz_base',
+      ],
+      'conditions': [
+        [ 'fuzz_oss==1', {
+          'libraries': [
+            '/usr/lib/x86_64-linux-gnu/libcrypto.a',
+          ],
+        }, {
+          'libraries': [
+            '-lcrypto',
+          ],
+        }],
+      ],
+      'include_dirs': [
+        '<(DEPTH)/lib/freebl/mpi',
+      ],
+    },
+    {
+      'target_name': 'nssfuzz-certDN',
+      'type': 'executable',
+      'sources': [
+        'certDN_target.cc',
+      ],
+      'dependencies': [
+        '<(DEPTH)/exports.gyp:nss_exports',
+        'fuzz_base',
+      ],
+    },
+    {
+      'target_name': 'nssfuzz',
+      'type': 'none',
+      'dependencies': [
+        'nssfuzz-certDN',
+        'nssfuzz-hash',
+        'nssfuzz-pkcs8',
+        'nssfuzz-quickder',
+      ],
+      'conditions': [
+        ['OS=="linux"', {
+          'dependencies': [
+            'nssfuzz-mpi',
+          ],
+        }],
+      ],
     }
   ],
-  'target_defaults': {
-    'include_dirs': [
-      'libFuzzer',
-    ],
-  },
-  'variables': {
-    'module': 'nss',
-  }
 }

@@ -12,11 +12,11 @@ const {Task} = require("devtools/shared/task");
 const {Tools} = require("devtools/client/definitions");
 const {l10n} = require("devtools/shared/inspector/css-logic");
 const {ELEMENT_STYLE} = require("devtools/shared/specs/styles");
-const {OutputParser} = require("devtools/client/shared/output-parser");
+const OutputParser = require("devtools/client/shared/output-parser");
 const {PrefObserver} = require("devtools/client/shared/prefs");
-const {ElementStyle} = require("devtools/client/inspector/rules/models/element-style");
-const {Rule} = require("devtools/client/inspector/rules/models/rule");
-const {RuleEditor} = require("devtools/client/inspector/rules/views/rule-editor");
+const ElementStyle = require("devtools/client/inspector/rules/models/element-style");
+const Rule = require("devtools/client/inspector/rules/models/rule");
+const RuleEditor = require("devtools/client/inspector/rules/views/rule-editor");
 const {gDevTools} = require("devtools/client/framework/devtools");
 const {getCssProperties} = require("devtools/shared/fronts/css-properties");
 const {
@@ -30,9 +30,9 @@ const StyleInspectorMenu = require("devtools/client/inspector/shared/style-inspe
 const TooltipsOverlay = require("devtools/client/inspector/shared/tooltips-overlay");
 const {createChild, promiseWarn, throttle} = require("devtools/client/inspector/shared/utils");
 const EventEmitter = require("devtools/shared/event-emitter");
-const {KeyShortcuts} = require("devtools/client/shared/key-shortcuts");
+const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 const clipboardHelper = require("devtools/shared/platform/clipboard");
-const {AutocompletePopup} = require("devtools/client/shared/autocomplete-popup");
+const AutocompletePopup = require("devtools/client/shared/autocomplete-popup");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const PREF_UA_STYLES = "devtools.inspector.showUserAgentStyles";
@@ -703,7 +703,7 @@ CssRuleView.prototype = {
     this.styleWindow = null;
 
     if (this.element.parentNode) {
-      this.element.parentNode.removeChild(this.element);
+      this.element.remove();
     }
 
     if (this._elementStyle) {
@@ -986,12 +986,12 @@ CssRuleView.prototype = {
     header.addEventListener("dblclick", () => {
       this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
-    }, false);
+    });
 
     twisty.addEventListener("click", () => {
       this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
-    }, false);
+    });
 
     if (isPseudo) {
       this._toggleContainerVisibility(twisty, container, isPseudo,
@@ -1089,11 +1089,11 @@ CssRuleView.prototype = {
         this.element.appendChild(div);
       }
 
-      let inheritedSource = rule.inheritedSource;
+      let inheritedSource = rule.inherited;
       if (inheritedSource && inheritedSource !== lastInheritedSource) {
         let div = this.styleDocument.createElementNS(HTML_NS, "div");
         div.className = this._getRuleViewHeaderClassName();
-        div.textContent = inheritedSource;
+        div.textContent = rule.inheritedSource;
         lastInheritedSource = inheritedSource;
         this.element.appendChild(div);
       }
@@ -1607,7 +1607,6 @@ RuleViewTool.prototype = {
           toolbox.getCurrentPanel().selectStyleSheet(url, line, column);
         });
       }
-      return;
     });
   },
 

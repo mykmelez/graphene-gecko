@@ -42,8 +42,6 @@ static const char16_t UNDERLINE    = '_';
 static const char16_t TILDE        = '~';
 static const char16_t WILDCARD     = '*';
 static const char16_t SINGLEQUOTE  = '\'';
-static const char16_t OPEN_CURL    = '{';
-static const char16_t CLOSE_CURL   = '}';
 static const char16_t NUMBER_SIGN  = '#';
 static const char16_t QUESTIONMARK = '?';
 static const char16_t PERCENT_SIGN = '%';
@@ -175,6 +173,32 @@ isValidHexDig(char16_t aHexDig)
   return (isNumberToken(aHexDig) ||
           (aHexDig >= 'A' && aHexDig <= 'F') ||
           (aHexDig >= 'a' && aHexDig <= 'f'));
+}
+
+static bool
+isValidBase64Value(const char16_t* cur, const char16_t* end)
+{
+  // Using grammar at https://w3c.github.io/webappsec-csp/#grammardef-nonce-source
+
+  // May end with one or two =
+  if (end > cur && *(end-1) == EQUALS) end--;
+  if (end > cur && *(end-1) == EQUALS) end--;
+
+  // Must have at least one character aside from any =
+  if (end == cur) {
+    return false;
+  }
+
+  // Rest must all be A-Za-z0-9+/-_
+  for (; cur < end; ++cur) {
+    if (!(isCharacterToken(*cur) || isNumberToken(*cur) ||
+          *cur == PLUS || *cur == SLASH ||
+          *cur == DASH || *cur == UNDERLINE)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void
@@ -500,26 +524,6 @@ nsCSPParser::host()
   return new nsCSPHostSrc(mCurValue);
 }
 
-// apps use special hosts; "app://{app-host-is-uid}""
-nsCSPHostSrc*
-nsCSPParser::appHost()
-{
-  CSPPARSERLOG(("nsCSPParser::appHost, mCurToken: %s, mCurValue: %s",
-               NS_ConvertUTF16toUTF8(mCurToken).get(),
-               NS_ConvertUTF16toUTF8(mCurValue).get()));
-
-  while (hostChar()) { /* consume */ }
-
-  // appHosts have to end with "}", otherwise we have to report an error
-  if (!accept(CLOSE_CURL)) {
-    const char16_t* params[] = { mCurToken.get() };
-    logWarningErrorToConsole(nsIScriptError::warningFlag, "couldntParseInvalidSource",
-                             params, ArrayLength(params));
-    return nullptr;
-  }
-  return new nsCSPHostSrc(mCurValue);
-}
-
 // keyword-source = "'self'" / "'unsafe-inline'" / "'unsafe-eval'"
 nsCSPBaseSrc*
 nsCSPParser::keywordSource()
@@ -589,13 +593,6 @@ nsCSPParser::hostSource()
                NS_ConvertUTF16toUTF8(mCurToken).get(),
                NS_ConvertUTF16toUTF8(mCurValue).get()));
 
-  // Special case handling for app specific hosts
-  if (accept(OPEN_CURL)) {
-    // If appHost() returns null, the error was handled in appHost().
-    // appHosts can not have a port, or path, we can return.
-    return appHost();
-  }
-
   nsCSPHostSrc* cspHost = host();
   if (!cspHost) {
     // Error was reported in host()
@@ -658,31 +655,6 @@ nsCSPParser::schemeSource()
   return new nsCSPSchemeSrc(scheme);
 }
 
-bool IsValidBase64Value(const char16_t* cur, const char16_t* end)
-{
-  // May end with one or two =
-  if (end > cur && *(end-1) == EQUALS) end--;
-  if (end > cur && *(end-1) == EQUALS) end--;
-
-  // Must have at least one character aside from any =
-  if (end == cur) {
-    return false;
-  }
-
-  // Rest is all A-Za-z0-9+/-_
-  for (; cur < end; ++cur) {
-    if (!((*cur >= 'a' && *cur <= 'z') ||
-          (*cur >= 'A' && *cur <= 'Z') ||
-          (*cur >= '0' && *cur <= '9') ||
-          *cur == PLUS || *cur == SLASH ||
-          *cur == DASH || *cur == UNDERLINE)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 // nonce-source = "'nonce-" nonce-value "'"
 nsCSPNonceSrc*
 nsCSPParser::nonceSource()
@@ -705,7 +677,7 @@ nsCSPParser::nonceSource()
   if (dashIndex < 0) {
     return nullptr;
   }
-  if (!IsValidBase64Value(expr.BeginReading() + dashIndex + 1, expr.EndReading())) {
+  if (!isValidBase64Value(expr.BeginReading() + dashIndex + 1, expr.EndReading())) {
     return nullptr;
   }
 
@@ -738,7 +710,7 @@ nsCSPParser::hashSource()
     return nullptr;
   }
 
-  if (!IsValidBase64Value(expr.BeginReading() + dashIndex + 1, expr.EndReading())) {
+  if (!isValidBase64Value(expr.BeginReading() + dashIndex + 1, expr.EndReading())) {
     return nullptr;
   }
 
@@ -923,6 +895,11 @@ nsCSPParser::referrerDirectiveValue(nsCSPDirective* aDir)
                              params, ArrayLength(params));
 
   // the referrer policy is valid, so go ahead and use it.
+  nsWeakPtr ctx = mCSPContext->GetLoadingContext();
+  nsCOMPtr<nsIDocument> doc = do_QueryReferent(ctx);
+  if (doc) {
+    doc->SetHasReferrerPolicyCSP(true);
+  }
   mPolicy->setReferrerPolicy(&mCurDir[1]);
   mPolicy->addDirective(aDir);
 }

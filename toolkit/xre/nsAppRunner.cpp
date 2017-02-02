@@ -17,11 +17,11 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
-#include "mozilla/ServoBindings.h"
 #include "mozilla/Telemetry.h"
 
 #include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
+#include "mozilla/Bootstrap.h"
 #if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
 #include "nsUpdateDriver.h"
 #endif
@@ -99,6 +99,7 @@
 #include <math.h>
 #include "cairo/cairo-features.h"
 #include "mozilla/WindowsVersion.h"
+#include "mozilla/WindowsDllBlocklist.h"
 #include "mozilla/mscom/MainThreadRuntime.h"
 #include "mozilla/widget/AudioSession.h"
 
@@ -271,8 +272,8 @@ namespace mozilla {
 LibFuzzerRunner* libFuzzerRunner = 0;
 } // namespace mozilla
 
-extern "C" MOZ_EXPORT void XRE_LibFuzzerSetMain(int argc, char** argv, LibFuzzerMain main) {
-  mozilla::libFuzzerRunner->setParams(argc, argv, main);
+void XRE_LibFuzzerSetDriver(LibFuzzerDriver aDriver) {
+  mozilla::libFuzzerRunner->setParams(aDriver);
 }
 #endif
 
@@ -1076,8 +1077,8 @@ nsXULAppInfo::GetIsOfficial(bool* aResult)
 NS_IMETHODIMP
 nsXULAppInfo::GetWindowsDLLBlocklistStatus(bool* aResult)
 {
-#if defined(XP_WIN)
-  *aResult = gAppData->flags & NS_XRE_DLL_BLOCKLIST_ENABLED;
+#if defined(HAS_DLL_BLOCKLIST)
+  *aResult = DllBlocklist_CheckStatus();
 #else
   *aResult = false;
 #endif
@@ -2143,17 +2144,20 @@ ShowProfileManager(nsIToolkitProfileService* aProfileSvc,
 }
 
 /**
- * Set the currently running profile as the default/selected one.
+ * Get the currently running profile using its root directory.
  *
+ * @param aProfileSvc         The profile service
  * @param aCurrentProfileRoot The root directory of the current profile.
- * @return an error if aCurrentProfileRoot is not found or the profile could not
- * be set as the default.
+ * @param aProfile            Out-param that returns the profile object.
+ * @return an error if aCurrentProfileRoot is not found
  */
 static nsresult
-SetCurrentProfileAsDefault(nsIToolkitProfileService* aProfileSvc,
-                           nsIFile* aCurrentProfileRoot)
+GetCurrentProfile(nsIToolkitProfileService* aProfileSvc,
+                  nsIFile* aCurrentProfileRoot,
+                  nsIToolkitProfile** aProfile)
 {
   NS_ENSURE_ARG_POINTER(aProfileSvc);
+  NS_ENSURE_ARG_POINTER(aProfile);
 
   nsCOMPtr<nsISimpleEnumerator> profiles;
   nsresult rv = aProfileSvc->GetProfiles(getter_AddRefs(profiles));
@@ -2169,7 +2173,8 @@ SetCurrentProfileAsDefault(nsIToolkitProfileService* aProfileSvc,
     profile->GetRootDir(getter_AddRefs(profileRoot));
     profileRoot->Equals(aCurrentProfileRoot, &foundMatchingProfile);
     if (foundMatchingProfile) {
-      return aProfileSvc->SetSelectedProfile(profile);
+      profile.forget(aProfile);
+      return NS_OK;
     }
     rv = profiles->GetNext(getter_AddRefs(supports));
   }
@@ -3020,7 +3025,7 @@ public:
     mAppData = nullptr;
   }
 
-  int XRE_main(int argc, char* argv[], const XREAppData& aAppData);
+  int XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig);
   int XRE_mainInit(bool* aExitFlag);
   int XRE_mainStartup(bool* aExitFlag);
   nsresult XRE_mainRun();
@@ -3179,31 +3184,6 @@ XREMain::XRE_mainInit(bool* aExitFlag)
 
   // XXX Originally ScopedLogging was here? Now it's in XRE_main above
   // XRE_mainInit.
-
-  if (!mAppData->xreDirectory) {
-    nsCOMPtr<nsIFile> lf;
-    rv = XRE_GetBinaryPath(gArgv[0], getter_AddRefs(lf));
-    if (NS_FAILED(rv))
-      return 2;
-
-    nsCOMPtr<nsIFile> greDir;
-    rv = lf->GetParent(getter_AddRefs(greDir));
-    if (NS_FAILED(rv))
-      return 2;
-
-#ifdef XP_MACOSX
-    nsCOMPtr<nsIFile> parent;
-    greDir->GetParent(getter_AddRefs(parent));
-    greDir = parent.forget();
-    greDir->AppendNative(NS_LITERAL_CSTRING("Resources"));
-#endif
-
-    mAppData->xreDirectory = greDir;
-  }
-
-  if (!mAppData->directory) {
-    mAppData->directory = mAppData->xreDirectory;
-  }
 
   if (!mAppData->minVersion) {
     Output(true, "Error: Gecko:MinVersion not specified in application.ini\n");
@@ -3744,7 +3724,7 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
 #ifdef LIBFUZZER
   if (PR_GetEnv("LIBFUZZER")) {
     *aExitFlag = true;
-    return mozilla::libFuzzerRunner->Run();
+    return mozilla::libFuzzerRunner->Run(&gArgc, &gArgv);
   }
 #endif
 
@@ -4289,15 +4269,22 @@ XREMain::XRE_mainRun()
       nsresult backupCreated = ProfileResetCleanup(profileBeingReset);
       if (NS_FAILED(backupCreated)) NS_WARNING("Could not cleanup the profile that was reset");
 
-      // Set the new profile as the default after we're done cleaning up the old profile,
-      // iff that profile was already the default
-      if (profileWasSelected) {
-        // this is actually "broken" - see bug 1122124
-        rv = SetCurrentProfileAsDefault(mProfileSvc, mProfD);
-        if (NS_FAILED(rv)) NS_WARNING("Could not set current profile as the default");
+      nsCOMPtr<nsIToolkitProfile> newProfile;
+      rv = GetCurrentProfile(mProfileSvc, mProfD, getter_AddRefs(newProfile));
+      if (NS_SUCCEEDED(rv)) {
+        newProfile->SetName(gResetOldProfileName);
+        // Set the new profile as the default after we're done cleaning up the old profile,
+        // iff that profile was already the default
+        if (profileWasSelected) {
+          rv = mProfileSvc->SetDefaultProfile(newProfile);
+          if (NS_FAILED(rv)) NS_WARNING("Could not set current profile as the default");
+        }
+      } else {
+        NS_WARNING("Could not find current profile to set as default / change name.");
       }
-      // Need to write out the fact that the profile has been removed and potentially
-      // that the selected/default profile changed.
+
+      // Need to write out the fact that the profile has been removed, the new profile
+      // renamed, and potentially that the selected/default profile changed.
       mProfileSvc->Flush();
     }
   }
@@ -4369,15 +4356,6 @@ XREMain::XRE_mainRun()
   if (!mShuttingDown) {
     rv = appStartup->CreateHiddenWindow();
     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-
-#ifdef MOZ_STYLO
-    // We initialize Servo here so that the hidden DOM window is available,
-    // since initializing Servo calls style struct constructors, and the
-    // HackilyFindDeviceContext stuff we have right now depends on the hidden
-    // DOM window. When we fix that, this should move back to
-    // nsLayoutStatics.cpp
-    Servo_Initialize();
-#endif
 
 #if defined(HAVE_DESKTOP_STARTUP_ID) && defined(MOZ_WIDGET_GTK)
     nsGTKToolkit* toolkit = nsGTKToolkit::GetToolkit();
@@ -4487,12 +4465,6 @@ XREMain::XRE_mainRun()
     }
   }
 
-#ifdef MOZ_STYLO
-    // This, along with the call to Servo_Initialize, should eventually move back
-    // to nsLayoutStatics.cpp.
-    Servo_Shutdown();
-#endif
-
   return rv;
 }
 
@@ -4530,7 +4502,7 @@ XRE_CreateStatsObject()
  *            .app/Contents/Resources.
  */
 int
-XREMain::XRE_main(int argc, char* argv[], const XREAppData& aAppData)
+XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
 {
   ScopedLogging log;
 
@@ -4559,7 +4531,27 @@ XREMain::XRE_main(int argc, char* argv[], const XREAppData& aAppData)
   gArgc = argc;
   gArgv = argv;
 
-  mAppData = MakeUnique<XREAppData>(aAppData);
+  if (aConfig.appData) {
+      mAppData = MakeUnique<XREAppData>(*aConfig.appData);
+  } else {
+    MOZ_RELEASE_ASSERT(aConfig.appDataPath);
+    nsCOMPtr<nsIFile> appini;
+    rv = XRE_GetFileFromPath(aConfig.appDataPath, getter_AddRefs(appini));
+    if (NS_FAILED(rv)) {
+      Output(true, "Error: unrecognized path: %s\n", aConfig.appDataPath);
+      return 1;
+    }
+
+    mAppData = MakeUnique<XREAppData>();
+    rv = XRE_ParseAppData(appini, *mAppData);
+    if (NS_FAILED(rv)) {
+      Output(true, "Couldn't read application.ini");
+      return 1;
+    }
+
+    appini->GetParent(getter_AddRefs(mAppData->directory));
+  }
+
   if (!mAppData->remotingName) {
     mAppData->remotingName = mAppData->name;
   }
@@ -4572,6 +4564,40 @@ XREMain::XRE_main(int argc, char* argv[], const XREAppData& aAppData)
 
   rv = binFile->GetPath(gAbsoluteArgv0Path);
   NS_ENSURE_SUCCESS(rv, 1);
+
+  if (!mAppData->xreDirectory) {
+    nsCOMPtr<nsIFile> lf;
+    rv = XRE_GetBinaryPath(gArgv[0], getter_AddRefs(lf));
+    if (NS_FAILED(rv))
+      return 2;
+
+    nsCOMPtr<nsIFile> greDir;
+    rv = lf->GetParent(getter_AddRefs(greDir));
+    if (NS_FAILED(rv))
+      return 2;
+
+#ifdef XP_MACOSX
+    nsCOMPtr<nsIFile> parent;
+    greDir->GetParent(getter_AddRefs(parent));
+    greDir = parent.forget();
+    greDir->AppendNative(NS_LITERAL_CSTRING("Resources"));
+#endif
+
+    mAppData->xreDirectory = greDir;
+  }
+
+  if (aConfig.appData && aConfig.appDataPath) {
+    mAppData->xreDirectory->Clone(getter_AddRefs(mAppData->directory));
+    mAppData->directory->AppendNative(nsDependentCString(aConfig.appDataPath));
+  }
+
+  if (!mAppData->directory) {
+    mAppData->directory = mAppData->xreDirectory;
+  }
+
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+  mAppData->sandboxBrokerServices = aConfig.sandboxBrokerServices;
+#endif
 
   mozilla::IOInterposerInit ioInterposerGuard;
 
@@ -4696,11 +4722,11 @@ XRE_StopLateWriteChecks(void) {
 }
 
 int
-XRE_main(int argc, char* argv[], const XREAppData& aAppData, uint32_t aFlags)
+XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
 {
   XREMain main;
 
-  int result = main.XRE_main(argc, argv, aAppData);
+  int result = main.XRE_main(argc, argv, aConfig);
   mozilla::RecordShutdownEndTimeStamp();
   return result;
 }

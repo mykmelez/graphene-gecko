@@ -386,7 +386,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter
     }
 
     bool reportError(ParseNode* pn, unsigned errorNumber, ...);
-    bool reportStrictWarning(ParseNode* pn, unsigned errorNumber, ...);
+    bool reportExtraWarning(ParseNode* pn, unsigned errorNumber, ...);
     bool reportStrictModeError(ParseNode* pn, unsigned errorNumber, ...);
 
     // If pn contains a useful expression, return true with *answer set to true.
@@ -609,7 +609,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter
     // Emit bytecode to put operands for a JSOP_GETELEM/CALLELEM/SETELEM/DELELEM
     // opcode onto the stack in the right order. In the case of SETELEM, the
     // value to be assigned must already be pushed.
-    enum class EmitElemOption { Get, Set, Call, IncDec, CompoundAssign };
+    enum class EmitElemOption { Get, Set, Call, IncDec, CompoundAssign, Ref };
     MOZ_MUST_USE bool emitElemOperands(ParseNode* pn, EmitElemOption opts);
 
     MOZ_MUST_USE bool emitElemOpBase(JSOp op);
@@ -642,10 +642,18 @@ struct MOZ_STACK_CLASS BytecodeEmitter
         DestructuringAssignment
     };
 
-    // emitDestructuringLHS assumes the to-be-destructured value has been pushed on
-    // the stack and emits code to destructure a single lhs expression (either a
-    // name or a compound []/{} expression).
-    MOZ_MUST_USE bool emitDestructuringLHS(ParseNode* target, DestructuringFlavor flav);
+    // emitDestructuringLHSRef emits the lhs expression's reference.
+    // If the lhs expression is object property |OBJ.prop|, it emits |OBJ|.
+    // If it's object element |OBJ[ELEM]|, it emits |OBJ| and |ELEM|.
+    // If there's nothing to evaluate for the reference, it emits nothing.
+    // |emitted| parameter receives the number of values pushed onto the stack.
+    MOZ_MUST_USE bool emitDestructuringLHSRef(ParseNode* target, size_t* emitted);
+
+    // emitSetOrInitializeDestructuring assumes the lhs expression's reference
+    // and the to-be-destructured value has been pushed on the stack.  It emits
+    // code to destructure a single lhs expression (either a name or a compound
+    // []/{} expression).
+    MOZ_MUST_USE bool emitSetOrInitializeDestructuring(ParseNode* target, DestructuringFlavor flav);
 
     // emitDestructuringOps assumes the to-be-destructured value has been
     // pushed on the stack and emits code to destructure each part of a [] or
@@ -671,6 +679,13 @@ struct MOZ_STACK_CLASS BytecodeEmitter
     // Pops iterator from the top of the stack. Pushes the result of |.next()|
     // onto the stack.
     MOZ_MUST_USE bool emitIteratorNext(ParseNode* pn, bool allowSelfHosted = false);
+    MOZ_MUST_USE bool emitIteratorClose(
+        mozilla::Maybe<JumpTarget> yieldStarTryStart = mozilla::Nothing(),
+        bool allowSelfHosted = false);
+
+    template <typename InnerEmitter>
+    MOZ_MUST_USE bool wrapWithDestructuringIteratorCloseTryNote(int32_t iterDepth,
+                                                                InnerEmitter emitter);
 
     // Check if the value on top of the stack is "undefined". If so, replace
     // that value on the stack with the value defined by |defaultExpr|.
@@ -718,7 +733,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter
     MOZ_MUST_USE bool emitSelfHostedCallFunction(ParseNode* pn);
     MOZ_MUST_USE bool emitSelfHostedResumeGenerator(ParseNode* pn);
     MOZ_MUST_USE bool emitSelfHostedForceInterpreter(ParseNode* pn);
-    MOZ_MUST_USE bool emitSelfHostedAllowContentSpread(ParseNode* pn);
+    MOZ_MUST_USE bool emitSelfHostedAllowContentIter(ParseNode* pn);
 
     MOZ_MUST_USE bool emitComprehensionFor(ParseNode* compFor);
     MOZ_MUST_USE bool emitComprehensionForIn(ParseNode* pn);

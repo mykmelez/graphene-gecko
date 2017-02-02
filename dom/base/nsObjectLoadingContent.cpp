@@ -109,6 +109,8 @@ static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 static const char *kPrefJavaMIME = "plugin.java.mime";
 static const char *kPrefYoutubeRewrite = "plugins.rewrite_youtube_embeds";
 static const char *kPrefBlockURIs = "browser.safebrowsing.blockedURIs.enabled";
+static const char *kPrefFavorFallbackMode = "plugins.favorfallback.mode";
+static const char *kPrefFavorFallbackRules = "plugins.favorfallback.rules";
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -236,7 +238,7 @@ CheckPluginStopEvent::Run()
   LOG(("OBJLC [%p]: CheckPluginStopEvent - No frame, flushing layout", this));
   nsIDocument* composedDoc = content->GetComposedDoc();
   if (composedDoc) {
-    composedDoc->FlushPendingNotifications(Flush_Layout);
+    composedDoc->FlushPendingNotifications(FlushType::Layout);
     if (objLC->mPendingCheckPluginStopEvent != this) {
       LOG(("OBJLC [%p]: CheckPluginStopEvent - superseded in layout flush",
            this));
@@ -642,11 +644,13 @@ nsObjectLoadingContent::UnbindFromTree(bool aDeep, bool aNullParent)
     ///             would keep the docshell around, but trash the frameloader
     UnloadObject();
   }
-  nsIDocument* doc = thisContent->GetComposedDoc();
-  if (doc && doc->IsActive()) {
-    nsCOMPtr<nsIRunnable> ev = new nsSimplePluginEvent(doc,
-                                                       NS_LITERAL_STRING("PluginRemoved"));
-    NS_DispatchToCurrentThread(ev);
+  if (mType == eType_Plugin) {
+    nsIDocument* doc = thisContent->GetComposedDoc();
+    if (doc && doc->IsActive()) {
+      nsCOMPtr<nsIRunnable> ev = new nsSimplePluginEvent(doc,
+                                                         NS_LITERAL_STRING("PluginRemoved"));
+      NS_DispatchToCurrentThread(ev);
+    }
   }
 }
 
@@ -663,7 +667,9 @@ nsObjectLoadingContent::nsObjectLoadingContent()
   , mIsStopping(false)
   , mIsLoading(false)
   , mScriptRequested(false)
-  , mRewrittenYoutubeEmbed(false) {}
+  , mRewrittenYoutubeEmbed(false)
+  , mPreferFallback(false)
+  , mPreferFallbackKnown(false) {}
 
 nsObjectLoadingContent::~nsObjectLoadingContent()
 {
@@ -715,7 +721,7 @@ nsObjectLoadingContent::InstantiatePluginInstance(bool aIsLoading)
 
   // Flush layout so that the frame is created if possible and the plugin is
   // initialized with the latest information.
-  doc->FlushPendingNotifications(Flush_Layout);
+  doc->FlushPendingNotifications(FlushType::Layout);
   // Flushing layout may have re-entered and loaded something underneath us
   NS_ENSURE_TRUE(mInstantiating, NS_OK);
 
@@ -2095,10 +2101,14 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
   nsIDocument* doc = thisContent->OwnerDoc();
   nsresult rv = NS_OK;
 
-  // Sanity check
-  if (!InActiveDocument(thisContent)) {
-    NS_NOTREACHED("LoadObject called while not bound to an active document");
-    return NS_ERROR_UNEXPECTED;
+  // Per bug 1318303, if the parent document is not active, load the alternative
+  // and return.
+  if (!doc->IsCurrentActiveDocument()) {
+    // Since this can be triggered on change of attributes, make sure we've
+    // unloaded whatever is loaded first.
+    UnloadObject();
+    LoadFallback(eFallbackAlternate, false);
+    return NS_OK;
   }
 
   // XXX(johns): In these cases, we refuse to touch our content and just
@@ -2744,7 +2754,7 @@ nsObjectLoadingContent::NotifyStateChanged(ObjectType aOldType,
     if (aSync) {
       NS_ASSERTION(InActiveDocument(thisContent), "Something is confused");
       // Make sure that frames are actually constructed immediately.
-      doc->FlushPendingNotifications(Flush_Frames);
+      doc->FlushPendingNotifications(FlushType::Frames);
     }
   } else if (aOldType != mType) {
     // If our state changed, then we already recreated frames
@@ -3366,11 +3376,22 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
     }
     switch (permission) {
     case nsIPermissionManager::ALLOW_ACTION:
+      if (PreferFallback(false /* isPluginClickToPlay */)) {
+        aReason = eFallbackAlternate;
+        return false;
+      }
+
       return true;
     case nsIPermissionManager::DENY_ACTION:
       aReason = eFallbackDisabled;
       return false;
     case nsIPermissionManager::PROMPT_ACTION:
+      if (PreferFallback(true /* isPluginClickToPlay */)) {
+        // False is already returned in this case, but
+        // it's important to correctly set aReason too.
+        aReason = eFallbackAlternate;
+      }
+
       return false;
     case nsIPermissionManager::UNKNOWN_ACTION:
       break;
@@ -3386,6 +3407,11 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
     return false;
   }
 
+  if (PreferFallback(enabledState == nsIPluginTag::STATE_CLICKTOPLAY)) {
+    aReason = eFallbackAlternate;
+    return false;
+  }
+
   switch (enabledState) {
   case nsIPluginTag::STATE_ENABLED:
     return true;
@@ -3393,6 +3419,136 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
     return false;
   }
   MOZ_CRASH("Unexpected enabledState");
+}
+
+bool
+nsObjectLoadingContent::FavorFallbackMode(bool aIsPluginClickToPlay) {
+  if (!IsFlashMIME(mContentType)) {
+    return false;
+  }
+
+  nsCString prefString;
+  if (NS_SUCCEEDED(Preferences::GetCString(kPrefFavorFallbackMode, &prefString))) {
+    if (aIsPluginClickToPlay &&
+        prefString.EqualsLiteral("follow-ctp")) {
+      return true;
+    }
+
+    if (prefString.EqualsLiteral("always")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool
+nsObjectLoadingContent::HasGoodFallback() {
+  nsCOMPtr<nsIContent> thisContent =
+  do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
+  NS_ASSERTION(thisContent, "must be a content");
+
+  if (!thisContent->IsHTMLElement(nsGkAtoms::object) ||
+      mContentType.IsEmpty()) {
+    return false;
+  }
+
+  nsTArray<nsCString> rulesList;
+  nsCString prefString;
+  if (NS_SUCCEEDED(Preferences::GetCString(kPrefFavorFallbackRules, &prefString))) {
+      ParseString(prefString, ',', rulesList);
+  }
+
+  for (uint32_t i = 0; i < rulesList.Length(); ++i) {
+    // RULE "embed":
+    // Don't use fallback content if the object contains an <embed> inside its
+    // fallback content.
+    if (rulesList[i].EqualsLiteral("embed")) {
+      nsTArray<nsINodeList*> childNodes;
+      for (nsIContent* child = thisContent->GetFirstChild();
+           child;
+           child = child->GetNextNode(thisContent)) {
+        if (child->IsHTMLElement(nsGkAtoms::embed)) {
+          return false;
+        }
+      }
+    }
+
+    // RULE "video":
+    // Use fallback content if the object contains a <video> inside its
+    // fallback content.
+    if (rulesList[i].EqualsLiteral("video")) {
+      nsTArray<nsINodeList*> childNodes;
+      for (nsIContent* child = thisContent->GetFirstChild();
+           child;
+           child = child->GetNextNode(thisContent)) {
+        if (child->IsHTMLElement(nsGkAtoms::video)) {
+          return true;
+        }
+      }
+    }
+
+    // RULE "adobelink":
+    // Don't use fallback content when it has a link to adobe's website.
+    if (rulesList[i].EqualsLiteral("adobelink")) {
+      nsTArray<nsINodeList*> childNodes;
+      for (nsIContent* child = thisContent->GetFirstChild();
+           child;
+           child = child->GetNextNode(thisContent)) {
+        if (child->IsHTMLElement(nsGkAtoms::a)) {
+          nsCOMPtr<nsIURI> href = child->GetHrefURI();
+          if (href) {
+            nsAutoCString asciiHost;
+            nsresult rv = href->GetAsciiHost(asciiHost);
+            if (NS_SUCCEEDED(rv) &&
+                !asciiHost.IsEmpty() &&
+                (asciiHost.EqualsLiteral("adobe.com") ||
+                 StringEndsWith(asciiHost, NS_LITERAL_CSTRING(".adobe.com")))) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+
+    // RULE "installinstructions":
+    // Don't use fallback content when the text content on the fallback appears
+    // to contain instructions to install or download Flash.
+    if (rulesList[i].EqualsLiteral("installinstructions")) {
+      nsAutoString textContent;
+      ErrorResult rv;
+      thisContent->GetTextContent(textContent, rv);
+      bool hasText =
+        !rv.Failed() &&
+        (CaseInsensitiveFindInReadable(NS_LITERAL_STRING("Flash"), textContent) ||
+         CaseInsensitiveFindInReadable(NS_LITERAL_STRING("Install"), textContent) ||
+         CaseInsensitiveFindInReadable(NS_LITERAL_STRING("Download"), textContent));
+
+      if (hasText) {
+        return false;
+      }
+    }
+
+    // RULE "true":
+    // By having a rule that returns true, we can put it at the end of the rules list
+    // to change the default-to-false behavior to be default-to-true.
+    if (rulesList[i].EqualsLiteral("true")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool
+nsObjectLoadingContent::PreferFallback(bool aIsPluginClickToPlay) {
+  if (mPreferFallbackKnown) {
+    return mPreferFallback;
+  }
+
+  mPreferFallbackKnown = true;
+  mPreferFallback = FavorFallbackMode(aIsPluginClickToPlay) && HasGoodFallback();
+  return mPreferFallback;
 }
 
 nsIDocument*

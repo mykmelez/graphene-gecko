@@ -31,7 +31,7 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
         )
 
         # Set browser to restore previous session
-        self.puppeteer.prefs.set_pref('browser.startup.page', 3)
+        self.marionette.set_pref('browser.startup.page', 3)
 
         self.locationbar = self.browser.navbar.locationbar
         self.identity_popup = self.locationbar.identity_popup
@@ -46,7 +46,7 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
         finally:
             super(TestSSLStatusAfterRestart, self).tearDown()
 
-    @skip_if_e10s
+    @skip_if_e10s("Bug 1325047")
     def test_ssl_status_after_restart(self):
         for item in self.test_data:
             with self.marionette.using_context('content'):
@@ -76,7 +76,7 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
 
         self.locationbar.open_identity_popup()
 
-        # Check the type shown on the idenity popup doorhanger
+        # Check the type shown on the identity popup doorhanger
         self.assertEqual(self.identity_popup.element.get_attribute('connection'),
                          cert_type)
 
@@ -84,7 +84,7 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
         Wait(self.marionette).until(lambda _: self.identity_popup.view.security.selected)
 
         # Check the identity label
-        self.assertEqual(self.locationbar.identity_organization_label.get_attribute('value'),
+        self.assertEqual(self.locationbar.identity_organization_label.get_property('value'),
                          identity)
 
         # Get the information from the certificate
@@ -101,10 +101,10 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
         # If this is a wildcard cert, check only the domain
         if cert['commonName'].startswith('*'):
             self.assertIn(self.puppeteer.security.get_domain_from_common_name(cert['commonName']),
-                          page_info.deck.security.domain.get_attribute('value'),
+                          page_info.deck.security.domain.get_property('value'),
                           'Expected domain found in certificate for ' + url)
         else:
-            self.assertEqual(page_info.deck.security.domain.get_attribute('value'),
+            self.assertEqual(page_info.deck.security.domain.get_property('value'),
                              cert['commonName'],
                              'Domain value matches certificate common name.')
 
@@ -112,13 +112,13 @@ class TestSSLStatusAfterRestart(PuppeteerMixin, MarionetteTestCase):
         if identity != '':
             owner = cert['organization']
         else:
-            owner = page_info.get_property('securityNoOwner')
+            owner = page_info.localize_property('securityNoOwner')
 
-        self.assertEqual(page_info.deck.security.owner.get_attribute('value'), owner,
+        self.assertEqual(page_info.deck.security.owner.get_property('value'), owner,
                          'Expected owner label found for ' + url)
 
         # Verify the verifier listed on the security panel
-        self.assertEqual(page_info.deck.security.verifier.get_attribute('value'),
+        self.assertEqual(page_info.deck.security.verifier.get_property('value'),
                          cert['issuerOrganization'],
                          'Verifier matches issuer of certificate for ' + url)
         page_info.close()

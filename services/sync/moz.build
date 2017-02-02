@@ -23,9 +23,6 @@ EXTRA_JS_MODULES['services-sync'] += [
     'modules/browserid_identity.js',
     'modules/collection_validator.js',
     'modules/engines.js',
-    'modules/FxaMigrator.jsm',
-    'modules/identity.js',
-    'modules/jpakeclient.js',
     'modules/keys.js',
     'modules/main.js',
     'modules/policies.js',
@@ -36,7 +33,6 @@ EXTRA_JS_MODULES['services-sync'] += [
     'modules/status.js',
     'modules/SyncedTabs.jsm',
     'modules/telemetry.js',
-    'modules/userapi.js',
     'modules/util.js',
 ]
 
@@ -45,7 +41,7 @@ EXTRA_PP_JS_MODULES['services-sync'] += [
 ]
 
 # Definitions used by constants.js
-DEFINES['weave_version'] = '1.55.0'
+DEFINES['weave_version'] = '1.56.0'
 DEFINES['weave_id'] = '{340c2bbc-ce74-4362-90b5-7c26312808ef}'
 
 EXTRA_JS_MODULES['services-sync'].engines += [
@@ -61,7 +57,6 @@ EXTRA_JS_MODULES['services-sync'].engines += [
 ]
 
 EXTRA_JS_MODULES['services-sync'].stages += [
-    'modules/stages/cluster.js',
     'modules/stages/declined.js',
     'modules/stages/enginesync.js',
 ]

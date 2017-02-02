@@ -169,15 +169,19 @@ NS_NewHTMLDocument(nsIDocument** aInstancePtrResult, bool aLoadedAsData)
   return NS_OK;
 }
 
-  // NOTE! nsDocument::operator new() zeroes out all members, so don't
-  // bother initializing members to 0.
-
 nsHTMLDocument::nsHTMLDocument()
   : nsDocument("text/html")
+  , mNumForms(0)
+  , mWriteLevel(0)
+  , mLoadFlags(0)
+  , mTooDeepWriteRecursion(false)
+  , mDisableDocWrite(false)
+  , mWarnedWidthHeight(false)
+  , mContentEditableCount(0)
+  , mEditingState(EditingState::eOff)
+  , mDisableCookieAccess(false)
+  , mPendingMaybeEditingStateChanged(false)
 {
-  // NOTE! nsDocument::operator new() zeroes out all members, so don't
-  // bother initializing members to 0.
-
   mType = eHTML;
   mDefaultElementType = kNameSpaceID_XHTML;
   mCompatMode = eCompatibility_NavQuirks;
@@ -265,14 +269,6 @@ nsHTMLDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
   // document, after all. Once we start getting data, this may be
   // changed.
   SetContentTypeInternal(nsDependentCString("text/html"));
-}
-
-already_AddRefed<nsIPresShell>
-nsHTMLDocument::CreateShell(nsPresContext* aContext,
-                            nsViewManager* aViewManager,
-                            StyleSetHandle aStyleSet)
-{
-  return doCreateShell(aContext, aViewManager, aStyleSet);
 }
 
 void
@@ -1791,7 +1787,7 @@ nsHTMLDocument::Close(ErrorResult& rv)
   //
   // XXXhsivonen keeping this around for bug 577508 / 253951 still :-(
   if (GetShell()) {
-    FlushPendingNotifications(Flush_Layout);
+    FlushPendingNotifications(FlushType::Layout);
   }
 
   // Removing the wyciwygChannel here is wrong when document.close() is
@@ -2646,7 +2642,7 @@ nsHTMLDocument::EditingStateChanged()
   // Flush out style changes on our _parent_ document, if any, so that
   // our check for a presshell won't get stale information.
   if (mParentDocument) {
-    mParentDocument->FlushPendingNotifications(Flush_Style);
+    mParentDocument->FlushPendingNotifications(FlushType::Style);
   }
 
   // get editing session, make sure this is a strong reference so the
@@ -3587,7 +3583,7 @@ nsHTMLDocument::IsEditingOnAfterFlush()
   if (doc) {
     // Make sure frames are up to date, since that can affect whether
     // we're editable.
-    doc->FlushPendingNotifications(Flush_Frames);
+    doc->FlushPendingNotifications(FlushType::Frames);
   }
 
   return IsEditingOn();

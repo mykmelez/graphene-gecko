@@ -83,7 +83,8 @@ public:
         RefPtr<PlayingRefChanged> refchanged =
           new PlayingRefChanged(aStream, PlayingRefChanged::ADDREF);
         aStream->Graph()->
-          DispatchToMainThreadAfterStreamStateUpdate(refchanged.forget());
+          DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
+                                                     refchanged.forget());
       }
       mLeftOverData = mBuffer.MaxDelayTicks();
     } else if (mLeftOverData > 0) {
@@ -99,7 +100,8 @@ public:
         RefPtr<PlayingRefChanged> refchanged =
           new PlayingRefChanged(aStream, PlayingRefChanged::RELEASE);
         aStream->Graph()->
-          DispatchToMainThreadAfterStreamStateUpdate(refchanged.forget());
+          DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
+                                                     refchanged.forget());
       }
       aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
       return;
@@ -196,7 +198,8 @@ DelayNode::DelayNode(AudioContext* aContext, double aMaxDelay)
               2,
               ChannelCountMode::Max,
               ChannelInterpretation::Speakers)
-  , mDelay(new AudioParam(this, DelayNodeEngine::DELAY, 0.0f, "delayTime"))
+  , mDelay(new AudioParam(this, DelayNodeEngine::DELAY, "delayTime", 0.0f,
+                          0.f, aMaxDelay))
 {
   DelayNodeEngine* engine =
     new DelayNodeEngine(this, aContext->Destination(),

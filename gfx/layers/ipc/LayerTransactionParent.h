@@ -14,6 +14,7 @@
 #include "mozilla/Attributes.h"         // for override
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory, etc
 #include "mozilla/layers/PLayerTransactionParent.h"
+#include "nsDataHashtable.h"
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 
 namespace mozilla {
@@ -57,6 +58,8 @@ public:
 
   HostLayerManager* layer_manager() const { return mLayerManager; }
 
+  void SetLayerManager(HostLayerManager* aLayerManager);
+
   uint64_t GetId() const { return mId; }
   Layer* GetRoot() const { return mRoot; }
 
@@ -94,17 +97,13 @@ public:
     return OtherPid();
   }
 
-  void AddPendingCompositorUpdate() {
-    mPendingCompositorUpdates++;
+  void SetPendingCompositorUpdate(uint64_t aNumber) {
+    mPendingCompositorUpdate = Some(aNumber);
   }
-  void SetPendingCompositorUpdates(uint32_t aCount) {
-    // Only called after construction.
-    MOZ_ASSERT(mPendingCompositorUpdates == 0);
-    mPendingCompositorUpdates = aCount;
-  }
-  void AcknowledgeCompositorUpdate() {
-    MOZ_ASSERT(mPendingCompositorUpdates > 0);
-    mPendingCompositorUpdates--;
+  void AcknowledgeCompositorUpdate(uint64_t aNumber) {
+    if (mPendingCompositorUpdate == Some(aNumber)) {
+      mPendingCompositorUpdate = Nothing();
+    }
   }
 
 protected:
@@ -113,43 +112,25 @@ protected:
   virtual mozilla::ipc::IPCResult RecvPaintTime(const uint64_t& aTransactionId,
                                                 const TimeDuration& aPaintTime) override;
 
-  virtual mozilla::ipc::IPCResult RecvUpdate(EditArray&& cset,
-                                             OpDestroyArray&& aToDestroy,
-                                             const uint64_t& aFwdTransactionId,
-                                             const uint64_t& aTransactionId,
-                                             const TargetConfig& targetConfig,
-                                             PluginsArray&& aPlugins,
-                                             const bool& isFirstPaint,
-                                             const bool& scheduleComposite,
-                                             const uint32_t& paintSequenceNumber,
-                                             const bool& isRepeatTransaction,
-                                             const mozilla::TimeStamp& aTransactionStart,
-                                             const int32_t& aPaintSyncId,
+  virtual mozilla::ipc::IPCResult RecvUpdate(const TransactionInfo& aInfo,
                                              EditReplyArray* reply) override;
 
-  virtual mozilla::ipc::IPCResult RecvUpdateNoSwap(EditArray&& cset,
-                                                   OpDestroyArray&& aToDestroy,
-                                                   const uint64_t& aFwdTransactionId,
-                                                   const uint64_t& aTransactionId,
-                                                   const TargetConfig& targetConfig,
-                                                   PluginsArray&& aPlugins,
-                                                   const bool& isFirstPaint,
-                                                   const bool& scheduleComposite,
-                                                   const uint32_t& paintSequenceNumber,
-                                                   const bool& isRepeatTransaction,
-                                                   const mozilla::TimeStamp& aTransactionStart,
-                                                   const int32_t& aPaintSyncId) override;
+  virtual mozilla::ipc::IPCResult RecvUpdateNoSwap(const TransactionInfo& aInfo) override;
 
   virtual mozilla::ipc::IPCResult RecvSetLayerObserverEpoch(const uint64_t& aLayerObserverEpoch) override;
+  virtual mozilla::ipc::IPCResult RecvNewCompositable(const CompositableHandle& aHandle,
+                                                      const TextureInfo& aInfo) override;
+  virtual mozilla::ipc::IPCResult RecvReleaseLayer(const LayerHandle& aHandle) override;
+  virtual mozilla::ipc::IPCResult RecvReleaseCompositable(const CompositableHandle& aHandle) override;
 
   virtual mozilla::ipc::IPCResult RecvClearCachedResources() override;
   virtual mozilla::ipc::IPCResult RecvForceComposite() override;
   virtual mozilla::ipc::IPCResult RecvSetTestSampleTime(const TimeStamp& aTime) override;
   virtual mozilla::ipc::IPCResult RecvLeaveTestMode() override;
-  virtual mozilla::ipc::IPCResult RecvGetAnimationOpacity(PLayerParent* aParent,
+  virtual mozilla::ipc::IPCResult RecvGetAnimationOpacity(const LayerHandle& aLayerHandle,
                                                           float* aOpacity,
                                                           bool* aHasAnimationOpacity) override;
-  virtual mozilla::ipc::IPCResult RecvGetAnimationTransform(PLayerParent* aParent,
+  virtual mozilla::ipc::IPCResult RecvGetAnimationTransform(const LayerHandle& aLayerHandle,
                                                             MaybeTransform* aTransform)
                                          override;
   virtual mozilla::ipc::IPCResult RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aId,
@@ -162,17 +143,20 @@ protected:
   virtual mozilla::ipc::IPCResult RecvSetConfirmedTargetAPZC(const uint64_t& aBlockId,
                                                              nsTArray<ScrollableLayerGuid>&& aTargets) override;
 
-  virtual PLayerParent* AllocPLayerParent() override;
-  virtual bool DeallocPLayerParent(PLayerParent* actor) override;
-
-  virtual PCompositableParent* AllocPCompositableParent(const TextureInfo& aInfo) override;
-  virtual bool DeallocPCompositableParent(PCompositableParent* actor) override;
+  bool SetLayerAttributes(const OpSetLayerAttributes& aOp);
 
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
-  bool Attach(ShadowLayerParent* aLayerParent,
-              CompositableHost* aCompositable,
-              bool aIsAsyncVideo);
+  template <typename T>
+  bool BindLayer(const RefPtr<Layer>& aLayer, const T& aCreateOp) {
+    return BindLayerToHandle(aLayer, aCreateOp.layer());
+  }
+
+  bool BindLayerToHandle(RefPtr<Layer> aLayer, const LayerHandle& aHandle);
+
+  Layer* AsLayer(const LayerHandle& aLayer);
+
+  bool Attach(Layer* aLayer, CompositableHost* aCompositable, bool aIsAsyncVideo);
 
   void AddIPDLReference() {
     MOZ_ASSERT(mIPCOpen == false);
@@ -191,9 +175,14 @@ protected:
 private:
   RefPtr<HostLayerManager> mLayerManager;
   CompositorBridgeParentBase* mCompositorBridge;
+
   // Hold the root because it might be grafted under various
   // containers in the "real" layer tree
   RefPtr<Layer> mRoot;
+
+  // Mapping from LayerHandles to Layers.
+  nsDataHashtable<nsUint64HashKey, RefPtr<Layer>> mLayerMap;
+
   // When this is nonzero, it refers to a layer tree owned by the
   // compositor thread.  It is always true that
   //   mId != 0 => mRoot == null
@@ -209,9 +198,9 @@ private:
 
   uint64_t mPendingTransaction;
 
-  // Number of compositor updates we're waiting for the child to
-  // acknowledge.
-  uint32_t mPendingCompositorUpdates;
+  // Not accepting layers updates until we receive an acknowledgement with this
+  // generation number.
+  Maybe<uint64_t> mPendingCompositorUpdate;
 
   // When the widget/frame/browser stuff in this process begins its
   // destruction process, we need to Disconnect() all the currently

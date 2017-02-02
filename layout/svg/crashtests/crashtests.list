@@ -36,7 +36,7 @@ load 348982-1.xhtml
 load 354777-1.xhtml
 load 359516-1.svg
 load 361015-1.svg
-load 361587-1.svg
+asserts-if(stylo,0-2) load 361587-1.svg # bug 1324677
 load 363611-1.xhtml
 load 364688-1.svg
 load 366956-1.svg
@@ -89,7 +89,7 @@ load 474700-1.svg
 load 475181-1.svg
 load 475193-1.html
 load 475302-1.svg
-skip-if(stylo) load 477935-1.html # bug 1323665
+load 477935-1.html
 load 478128-1.svg
 load 478511-1.svg
 load 483439-1.svg
@@ -105,6 +105,7 @@ load 587336-1.html
 load 590291-1.svg
 load 601999-1.html
 load 605626-1.svg
+asserts(2) asserts-if(stylo,0) load 606914.xhtml # bug 606914
 load 610594-1.html
 load 610954-1.html
 load 612662-1.svg
@@ -133,6 +134,7 @@ load 725918-1.svg
 load 732836-1.svg
 load 740627-1.svg
 load 740627-2.svg
+load 743469.svg
 load 757704-1.svg
 load 757718-1.svg
 load 757751-1.svg

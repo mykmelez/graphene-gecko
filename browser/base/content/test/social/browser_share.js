@@ -37,7 +37,7 @@ function test() {
     /* if text is entered into field, onbeforeunload will cause a modal dialog
        unless dialogs have been disabled for the iframe. */
     content.onbeforeunload = function(e) {
-      return 'FAIL.';
+      return "FAIL.";
     };
   }.toString() + ")();";
   let mm = getGroupMessageManager("social");
@@ -135,7 +135,7 @@ function hasoptions(testOptions, options) {
 }
 
 var tests = {
-  testShareDisabledOnActivation: function(next) {
+  testShareDisabledOnActivation(next) {
     // starting on about:blank page, share should be visible but disabled when
     // adding provider
     is(gBrowser.currentURI.spec, "about:blank");
@@ -157,7 +157,7 @@ var tests = {
       SocialService.disableProvider(manifest.origin, next);
     });
   },
-  testShareEnabledOnActivation: function(next) {
+  testShareEnabledOnActivation(next) {
     // starting from *some* page, share should be visible and enabled when
     // activating provider
     // initialize the button into the navbar
@@ -180,7 +180,7 @@ var tests = {
       });
     });
   },
-  testSharePage: function(next) {
+  testSharePage(next) {
     let testTab;
     let testIndex = 0;
     let testData = corpus[testIndex++];
@@ -222,7 +222,7 @@ var tests = {
     }
     executeSoon(runOneTest);
   },
-  testShareMicroformats: function(next) {
+  testShareMicroformats(next) {
     // initialize the button into the navbar
     CustomizableUI.addWidgetToArea("social-share-button", CustomizableUI.AREA_NAVBAR);
     // ensure correct state
@@ -305,7 +305,7 @@ var tests = {
       });
     });
   },
-  testSharePanelActivation: function(next) {
+  testSharePanelActivation(next) {
     let testTab;
     // cleared in the cleanup function
     Services.prefs.setCharPref("social.directories", "https://example.com");
@@ -352,7 +352,7 @@ var tests = {
       SocialShare.sharePage();
     });
   },
-  testSharePanelDialog: function(next) {
+  testSharePanelDialog(next) {
     let testTab;
     // initialize the button into the navbar
     CustomizableUI.addWidgetToArea("social-share-button", CustomizableUI.AREA_NAVBAR);
@@ -370,15 +370,14 @@ var tests = {
           EventUtils.sendKey("i");
           EventUtils.sendKey("l");
 
-          SocialShare.panel.addEventListener("popuphidden", function hidden(evt) {
-            SocialShare.panel.removeEventListener("popuphidden", hidden);
+          SocialShare.panel.addEventListener("popuphidden", function(evt) {
             let topwin = Services.wm.getMostRecentWindow(null);
             is(topwin, window, "no dialog is open");
 
             BrowserTestUtils.removeTab(testTab).then(() => {
               SocialService.disableProvider(manifest.origin, next);
             });
-          });
+          }, {once: true});
           SocialShare.iframe.messageManager.sendAsyncMessage("closeself", {});
         });
 

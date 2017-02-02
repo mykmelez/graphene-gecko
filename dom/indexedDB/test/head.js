@@ -10,22 +10,19 @@ function registerPopupEventHandler(eventName, callback) {
     if (event.target != PopupNotifications.panel)
       return;
     PopupNotifications.panel.removeEventListener(eventName,
-                                                 gActiveListeners[eventName],
-                                                 false);
+                                                 gActiveListeners[eventName]);
     delete gActiveListeners[eventName];
 
     callback.call(PopupNotifications.panel);
   }
   PopupNotifications.panel.addEventListener(eventName,
-                                            gActiveListeners[eventName],
-                                            false);
+                                            gActiveListeners[eventName]);
 }
 
 function unregisterPopupEventHandler(eventName)
 {
   PopupNotifications.panel.removeEventListener(eventName,
-                                               gActiveListeners[eventName],
-                                               false);
+                                               gActiveListeners[eventName]);
   delete gActiveListeners[eventName];
 }
 
@@ -33,8 +30,7 @@ function unregisterAllPopupEventHandlers()
 {
   for (let eventName in gActiveListeners) {
     PopupNotifications.panel.removeEventListener(eventName,
-                                                 gActiveListeners[eventName],
-                                                 false);
+                                                 gActiveListeners[eventName]);
   }
   gActiveListeners = {};
 }
@@ -98,7 +94,7 @@ function setPermission(url, permission)
 
   let uri = Components.classes["@mozilla.org/network/io-service;1"]
                       .getService(Components.interfaces.nsIIOService)
-                      .newURI(url, null, null);
+                      .newURI(url);
   let ssm = Components.classes["@mozilla.org/scriptsecuritymanager;1"]
                       .getService(Ci.nsIScriptSecurityManager);
   let principal = ssm.createCodebasePrincipal(uri, {});
@@ -113,7 +109,7 @@ function removePermission(url, permission)
 {
   let uri = Components.classes["@mozilla.org/network/io-service;1"]
                       .getService(Components.interfaces.nsIIOService)
-                      .newURI(url, null, null);
+                      .newURI(url);
   let ssm = Components.classes["@mozilla.org/scriptsecuritymanager;1"]
                       .getService(Ci.nsIScriptSecurityManager);
   let principal = ssm.createCodebasePrincipal(uri, {});
@@ -127,7 +123,7 @@ function getPermission(url, permission)
 {
   let uri = Components.classes["@mozilla.org/network/io-service;1"]
                       .getService(Components.interfaces.nsIIOService)
-                      .newURI(url, null, null);
+                      .newURI(url);
   let ssm = Components.classes["@mozilla.org/scriptsecuritymanager;1"]
                       .getService(Ci.nsIScriptSecurityManager);
   let principal = ssm.createCodebasePrincipal(uri, {});

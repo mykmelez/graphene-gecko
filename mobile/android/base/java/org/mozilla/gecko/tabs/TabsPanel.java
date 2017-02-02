@@ -6,7 +6,8 @@
 package org.mozilla.gecko.tabs;
 
 import android.support.v4.content.ContextCompat;
-import org.mozilla.gecko.AppConstants.Versions;
+
+import org.mozilla.gecko.Experiments;
 import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoSharedPrefs;
@@ -21,6 +22,7 @@ import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.restrictions.Restrictions;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.GeckoPopupMenu;
 import org.mozilla.gecko.widget.IconTabWidget;
 
@@ -41,6 +43,9 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
+
+import org.mozilla.gecko.switchboard.SwitchBoard;
+
 import org.mozilla.gecko.widget.themed.ThemedImageButton;
 
 public class TabsPanel extends LinearLayout
@@ -84,7 +89,8 @@ public class TabsPanel extends LinearLayout
             return new AutoFitTabsGridLayout(context, attrs);
         } else {
             // Phone in portrait mode.
-            if (GeckoSharedPrefs.forApp(context).getBoolean(GeckoPreferences.PREFS_COMPACT_TABS, false)) {
+            if (GeckoSharedPrefs.forApp(context).getBoolean(GeckoPreferences.PREFS_COMPACT_TABS,
+                    SwitchBoard.isInExperiment(context, Experiments.COMPACT_TABS))) {
                 return new CompactTabsGridLayout(context, attrs);
             } else {
                 return new TabsListLayout(context, attrs);
@@ -388,7 +394,15 @@ public class TabsPanel extends LinearLayout
         mAddTab.setVisibility(View.VISIBLE);
 
         mMenuButton.setEnabled(true);
-        mPopupMenu.setAnchor(mMenuButton);
+        // If mPopupMenu is visible then setAnchor redisplays the menu on its new anchor - but we
+        // may have just been inflated, so give mMenuButton a chance to get its true measurements
+        // before mPopupMenu.setAnchor reads them to determine its offset from the anchor.
+        ThreadUtils.postToUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mPopupMenu.setAnchor(mMenuButton);
+            }
+        });
     }
 
     public int getVerticalPanelHeight() {

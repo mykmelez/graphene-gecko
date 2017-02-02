@@ -184,11 +184,26 @@ MacroAssembler::add64(Imm64 imm, Register64 dest)
 void
 MacroAssembler::addConstantDouble(double d, FloatRegister dest)
 {
-    Double* dbl = getDouble(wasm::RawF64(d));
+    Double* dbl = getDouble(d);
     if (!dbl)
         return;
     masm.vaddsd_mr(nullptr, dest.encoding(), dest.encoding());
     propagateOOM(dbl->uses.append(CodeOffset(masm.size())));
+}
+
+CodeOffset
+MacroAssembler::add32ToPtrWithPatch(Register src, Register dest)
+{
+    if (src != dest)
+        movePtr(src, dest);
+    addlWithPatch(Imm32(0), dest);
+    return CodeOffset(currentOffset());
+}
+
+void
+MacroAssembler::patchAdd32ToPtr(CodeOffset offset, Imm32 imm)
+{
+    patchAddl(offset, imm.value);
 }
 
 void
@@ -524,7 +539,7 @@ MacroAssembler::rotateLeft64(Imm32 count, Register64 src, Register64 dest, Regis
     MOZ_ASSERT(src == dest, "defineReuseInput");
 
     int32_t amount = count.value & 0x3f;
-    if (amount % 0x1f != 0) {
+    if ((amount & 0x1f) != 0) {
         movl(dest.high, temp);
         shldl(Imm32(amount & 0x1f), dest.low, dest.high);
         shldl(Imm32(amount & 0x1f), temp, dest.low);

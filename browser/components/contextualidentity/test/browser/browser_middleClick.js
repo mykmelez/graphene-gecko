@@ -17,7 +17,7 @@ add_task(function* () {
   yield ContentTask.spawn(browser, URI,
     function(uri) {
       let anchor = content.document.createElement("a");
-      anchor.setAttribute('id', 'clickMe');
+      anchor.setAttribute("id", "clickMe");
       anchor.setAttribute("href", uri);
       anchor.appendChild(content.document.createTextNode("click me!"));
       content.document.body.appendChild(anchor);
@@ -26,10 +26,9 @@ add_task(function* () {
 
   info("Synthesize a mouse click and wait for a new tab...");
   let newTab = yield new Promise((resolve, reject) => {
-    gBrowser.tabContainer.addEventListener("TabOpen", function onTabOpen(openEvent) {
-      gBrowser.tabContainer.removeEventListener("TabOpen", onTabOpen);
+    gBrowser.tabContainer.addEventListener("TabOpen", function(openEvent) {
       resolve(openEvent.target);
-    })
+    }, {once: true})
 
     BrowserTestUtils.synthesizeMouseAtCenter("#clickMe", { button: 1 }, browser);
   });

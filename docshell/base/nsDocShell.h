@@ -64,6 +64,7 @@
 namespace mozilla {
 namespace dom {
 class EventTarget;
+class PendingGlobalHistoryEntry;
 typedef uint32_t ScreenOrientationInternal;
 } // namespace dom
 } // namespace mozilla
@@ -157,8 +158,6 @@ public:
 
   nsDocShell();
 
-  NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
-
   virtual nsresult Init() override;
 
   NS_DECL_ISUPPORTS_INHERITED
@@ -200,7 +199,8 @@ public:
                          const nsAString& aFileName,
                          nsIInputStream* aPostDataStream,
                          nsIInputStream* aHeadersDataStream,
-                         bool aIsTrusted) override;
+                         bool aIsTrusted,
+                         nsIPrincipal* aTriggeringPrincipal) override;
   NS_IMETHOD OnLinkClickSync(nsIContent* aContent,
                              nsIURI* aURI,
                              const char16_t* aTargetSpec,
@@ -209,7 +209,8 @@ public:
                              nsIInputStream* aHeadersDataStream = 0,
                              bool aNoOpenerImplied = false,
                              nsIDocShell** aDocShell = 0,
-                             nsIRequest** aRequest = 0) override;
+                             nsIRequest** aRequest = 0,
+                             nsIPrincipal* aTriggeringPrincipal = nullptr) override;
   NS_IMETHOD OnOverLink(nsIContent* aContent,
                         nsIURI* aURI,
                         const char16_t* aTargetSpec) override;
@@ -271,13 +272,17 @@ public:
   }
   bool InFrameSwap();
 
-  const mozilla::DocShellOriginAttributes&
+private:
+  bool CanSetOriginAttributes();
+
+public:
+  const mozilla::OriginAttributes&
   GetOriginAttributes()
   {
     return mOriginAttributes;
   }
 
-  nsresult SetOriginAttributes(const mozilla::DocShellOriginAttributes& aAttrs);
+  nsresult SetOriginAttributes(const mozilla::OriginAttributes& aAttrs);
 
   void GetInterceptedDocumentId(nsAString& aId)
   {
@@ -327,7 +332,8 @@ protected:
   // passed in, the about:blank principal will end up being used.
   nsresult CreateAboutBlankContentViewer(nsIPrincipal* aPrincipal,
                                          nsIURI* aBaseURI,
-                                         bool aTryToSaveOldPresentation = true);
+                                         bool aTryToSaveOldPresentation = true,
+                                         bool aCheckPermitUnload = true);
   nsresult CreateContentViewer(const nsACString& aContentType,
                                nsIRequest* aRequest,
                                nsIStreamListener** aContentHandler);
@@ -800,6 +806,8 @@ protected:
 
   bool HasUnloadedParent();
 
+  void UpdateGlobalHistoryTitle(nsIURI* aURI);
+
   // Dimensions of the docshell
   nsIntRect mBounds;
   nsString mName;
@@ -1034,7 +1042,9 @@ private:
   nsTObserverArray<nsWeakPtr> mScrollObservers;
   nsCString mOriginalUriString;
   nsWeakPtr mOpener;
-  mozilla::DocShellOriginAttributes mOriginAttributes;
+  mozilla::OriginAttributes mOriginAttributes;
+
+  mozilla::UniquePtr<mozilla::dom::PendingGlobalHistoryEntry> mPrerenderGlobalHistory;
 
   // A depth count of how many times NotifyRunToCompletionStart
   // has been called without a matching NotifyRunToCompletionStop.
@@ -1058,6 +1068,13 @@ private:
   // Notify consumers of a search being loaded through the observer service:
   void MaybeNotifyKeywordSearchLoading(const nsString& aProvider,
                                        const nsString& aKeyword);
+
+  // Internal implementation of nsIDocShell::FirePageHideNotification.
+  // If aSkipCheckingDynEntries is true, it will not try to remove dynamic
+  // subframe entries. This is to avoid redundant RemoveDynEntries calls in all
+  // children docshells.
+  void FirePageHideNotificationInternal(bool aIsUnload,
+                                        bool aSkipCheckingDynEntries);
 
 #ifdef DEBUG
   // We're counting the number of |nsDocShells| to help find leaks

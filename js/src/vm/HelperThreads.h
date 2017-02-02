@@ -19,6 +19,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Variant.h"
 
+#include "jsapi.h"
 #include "jscntxt.h"
 
 #include "frontend/TokenStream.h"
@@ -50,7 +51,8 @@ namespace wasm {
 enum class ParseTaskKind
 {
     Script,
-    Module
+    Module,
+    ScriptDecode
 };
 
 // Per-process state for off thread work items.
@@ -220,9 +222,16 @@ class GlobalHelperThreadState
         numWasmFailedJobs = 0;
         return n;
     }
+    UniqueChars harvestWasmError(const AutoLockHelperThreadState&) {
+        return Move(firstWasmError);
+    }
     void noteWasmFailure(const AutoLockHelperThreadState&) {
         // Be mindful to signal the main thread after calling this function.
         numWasmFailedJobs++;
+    }
+    void setWasmError(const AutoLockHelperThreadState&, UniqueChars error) {
+        if (!firstWasmError)
+            firstWasmError = Move(error);
     }
     bool wasmFailed(const AutoLockHelperThreadState&) {
         return bool(numWasmFailedJobs);
@@ -243,9 +252,15 @@ class GlobalHelperThreadState
      * Their parent is logically the main thread, and this number serves for harvesting.
      */
     uint32_t numWasmFailedJobs;
+    /*
+     * Error string from wasm validation. Arbitrarily choose to keep the first one that gets
+     * reported. Nondeterministic if multiple threads have errors.
+     */
+    UniqueChars firstWasmError;
 
   public:
     JSScript* finishScriptParseTask(JSContext* cx, void* token);
+    JSScript* finishScriptDecodeTask(JSContext* cx, void* token);
     JSObject* finishModuleParseTask(JSContext* cx, void* token);
     bool compressionInProgress(SourceCompressionTask* task, const AutoLockHelperThreadState& lock);
     SourceCompressionTask* compressionTaskForSource(ScriptSource* ss, const AutoLockHelperThreadState& lock);
@@ -404,7 +419,7 @@ namespace wasm {
 
 // Performs MIR optimization and LIR generation on one or several functions.
 MOZ_MUST_USE bool
-CompileFunction(CompileTask* task);
+CompileFunction(CompileTask* task, UniqueChars* error);
 
 }
 
@@ -492,6 +507,11 @@ StartOffThreadParseModule(JSContext* cx, const ReadOnlyCompileOptions& options,
                           const char16_t* chars, size_t length,
                           JS::OffThreadCompileCallback callback, void* callbackData);
 
+bool
+StartOffThreadDecodeScript(JSContext* cx, const ReadOnlyCompileOptions& options,
+                           JS::TranscodeBuffer& buffer, size_t cursor,
+                           JS::OffThreadCompileCallback callback, void* callbackData);
+
 /*
  * Called at the end of GC to enqueue any Parse tasks that were waiting on an
  * atoms-zone GC to finish.
@@ -544,8 +564,21 @@ struct ParseTask
     ParseTaskKind kind;
     ExclusiveContext* cx;
     OwningCompileOptions options;
-    const char16_t* chars;
-    size_t length;
+    // Anonymous union, the only correct interpretation is provided by the
+    // ParseTaskKind value, or from the virtual parse function.
+    union {
+        struct {
+            const char16_t* chars;
+            size_t length;
+        };
+        struct {
+            // This should be a reference, but C++ prevents us from using union
+            // with references as it assumes the reference constness might be
+            // violated.
+            JS::TranscodeBuffer* const buffer;
+            size_t cursor;
+        };
+    };
     LifoAlloc alloc;
 
     // Rooted pointer to the global object used by 'cx'.
@@ -571,6 +604,9 @@ struct ParseTask
 
     ParseTask(ParseTaskKind kind, ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
               JSContext* initCx, const char16_t* chars, size_t length,
+              JS::OffThreadCompileCallback callback, void* callbackData);
+    ParseTask(ParseTaskKind kind, ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
+              JSContext* initCx, JS::TranscodeBuffer& buffer, size_t cursor,
               JS::OffThreadCompileCallback callback, void* callbackData);
     bool init(JSContext* cx, const ReadOnlyCompileOptions& options);
 
@@ -600,6 +636,14 @@ struct ModuleParseTask : public ParseTask
     ModuleParseTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
                     JSContext* initCx, const char16_t* chars, size_t length,
                     JS::OffThreadCompileCallback callback, void* callbackData);
+    void parse() override;
+};
+
+struct ScriptDecodeTask : public ParseTask
+{
+    ScriptDecodeTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
+                     JSContext* initCx, JS::TranscodeBuffer& buffer, size_t cursor,
+                     JS::OffThreadCompileCallback callback, void* callbackData);
     void parse() override;
 };
 

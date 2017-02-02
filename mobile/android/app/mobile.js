@@ -619,21 +619,23 @@ pref("media.video-queue.default-size", 3);
 // (the most recent) image data.
 pref("media.video-queue.send-to-compositor-size", 1);
 
-#ifdef NIGHTLY_BUILD
 // Allow to check if the decoder supports recycling only on Fennec nightly build.
 pref("media.decoder.recycle.enabled", true);
-#endif
 
 // Enable the MediaCodec PlatformDecoderModule by default.
 pref("media.android-media-codec.enabled", true);
 pref("media.android-media-codec.preferred", true);
 // Run decoder in seperate process.
-pref("media.android-remote-codec.enabled", false);
+pref("media.android-remote-codec.enabled", true);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
 
 pref("media.mediadrm-widevinecdm.visible", true);
+
+// Enable EME(Encrypted media extensions)
+pref("media.eme.enabled", true);
+pref("media.eme.apiVisible", true);
 
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
@@ -734,10 +736,6 @@ pref("media.stagefright.omxcodec.flags", 0);
 
 // Coalesce touch events to prevent them from flooding the event queue
 pref("dom.event.touch.coalescing.enabled", false);
-
-// default orientation for the app, default to undefined
-// the java GeckoScreenOrientationListener needs this to be defined
-pref("app.orientation.default", "");
 
 // On memory pressure, release dirty but unused pages held by jemalloc
 // back to the system.

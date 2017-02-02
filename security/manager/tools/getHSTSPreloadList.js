@@ -115,7 +115,7 @@ function processStsHeader(host, header, status, securityInfo) {
   var error = ERROR_NONE;
   if (header != null && securityInfo != null) {
     try {
-      var uri = Services.io.newURI("https://" + host.name, null, null);
+      var uri = Services.io.newURI("https://" + host.name);
       var sslStatus = securityInfo.QueryInterface(Ci.nsISSLStatusProvider)
                                   .SSLStatus;
       gSSService.processHeader(Ci.nsISiteSecurityService.HEADER_HSTS,
@@ -302,7 +302,7 @@ function output(sortedStatuses, currentList) {
       status.finalIncludeSubdomains = incSubdomainsBool;
     }
 
-    writeTo("\nstatic const char kSTSHostTable[] = {\n", fos);
+    writeTo("\nstatic constexpr char kSTSHostTable[] = {\n", fos);
     var indices = {};
     var currentIndex = 0;
     for (let status of includedStatuses) {
@@ -321,7 +321,7 @@ function output(sortedStatuses, currentList) {
       // lengths of string literals, and the preload list is large enough
       // that it runs into said limits.
       for (let c of status.name) {
-	writeTo("'" + c + "', ", fos);
+        writeTo("'" + c + "', ", fos);
       }
       writeTo("'\\0',\n", fos);
     }
@@ -334,7 +334,7 @@ function output(sortedStatuses, currentList) {
       "  const uint32_t mIncludeSubdomains : 1;\n" +
       "};\n" +
       "\n" +
-      "static const nsSTSPreload kSTSPreloadList[] = {\n";
+      "static constexpr nsSTSPreload kSTSPreloadList[] = {\n";
     const POSTFIX = "};\n";
 
     writeTo(PREFIX, fos);

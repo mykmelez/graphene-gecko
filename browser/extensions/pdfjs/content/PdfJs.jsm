@@ -12,13 +12,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* jshint esnext:true */
 /* globals Components, Services, XPCOMUtils, PdfjsChromeUtils,
            PdfjsContentUtils, PdfStreamConverter */
 
-'use strict';
+"use strict";
 
-var EXPORTED_SYMBOLS = ['PdfJs'];
+var EXPORTED_SYMBOLS = ["PdfJs"];
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -26,32 +25,32 @@ const Cr = Components.results;
 const Cm = Components.manager;
 const Cu = Components.utils;
 
-const PREF_PREFIX = 'pdfjs';
-const PREF_DISABLED = PREF_PREFIX + '.disabled';
-const PREF_MIGRATION_VERSION = PREF_PREFIX + '.migrationVersion';
-const PREF_PREVIOUS_ACTION = PREF_PREFIX + '.previousHandler.preferredAction';
+const PREF_PREFIX = "pdfjs";
+const PREF_DISABLED = PREF_PREFIX + ".disabled";
+const PREF_MIGRATION_VERSION = PREF_PREFIX + ".migrationVersion";
+const PREF_PREVIOUS_ACTION = PREF_PREFIX + ".previousHandler.preferredAction";
 const PREF_PREVIOUS_ASK = PREF_PREFIX +
-                          '.previousHandler.alwaysAskBeforeHandling';
-const PREF_DISABLED_PLUGIN_TYPES = 'plugin.disable_full_page_plugin_for_types';
-const TOPIC_PDFJS_HANDLER_CHANGED = 'pdfjs:handlerChanged';
-const TOPIC_PLUGINS_LIST_UPDATED = 'plugins-list-updated';
-const TOPIC_PLUGIN_INFO_UPDATED = 'plugin-info-updated';
-const PDF_CONTENT_TYPE = 'application/pdf';
+                          ".previousHandler.alwaysAskBeforeHandling";
+const PREF_DISABLED_PLUGIN_TYPES = "plugin.disable_full_page_plugin_for_types";
+const TOPIC_PDFJS_HANDLER_CHANGED = "pdfjs:handlerChanged";
+const TOPIC_PLUGINS_LIST_UPDATED = "plugins-list-updated";
+const TOPIC_PLUGIN_INFO_UPDATED = "plugin-info-updated";
+const PDF_CONTENT_TYPE = "application/pdf";
 
-Cu.import('resource://gre/modules/XPCOMUtils.jsm');
-Cu.import('resource://gre/modules/Services.jsm');
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 var Svc = {};
-XPCOMUtils.defineLazyServiceGetter(Svc, 'mime',
-                                   '@mozilla.org/mime;1',
-                                   'nsIMIMEService');
-XPCOMUtils.defineLazyServiceGetter(Svc, 'pluginHost',
-                                   '@mozilla.org/plugin/host;1',
-                                   'nsIPluginHost');
-XPCOMUtils.defineLazyModuleGetter(this, 'PdfjsChromeUtils',
-                                  'resource://pdf.js/PdfjsChromeUtils.jsm');
-XPCOMUtils.defineLazyModuleGetter(this, 'PdfjsContentUtils',
-                                  'resource://pdf.js/PdfjsContentUtils.jsm');
+XPCOMUtils.defineLazyServiceGetter(Svc, "mime",
+                                   "@mozilla.org/mime;1",
+                                   "nsIMIMEService");
+XPCOMUtils.defineLazyServiceGetter(Svc, "pluginHost",
+                                   "@mozilla.org/plugin/host;1",
+                                   "nsIPluginHost");
+XPCOMUtils.defineLazyModuleGetter(this, "PdfjsChromeUtils",
+                                  "resource://pdf.js/PdfjsChromeUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PdfjsContentUtils",
+                                  "resource://pdf.js/PdfjsContentUtils.jsm");
 
 function getBoolPref(aPref, aDefaultValue) {
   try {
@@ -99,18 +98,18 @@ function initializeDefaultPreferences() {
 }
 
 
-  var defaultBranch = Services.prefs.getDefaultBranch(PREF_PREFIX + '.');
+  var defaultBranch = Services.prefs.getDefaultBranch(PREF_PREFIX + ".");
   var defaultValue;
   for (var key in DEFAULT_PREFERENCES) {
     defaultValue = DEFAULT_PREFERENCES[key];
     switch (typeof defaultValue) {
-      case 'boolean':
+      case "boolean":
         defaultBranch.setBoolPref(key, defaultValue);
         break;
-      case 'number':
+      case "number":
         defaultBranch.setIntPref(key, defaultValue);
         break;
-      case 'string':
+      case "string":
         defaultBranch.setCharPref(key, defaultValue);
         break;
     }
@@ -156,8 +155,8 @@ var PdfJs = {
   init: function init(remote) {
     if (Services.appinfo.processType !==
         Services.appinfo.PROCESS_TYPE_DEFAULT) {
-      throw new Error('PdfJs.init should only get called ' +
-                      'in the parent process.');
+      throw new Error("PdfJs.init should only get called " +
+                      "in the parent process.");
     }
     PdfjsChromeUtils.init();
     if (!remote) {
@@ -198,11 +197,11 @@ var PdfJs = {
 
   uninit: function uninit() {
     if (this._initialized) {
-      Services.prefs.removeObserver(PREF_DISABLED, this, false);
-      Services.prefs.removeObserver(PREF_DISABLED_PLUGIN_TYPES, this, false);
-      Services.obs.removeObserver(this, TOPIC_PDFJS_HANDLER_CHANGED, false);
-      Services.obs.removeObserver(this, TOPIC_PLUGINS_LIST_UPDATED, false);
-      Services.obs.removeObserver(this, TOPIC_PLUGIN_INFO_UPDATED, false);
+      Services.prefs.removeObserver(PREF_DISABLED, this);
+      Services.prefs.removeObserver(PREF_DISABLED_PLUGIN_TYPES, this);
+      Services.obs.removeObserver(this, TOPIC_PDFJS_HANDLER_CHANGED);
+      Services.obs.removeObserver(this, TOPIC_PLUGINS_LIST_UPDATED);
+      Services.obs.removeObserver(this, TOPIC_PLUGIN_INFO_UPDATED);
       this._initialized = false;
     }
     this._ensureUnregistered();
@@ -220,13 +219,13 @@ var PdfJs = {
     }
     if (currentVersion < 2) {
       // cleaning up of unused database preference (see #3994)
-      Services.prefs.clearUserPref(PREF_PREFIX + '.database');
+      Services.prefs.clearUserPref(PREF_PREFIX + ".database");
     }
     Services.prefs.setIntPref(PREF_MIGRATION_VERSION, VERSION);
   },
 
   _becomeHandler: function _becomeHandler() {
-    let handlerInfo = Svc.mime.getFromTypeAndExtension(PDF_CONTENT_TYPE, 'pdf');
+    let handlerInfo = Svc.mime.getFromTypeAndExtension(PDF_CONTENT_TYPE, "pdf");
     let prefs = Services.prefs;
     if (handlerInfo.preferredAction !== Ci.nsIHandlerInfo.handleInternally &&
         handlerInfo.preferredAction !== false) {
@@ -237,7 +236,7 @@ var PdfJs = {
       prefs.setBoolPref(PREF_PREVIOUS_ASK, handlerInfo.alwaysAskBeforeHandling);
     }
 
-    let handlerService = Cc['@mozilla.org/uriloader/handler-service;1'].
+    let handlerService = Cc["@mozilla.org/uriloader/handler-service;1"].
                          getService(Ci.nsIHandlerService);
 
     // Change and save mime handler settings.
@@ -246,24 +245,24 @@ var PdfJs = {
     handlerService.store(handlerInfo);
 
     // Also disable any plugins for pdfs.
-    var stringTypes = '';
+    var stringTypes = "";
     var types = [];
     if (prefs.prefHasUserValue(PREF_DISABLED_PLUGIN_TYPES)) {
       stringTypes = prefs.getCharPref(PREF_DISABLED_PLUGIN_TYPES);
     }
-    if (stringTypes !== '') {
-      types = stringTypes.split(',');
+    if (stringTypes !== "") {
+      types = stringTypes.split(",");
     }
 
     if (types.indexOf(PDF_CONTENT_TYPE) === -1) {
       types.push(PDF_CONTENT_TYPE);
     }
-    prefs.setCharPref(PREF_DISABLED_PLUGIN_TYPES, types.join(','));
+    prefs.setCharPref(PREF_DISABLED_PLUGIN_TYPES, types.join(","));
 
     // Update the category manager in case the plugins are already loaded.
-    let categoryManager = Cc['@mozilla.org/categorymanager;1'];
+    let categoryManager = Cc["@mozilla.org/categorymanager;1"];
     categoryManager.getService(Ci.nsICategoryManager).
-                    deleteCategoryEntry('Gecko-Content-Viewers',
+                    deleteCategoryEntry("Gecko-Content-Viewers",
                                         PDF_CONTENT_TYPE,
                                         false);
   },
@@ -273,7 +272,7 @@ var PdfJs = {
     this.updateRegistration();
     if (Services.appinfo.processType ===
         Services.appinfo.PROCESS_TYPE_DEFAULT) {
-      let jsm = 'resource://pdf.js/PdfjsChromeUtils.jsm';
+      let jsm = "resource://pdf.js/PdfjsChromeUtils.jsm";
       let PdfjsChromeUtils = Components.utils.import(jsm, {}).PdfjsChromeUtils;
       PdfjsChromeUtils.notifyChildOfSettingsChange();
     }
@@ -298,7 +297,7 @@ var PdfJs = {
     // Check if we have disabled plugin handling of 'application/pdf' in prefs
     if (Services.prefs.prefHasUserValue(PREF_DISABLED_PLUGIN_TYPES)) {
       let disabledPluginTypes =
-        Services.prefs.getCharPref(PREF_DISABLED_PLUGIN_TYPES).split(',');
+        Services.prefs.getCharPref(PREF_DISABLED_PLUGIN_TYPES).split(",");
       if (disabledPluginTypes.indexOf(PDF_CONTENT_TYPE) >= 0) {
         return true;
       }
@@ -307,7 +306,7 @@ var PdfJs = {
     // Check if there is an enabled pdf plugin.
     // Note: this check is performed last because getPluginTags() triggers
     // costly plugin list initialization (bug 881575)
-    let tags = Cc['@mozilla.org/plugin/host;1'].
+    let tags = Cc["@mozilla.org/plugin/host;1"].
                   getService(Ci.nsIPluginHost).
                   getPluginTags();
     let enabledPluginFound = tags.some(function(tag) {
@@ -329,7 +328,7 @@ var PdfJs = {
       return;
     }
     this._pdfStreamConverterFactory = new Factory();
-    Cu.import('resource://pdf.js/PdfStreamConverter.jsm');
+    Cu.import("resource://pdf.js/PdfStreamConverter.jsm");
     this._pdfStreamConverterFactory.register(PdfStreamConverter);
 
     this._registered = true;
@@ -340,7 +339,7 @@ var PdfJs = {
       return;
     }
     this._pdfStreamConverterFactory.unregister();
-    Cu.unload('resource://pdf.js/PdfStreamConverter.jsm');
+    Cu.unload("resource://pdf.js/PdfStreamConverter.jsm");
     delete this._pdfStreamConverterFactory;
 
     this._registered = false;

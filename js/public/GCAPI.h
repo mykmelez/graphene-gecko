@@ -7,6 +7,7 @@
 #ifndef js_GCAPI_h
 #define js_GCAPI_h
 
+#include "mozilla/TimeStamp.h"
 #include "mozilla/Vector.h"
 
 #include "js/GCAnnotations.h"
@@ -287,8 +288,8 @@ class GarbageCollectionEvent
     // Represents a single slice of a possibly multi-slice incremental garbage
     // collection.
     struct Collection {
-        double startTimestamp;
-        double endTimestamp;
+        mozilla::TimeStamp startTimestamp;
+        mozilla::TimeStamp endTimestamp;
     };
 
     // The set of garbage collection slices that made up this GC cycle.
@@ -643,12 +644,12 @@ ExposeGCThingToActiveJS(JS::GCCellPtr thing)
     if (thing.mayBeOwnedByOtherRuntime())
         return;
 
-    JS::shadow::Runtime* rt = detail::GetGCThingRuntime(thing.unsafeAsUIntPtr());
+    JS::shadow::Runtime* rt = detail::GetCellRuntime(thing.asCell());
     MOZ_DIAGNOSTIC_ASSERT(rt->allowGCBarriers());
 
     if (IsIncrementalBarrierNeededOnTenuredGCThing(rt, thing))
         JS::IncrementalReferenceBarrier(thing);
-    else if (JS::GCThingIsMarkedGray(thing))
+    else if (!thing.mayBeOwnedByOtherRuntime() && js::gc::detail::CellIsMarkedGray(thing.asCell()))
         JS::UnmarkGrayGCThingRecursively(thing);
 }
 
@@ -719,18 +720,6 @@ PokeGC(JSContext* cx);
  */
 extern JS_FRIEND_API(void)
 NotifyDidPaint(JSContext* cx);
-
-// GC Interrupt callbacks are run during GC. You should not run JS code or use
-// the JS engine at all while the callback is running. Otherwise they resemble
-// normal JS interrupt callbacks.
-typedef bool
-(* GCInterruptCallback)(JSContext* cx);
-
-extern JS_FRIEND_API(bool)
-AddGCInterruptCallback(JSContext* cx, GCInterruptCallback callback);
-
-extern JS_FRIEND_API(void)
-RequestGCInterruptCallback(JSContext* cx);
 
 } /* namespace JS */
 

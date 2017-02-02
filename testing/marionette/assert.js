@@ -8,6 +8,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 Cu.import("chrome://marionette/content/error.js");
 
@@ -30,7 +31,7 @@ this.assert = {};
  *     If current browser is not Firefox.
  */
 assert.firefox = function (msg = "") {
-  msg = msg || "Expected Firefox";
+  msg = msg || "Only supported in Firefox";
   assert.that(isFirefox, msg, UnsupportedOperationError)();
 };
 
@@ -44,7 +45,7 @@ assert.firefox = function (msg = "") {
  *     If current browser is not Fennec.
  */
 assert.fennec = function (msg = "") {
-  msg = msg || "Expected Fennec";
+  msg = msg || "Only supported in Fennec";
   assert.that(isFennec, msg, UnsupportedOperationError)();
 };
 
@@ -58,9 +59,28 @@ assert.fennec = function (msg = "") {
  *     If the current browser is not B2G.
  */
 assert.b2g = function (msg = "") {
-  msg = msg || "Expected B2G"
+  msg = msg || "Only supported in B2G";
   assert.that(isB2G, msg, UnsupportedOperationError)();
 };
+
+/**
+ * Asserts that the current |context| is content.
+ *
+ * @param {string} context
+ *     Context to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {string}
+ *     |context| is returned unaltered.
+ *
+ * @throws {UnsupportedOperationError}
+ *     If |context| is not content.
+ */
+assert.content = function (context, msg = "") {
+  msg = msg || "Only supported in content context";
+  assert.that(c => c.toString() == "content", msg, UnsupportedOperationError)(context);
+}
 
 /**
  * Asserts that the current browser is a mobile browser, that is either
@@ -73,7 +93,7 @@ assert.b2g = function (msg = "") {
  *     If the current browser is not B2G or Fennec.
  */
 assert.mobile = function (msg = "") {
-  msg = msg || "Expected Fennec or B2G";
+  msg = msg || "Only supported in Fennec or B2G";
   assert.that(() => isFennec() || isB2G(), msg, UnsupportedOperationError)();
 };
 
@@ -189,7 +209,50 @@ assert.string = function (obj, msg = "") {
  */
 assert.object = function (obj, msg = "") {
   msg = msg || error.pprint`Expected ${obj} to be an object`;
-  return assert.that(o => typeof o == "object", msg)(obj);
+  return assert.that(o =>
+      Object.prototype.toString.call(o) == "[object Object]", msg)(obj);
+};
+
+/**
+ * Asserts that |prop| is in |obj|.
+ *
+ * @param {?} prop
+ *     Own property to test if is in |obj|.
+ * @param {?} obj
+ *     Object.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {?}
+ *     Value of |obj|'s own property |prop|.
+ *
+ * @throws {InvalidArgumentError}
+ *     If |prop| is not in |obj|, or |obj| is not an object.
+ */
+assert.in = function (prop, obj, msg = "") {
+  assert.object(obj, msg);
+  msg = msg || error.pprint`Expected ${prop} in ${obj}`;
+  assert.that(p => obj.hasOwnProperty(p), msg)(prop);
+  return obj[prop];
+};
+
+/**
+ * Asserts that |obj| is an Array.
+ *
+ * @param {?} obj
+ *     Value to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {Object}
+ *     |obj| is returned unaltered.
+ *
+ * @throws {InvalidArgumentError}
+ *     If |obj| is not an Array.
+ */
+assert.array = function (obj, msg = "") {
+  msg = msg || error.pprint`Expected ${obj} to be an Array`;
+  return assert.that(Array.isArray, msg)(obj);
 };
 
 /**

@@ -29,6 +29,8 @@ import android.media.MediaDrmException;
 import android.media.NotProvisionedException;
 import android.util.Log;
 
+import org.mozilla.gecko.util.StringUtils;
+
 public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
     protected final String LOGTAG;
     private static final String INVALID_SESSION_ID = "Invalid";
@@ -36,6 +38,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
     private static final boolean DEBUG = false;
     private static final UUID WIDEVINE_SCHEME_UUID =
         new UUID(0xedef8ba979d64aceL, 0xa3c827dcd51d21edL);
+    private static final int MAX_PROMISE_ID = Integer.MAX_VALUE;
     // MediaDrm.KeyStatus information listener is supported on M+, adding a
     // dummy key id to report key status.
     private static final byte[] DUMMY_KEY_ID = new byte[] {0};
@@ -118,6 +121,15 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
         mDrm = new MediaDrm(mSchemeUUID);
         configureVendorSpecificProperty();
         mDrm.setOnEventListener(new MediaDrmListener());
+        try {
+            // ensureMediaCryptoCreated may cause NotProvisionedException for the first time use.
+            // Need to start provisioning with a dummy promise id.
+            ensureMediaCryptoCreated();
+        } catch (android.media.NotProvisionedException e) {
+            if (DEBUG) Log.d(LOGTAG, "Device not provisioned:" + e.getMessage());
+            startProvisioning(MAX_PROMISE_ID);
+        }
+
     }
 
     @Override
@@ -173,7 +185,8 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                              request.getData());
             mSessionMIMETypes.put(sessionId, initDataType);
             mSessionIds.add(sessionId);
-            if (DEBUG) Log.d(LOGTAG, " StringID : " + new String(sessionId.array()) + " is put into mSessionIds ");
+            if (DEBUG) Log.d(LOGTAG, " StringID : " + new String(
+                    sessionId.array(), StringUtils.UTF_8) + " is put into mSessionIds ");
         } catch (android.media.NotProvisionedException e) {
             if (DEBUG) Log.d(LOGTAG, "Device not provisioned:" + e.getMessage());
             if (sessionId != null) {
@@ -197,7 +210,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
             return;
         }
 
-        ByteBuffer session = ByteBuffer.wrap(sessionId.getBytes());
+        ByteBuffer session = ByteBuffer.wrap(sessionId.getBytes(StringUtils.UTF_8));
         if (!sessionExists(session)) {
             onRejectPromise(promiseId, "Invalid session during updateSession.");
             return;
@@ -232,7 +245,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
             return;
         }
 
-        ByteBuffer session = ByteBuffer.wrap(sessionId.getBytes());
+        ByteBuffer session = ByteBuffer.wrap(sessionId.getBytes(StringUtils.UTF_8));
         mSessionIds.remove(session);
         mDrm.closeSession(session.array());
         onSessionClosed(promiseId, session.array());
@@ -378,10 +391,10 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                     // No need to handle here if we're not in privacy mode.
                     break;
                 case MediaDrm.EVENT_KEY_EXPIRED:
-                    if (DEBUG) Log.d(LOGTAG, "MediaDrm.EVENT_KEY_EXPIRED, sessionId=" + new String(session.array()));
+                    if (DEBUG) Log.d(LOGTAG, "MediaDrm.EVENT_KEY_EXPIRED, sessionId=" + new String(session.array(), StringUtils.UTF_8));
                     break;
                 case MediaDrm.EVENT_VENDOR_DEFINED:
-                    if (DEBUG) Log.d(LOGTAG, "MediaDrm.EVENT_VENDOR_DEFINED, sessionId=" + new String(session.array()));
+                    if (DEBUG) Log.d(LOGTAG, "MediaDrm.EVENT_VENDOR_DEFINED, sessionId=" + new String(session.array(), StringUtils.UTF_8));
                     break;
                 default:
                     if (DEBUG) Log.d(LOGTAG, "Invalid DRM event " + event);
@@ -456,7 +469,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                 int responseCode = urlConnection.getResponseCode();
                 if (responseCode == HttpURLConnection.HTTP_OK) {
                     BufferedReader in =
-                      new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
+                      new BufferedReader(new InputStreamReader(urlConnection.getInputStream(), StringUtils.UTF_8));
                     String inputLine;
                     StringBuffer response = new StringBuffer();
 
@@ -464,7 +477,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                         response.append(inputLine);
                     }
                     in.close();
-                    mResponseBody = String.valueOf(response).getBytes();
+                    mResponseBody = String.valueOf(response).getBytes(StringUtils.UTF_8);
                     if (DEBUG) Log.d(LOGTAG, "Provisioning, response received.");
                     if (mResponseBody != null) Log.d(LOGTAG, "response length=" + mResponseBody.length);
                 } else {
@@ -590,7 +603,8 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                 final byte [] cryptoSessionId = mCryptoSessionId.array();
                 mCrypto = new MediaCrypto(mSchemeUUID, cryptoSessionId);
                 mSessionIds.add(mCryptoSessionId);
-                if (DEBUG) Log.d(LOGTAG, "MediaCrypto successfully created! - SId " + INVALID_SESSION_ID + ", " + new String(cryptoSessionId));
+                if (DEBUG) Log.d(LOGTAG, "MediaCrypto successfully created! - SId " + INVALID_SESSION_ID +
+                        ", " + new String(cryptoSessionId, StringUtils.UTF_8));
                 return true;
             } else {
                 if (DEBUG) Log.d(LOGTAG, "Cannot create MediaCrypto for unsupported scheme.");

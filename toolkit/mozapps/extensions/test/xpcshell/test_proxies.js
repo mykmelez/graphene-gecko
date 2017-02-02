@@ -106,8 +106,7 @@ function* run_proxy_tests() {
 
     if (addon.type == "proxy") {
       writeFile(addon.directory.path, addon.proxyFile)
-    }
-    else if (addon.type == "symlink") {
+    } else if (addon.type == "symlink") {
       yield createSymlink(addon.directory, addon.proxyFile)
     }
   }
@@ -118,9 +117,7 @@ function* run_proxy_tests() {
   // add-ons have been removed at startup.
   checkAddonsExist();
 
-  return new Promise(resolve => {
-    AddonManager.getAddonsByIDs(ADDONS.map(addon => addon.id), resolve);
-  }).then(addons => {
+  return AddonManager.getAddonsByIDs(ADDONS.map(addon => addon.id)).then(addons => {
     try {
       for (let [i, addon] of addons.entries()) {
         // Ensure that valid proxied add-ons were installed properly on
@@ -174,8 +171,7 @@ function* run_proxy_tests() {
           addon.proxyFile.remove(false);
         } catch (e) {}
       }
-    }
-    catch (e) {
+    } catch (e) {
       do_throw(e);
     }
   });
@@ -213,9 +209,7 @@ function* run_symlink_tests() {
 
   startupManager();
 
-  return new Promise(resolve => {
-    AddonManager.getAddonByID(METADATA.id, resolve);
-  }).then(addon => {
+  return AddonManager.getAddonByID(METADATA.id).then(addon => {
     do_check_neq(addon, null);
 
     addon.uninstall();

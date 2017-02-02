@@ -74,6 +74,30 @@ NS_NewComputedDOMStyle(dom::Element* aElement, const nsAString& aPseudoElt,
   return computedStyle.forget();
 }
 
+static nsDOMCSSValueList*
+GetROCSSValueList(bool aCommaDelimited)
+{
+  return new nsDOMCSSValueList(aCommaDelimited, true);
+}
+
+template<typename T>
+already_AddRefed<CSSValue>
+GetBackgroundList(T nsStyleImageLayers::Layer::* aMember,
+                  uint32_t nsStyleImageLayers::* aCount,
+                  const nsStyleImageLayers& aLayers,
+                  const nsCSSProps::KTableEntry aTable[])
+{
+  RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(true);
+
+  for (uint32_t i = 0, i_end = aLayers.*aCount; i < i_end; ++i) {
+    RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+    val->SetIdent(nsCSSProps::ValueToKeywordEnum(aLayers.mLayers[i].*aMember, aTable));
+    valueList->AppendCSSValue(val.forget());
+  }
+
+  return valueList.forget();
+}
+
 /**
  * An object that represents the ordered set of properties that are exposed on
  * an nsComputedDOMStyle object and how their computed values can be obtained.
@@ -280,21 +304,20 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsComputedDOMStyle)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mContent)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(nsComputedDOMStyle)
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(nsComputedDOMStyle)
-  return tmp->IsBlack();
+  return tmp->HasKnownLiveWrapper();
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_END
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_BEGIN(nsComputedDOMStyle)
-  return tmp->IsBlack();
+  return tmp->HasKnownLiveWrapper();
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_END
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_BEGIN(nsComputedDOMStyle)
-  return tmp->IsBlack();
+  return tmp->HasKnownLiveWrapper();
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 
 // QueryInterface implementation for nsComputedDOMStyle
@@ -419,18 +442,142 @@ nsComputedDOMStyle::GetStyleContextForElement(Element* aElement,
       return nullptr;
   }
 
-  presShell->FlushPendingNotifications(Flush_Style);
+  presShell->FlushPendingNotifications(FlushType::Style);
 
   return GetStyleContextForElementNoFlush(aElement, aPseudo, presShell,
                                           aStyleType);
 }
 
-/* static */
+namespace {
+class MOZ_STACK_CLASS StyleResolver final
+{
+public:
+  StyleResolver(nsPresContext* aPresContext,
+                nsComputedDOMStyle::AnimationFlag aAnimationFlag)
+    : mAnimationFlag(aAnimationFlag)
+  {
+    MOZ_ASSERT(aPresContext);
+
+    // Nothing to do if we are going to resolve style *with* animation.
+    if (mAnimationFlag == nsComputedDOMStyle::eWithAnimation) {
+      return;
+    }
+
+    // Set SkipAnimationRules flag if we are going to resolve style without
+    // animation.
+    if (aPresContext->RestyleManager()->IsGecko()) {
+      mRestyleManager = aPresContext->RestyleManager()->AsGecko();
+
+      mOldSkipAnimationRules = mRestyleManager->SkipAnimationRules();
+      mRestyleManager->SetSkipAnimationRules(true);
+    } else {
+      NS_WARNING("stylo: can't skip animaition rules yet");
+    }
+  }
+
+  already_AddRefed<nsStyleContext>
+  ResolveWithAnimation(StyleSetHandle aStyleSet,
+                       Element* aElement,
+                       CSSPseudoElementType aType,
+                       nsStyleContext* aParentContext,
+                       nsComputedDOMStyle::StyleType aStyleType,
+                       bool aInDocWithShell)
+  {
+    MOZ_ASSERT(mAnimationFlag == nsComputedDOMStyle::eWithAnimation,
+      "AnimationFlag should be eWithAnimation");
+
+    RefPtr<nsStyleContext> result;
+
+    if (aType != CSSPseudoElementType::NotPseudo) {
+      nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
+      Element* pseudoElement =
+        frame && aInDocWithShell ? frame->GetPseudoElement(aType) : nullptr;
+      result = aStyleSet->ResolvePseudoElementStyle(aElement, aType,
+                                                    aParentContext,
+                                                    pseudoElement);
+    } else {
+      result = aStyleSet->ResolveStyleFor(aElement, aParentContext,
+                                          LazyComputeBehavior::Allow);
+    }
+    if (aStyleType == nsComputedDOMStyle::StyleType::eDefaultOnly) {
+      // We really only want the user and UA rules.  Filter out the other ones.
+      nsTArray< nsCOMPtr<nsIStyleRule> > rules;
+      for (nsRuleNode* ruleNode = result->RuleNode();
+           !ruleNode->IsRoot();
+           ruleNode = ruleNode->GetParent()) {
+        if (ruleNode->GetLevel() == SheetType::Agent ||
+            ruleNode->GetLevel() == SheetType::User) {
+          rules.AppendElement(ruleNode->GetRule());
+        }
+      }
+
+      // We want to build a list of user/ua rules that is in order from least to
+      // most important, so we have to reverse the list.
+      // Integer division to get "stop" is purposeful here: if length is odd, we
+      // don't have to do anything with the middle element of the array.
+      for (uint32_t i = 0, length = rules.Length(), stop = length / 2;
+           i < stop; ++i) {
+        rules[i].swap(rules[length - i - 1]);
+      }
+
+      result = aStyleSet->AsGecko()->ResolveStyleForRules(aParentContext,
+                                                          rules);
+    }
+    return result.forget();
+  }
+
+  already_AddRefed<nsStyleContext>
+  ResolveWithoutAnimation(StyleSetHandle aStyleSet,
+                          Element* aElement,
+                          CSSPseudoElementType aType,
+                          nsStyleContext* aParentContext,
+                          bool aInDocWithShell)
+  {
+    MOZ_ASSERT(!aStyleSet->IsServo(),
+      "Bug 1311257: Servo backend does not support the base value yet");
+    MOZ_ASSERT(mAnimationFlag == nsComputedDOMStyle::eWithoutAnimation,
+      "AnimationFlag should be eWithoutAnimation");
+
+    RefPtr<nsStyleContext> result;
+
+    if (aType != CSSPseudoElementType::NotPseudo) {
+      nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
+      Element* pseudoElement =
+        frame && aInDocWithShell ? frame->GetPseudoElement(aType) : nullptr;
+      result =
+        aStyleSet->AsGecko()->ResolvePseudoElementStyleWithoutAnimation(
+          aElement, aType,
+          aParentContext,
+          pseudoElement);
+    } else {
+      result =
+        aStyleSet->AsGecko()->ResolveStyleWithoutAnimation(aElement,
+                                                           aParentContext);
+    }
+    return result.forget();
+  }
+
+  ~StyleResolver()
+  {
+    if (mRestyleManager) {
+      mRestyleManager->SetSkipAnimationRules(mOldSkipAnimationRules);
+    }
+  }
+
+private:
+  RestyleManager* mRestyleManager = nullptr;
+  bool mOldSkipAnimationRules = false;
+  nsComputedDOMStyle::AnimationFlag mAnimationFlag;
+};
+}
+
 already_AddRefed<nsStyleContext>
-nsComputedDOMStyle::GetStyleContextForElementNoFlush(Element* aElement,
-                                                     nsIAtom* aPseudo,
-                                                     nsIPresShell* aPresShell,
-                                                     StyleType aStyleType)
+nsComputedDOMStyle::DoGetStyleContextForElementNoFlush(
+  Element* aElement,
+  nsIAtom* aPseudo,
+  nsIPresShell* aPresShell,
+  StyleType aStyleType,
+  AnimationFlag aAnimationFlag)
 {
   MOZ_ASSERT(aElement, "NULL element");
   // If the content has a pres shell, we must use it.  Otherwise we'd
@@ -468,13 +615,6 @@ nsComputedDOMStyle::GetStyleContextForElementNoFlush(Element* aElement,
 
   // No frame has been created, or we have a pseudo, or we're looking
   // for the default style, so resolve the style ourselves.
-  RefPtr<nsStyleContext> parentContext;
-  nsIContent* parent = aPseudo ? aElement : aElement->GetParent();
-  // Don't resolve parent context for document fragments.
-  if (parent && parent->IsElement())
-    parentContext = GetStyleContextForElementNoFlush(parent->AsElement(),
-                                                     nullptr, presShell,
-                                                     aStyleType);
 
   nsPresContext *presContext = presShell->GetPresContext();
   if (!presContext)
@@ -482,53 +622,91 @@ nsComputedDOMStyle::GetStyleContextForElementNoFlush(Element* aElement,
 
   StyleSetHandle styleSet = presShell->StyleSet();
 
-  RefPtr<nsStyleContext> sc;
+  auto type = CSSPseudoElementType::NotPseudo;
   if (aPseudo) {
-    CSSPseudoElementType type = nsCSSPseudoElements::
+    type = nsCSSPseudoElements::
       GetPseudoType(aPseudo, CSSEnabledState::eIgnoreEnabledState);
     if (type >= CSSPseudoElementType::Count) {
       return nullptr;
     }
-    nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
-    Element* pseudoElement =
-      frame && inDocWithShell ? frame->GetPseudoElement(type) : nullptr;
-    sc = styleSet->ResolvePseudoElementStyle(aElement, type, parentContext,
-                                             pseudoElement);
-  } else {
-    sc = styleSet->ResolveStyleFor(aElement, parentContext, ConsumeStyleBehavior::DontConsume,
-                                   LazyComputeBehavior::Allow);
   }
 
-  if (aStyleType == eDefaultOnly) {
-    if (styleSet->IsServo()) {
+  // For Servo, compute the result directly without recursively building up
+  // a throwaway style context chain.
+  if (ServoStyleSet* servoSet = styleSet->GetAsServo()) {
+    if (aStyleType == eDefaultOnly) {
       NS_ERROR("stylo: ServoStyleSets cannot supply UA-only styles yet");
       return nullptr;
     }
-
-    // We really only want the user and UA rules.  Filter out the other ones.
-    nsTArray< nsCOMPtr<nsIStyleRule> > rules;
-    for (nsRuleNode* ruleNode = sc->RuleNode();
-         !ruleNode->IsRoot();
-         ruleNode = ruleNode->GetParent()) {
-      if (ruleNode->GetLevel() == SheetType::Agent ||
-          ruleNode->GetLevel() == SheetType::User) {
-        rules.AppendElement(ruleNode->GetRule());
-      }
-    }
-
-    // We want to build a list of user/ua rules that is in order from least to
-    // most important, so we have to reverse the list.
-    // Integer division to get "stop" is purposeful here: if length is odd, we
-    // don't have to do anything with the middle element of the array.
-    for (uint32_t i = 0, length = rules.Length(), stop = length / 2;
-         i < stop; ++i) {
-      rules[i].swap(rules[length - i - 1]);
-    }
-
-    sc = styleSet->AsGecko()->ResolveStyleForRules(parentContext, rules);
+    return servoSet->ResolveTransientStyle(aElement, type);
   }
 
-  return sc.forget();
+  RefPtr<nsStyleContext> parentContext;
+  nsIContent* parent = aPseudo ? aElement : aElement->GetParent();
+  // Don't resolve parent context for document fragments.
+  if (parent && parent->IsElement()) {
+    parentContext = GetStyleContextForElementNoFlush(parent->AsElement(),
+                                                     nullptr, aPresShell,
+                                                     aStyleType);
+  }
+
+  StyleResolver styleResolver(presContext, aAnimationFlag);
+
+  if (aAnimationFlag == eWithAnimation) {
+    return styleResolver.ResolveWithAnimation(styleSet,
+                                              aElement, type,
+                                              parentContext,
+                                              aStyleType,
+                                              inDocWithShell);
+  }
+
+  return styleResolver.ResolveWithoutAnimation(styleSet,
+                                               aElement, type,
+                                               parentContext,
+                                               inDocWithShell);
+}
+
+
+/* static */
+already_AddRefed<nsStyleContext>
+nsComputedDOMStyle::GetStyleContextForElementNoFlush(Element* aElement,
+                                                     nsIAtom* aPseudo,
+                                                     nsIPresShell* aPresShell,
+                                                     StyleType aStyleType)
+{
+  return DoGetStyleContextForElementNoFlush(aElement,
+                                            aPseudo,
+                                            aPresShell,
+                                            aStyleType,
+                                            eWithAnimation);
+}
+
+/* static */
+already_AddRefed<nsStyleContext>
+nsComputedDOMStyle::GetStyleContextForElementWithoutAnimation(
+  Element* aElement,
+  nsIAtom* aPseudo,
+  nsIPresShell* aPresShell)
+{
+  // If the content has a pres shell, we must use it.  Otherwise we'd
+  // potentially mix rule trees by using the wrong pres shell's style
+  // set.  Using the pres shell from the content also means that any
+  // content that's actually *in* a document will get the style from the
+  // correct document.
+  nsCOMPtr<nsIPresShell> presShell = GetPresShellForContent(aElement);
+  if (!presShell) {
+    presShell = aPresShell;
+    if (!presShell)
+      return nullptr;
+  }
+
+  presShell->FlushPendingNotifications(FlushType::Style);
+
+  return DoGetStyleContextForElementNoFlush(aElement,
+                                            aPseudo,
+                                            presShell,
+                                            eAll,
+                                            eWithoutAnimation);
 }
 
 nsMargin
@@ -632,7 +810,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
   // we're computing style in, not on the document mContent is in -- the two
   // may be different.
   document->FlushPendingNotifications(
-    aNeedsLayoutFlush ? Flush_Layout : Flush_Style);
+    aNeedsLayoutFlush ? FlushType::Layout : FlushType::Style);
 #ifdef DEBUG
   mFlushedPendingReflows = aNeedsLayoutFlush;
 #endif
@@ -1081,7 +1259,7 @@ nsComputedDOMStyle::DoGetContent()
   }
 
   if (content->ContentCount() == 1 &&
-      content->ContentAt(0).mType == eStyleContentType_AltContent) {
+      content->ContentAt(0).GetType() == eStyleContentType_AltContent) {
     RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
     val->SetIdent(eCSSKeyword__moz_alt_content);
     return val.forget();
@@ -1093,69 +1271,66 @@ nsComputedDOMStyle::DoGetContent()
     RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
 
     const nsStyleContentData &data = content->ContentAt(i);
-    switch (data.mType) {
-      case eStyleContentType_String:
-        {
-          nsAutoString str;
-          nsStyleUtil::AppendEscapedCSSString(
-            nsDependentString(data.mContent.mString), str);
-          val->SetString(str);
-        }
+    nsStyleContentType type = data.GetType();
+    switch (type) {
+      case eStyleContentType_String: {
+        nsAutoString str;
+        nsStyleUtil::AppendEscapedCSSString(
+          nsDependentString(data.GetString()), str);
+        val->SetString(str);
         break;
-      case eStyleContentType_Image:
-        {
-          nsCOMPtr<nsIURI> uri;
-          if (data.mContent.mImage) {
-            data.mContent.mImage->GetURI(getter_AddRefs(uri));
-          }
-          val->SetURI(uri);
+      }
+      case eStyleContentType_Image: {
+        nsCOMPtr<nsIURI> uri;
+        if (imgRequestProxy* image = data.GetImage()) {
+          image->GetURI(getter_AddRefs(uri));
         }
+        val->SetURI(uri);
         break;
-      case eStyleContentType_Attr:
-        {
-          nsAutoString str;
-          nsStyleUtil::AppendEscapedCSSIdent(
-            nsDependentString(data.mContent.mString), str);
-          val->SetString(str, nsIDOMCSSPrimitiveValue::CSS_ATTR);
-        }
+      }
+      case eStyleContentType_Attr: {
+        nsAutoString str;
+        nsStyleUtil::AppendEscapedCSSIdent(
+          nsDependentString(data.GetString()), str);
+        val->SetString(str, nsIDOMCSSPrimitiveValue::CSS_ATTR);
         break;
+      }
       case eStyleContentType_Counter:
-      case eStyleContentType_Counters:
-        {
-          /* FIXME: counters should really use an object */
-          nsAutoString str;
-          if (data.mType == eStyleContentType_Counter) {
-            str.AppendLiteral("counter(");
-          }
-          else {
-            str.AppendLiteral("counters(");
-          }
-          // WRITE ME
-          nsCSSValue::Array *a = data.mContent.mCounters;
-
-          nsStyleUtil::AppendEscapedCSSIdent(
-            nsDependentString(a->Item(0).GetStringBufferValue()), str);
-          int32_t typeItem = 1;
-          if (data.mType == eStyleContentType_Counters) {
-            typeItem = 2;
-            str.AppendLiteral(", ");
-            nsStyleUtil::AppendEscapedCSSString(
-              nsDependentString(a->Item(1).GetStringBufferValue()), str);
-          }
-          MOZ_ASSERT(eCSSUnit_None != a->Item(typeItem).GetUnit(),
-                     "'none' should be handled as identifier value");
-          nsString type;
-          a->Item(typeItem).AppendToString(eCSSProperty_list_style_type,
-                                           type, nsCSSValue::eNormalized);
-          if (!type.LowerCaseEqualsLiteral("decimal")) {
-            str.AppendLiteral(", ");
-            str.Append(type);
-          }
-
-          str.Append(char16_t(')'));
-          val->SetString(str, nsIDOMCSSPrimitiveValue::CSS_COUNTER);
+      case eStyleContentType_Counters: {
+        /* FIXME: counters should really use an object */
+        nsAutoString str;
+        if (type == eStyleContentType_Counter) {
+          str.AppendLiteral("counter(");
         }
+        else {
+          str.AppendLiteral("counters(");
+        }
+        // WRITE ME
+        nsCSSValue::Array* a = data.GetCounters();
+
+        nsStyleUtil::AppendEscapedCSSIdent(
+          nsDependentString(a->Item(0).GetStringBufferValue()), str);
+        int32_t typeItem = 1;
+        if (type == eStyleContentType_Counters) {
+          typeItem = 2;
+          str.AppendLiteral(", ");
+          nsStyleUtil::AppendEscapedCSSString(
+            nsDependentString(a->Item(1).GetStringBufferValue()), str);
+        }
+        MOZ_ASSERT(eCSSUnit_None != a->Item(typeItem).GetUnit(),
+                   "'none' should be handled as identifier value");
+        nsString type;
+        a->Item(typeItem).AppendToString(eCSSProperty_list_style_type,
+                                         type, nsCSSValue::eNormalized);
+        if (!type.LowerCaseEqualsLiteral("decimal")) {
+          str.AppendLiteral(", ");
+          str.Append(type);
+        }
+
+        str.Append(char16_t(')'));
+        val->SetString(str, nsIDOMCSSPrimitiveValue::CSS_COUNTER);
         break;
+      }
       case eStyleContentType_OpenQuote:
         val->SetIdent(eCSSKeyword_open_quote);
         break;
@@ -1815,24 +1990,6 @@ nsComputedDOMStyle::DoGetFontVariantPosition()
 }
 
 already_AddRefed<CSSValue>
-nsComputedDOMStyle::GetBackgroundList(uint8_t nsStyleImageLayers::Layer::* aMember,
-                                      uint32_t nsStyleImageLayers::* aCount,
-                                      const nsStyleImageLayers& aLayers,
-                                      const KTableEntry aTable[])
-{
-  RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(true);
-
-  for (uint32_t i = 0, i_end = aLayers.*aCount; i < i_end; ++i) {
-    RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-    val->SetIdent(nsCSSProps::ValueToKeywordEnum(aLayers.mLayers[i].*aMember,
-                                                 aTable));
-    valueList->AppendCSSValue(val.forget());
-  }
-
-  return valueList.forget();
-}
-
-already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBackgroundAttachment()
 {
   return GetBackgroundList(&nsStyleImageLayers::Layer::mAttachment,
@@ -1854,7 +2011,7 @@ already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBackgroundColor()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  SetToRGBAColor(val, StyleBackground()->mBackgroundColor);
+  SetValueFromComplexColor(val, StyleBackground()->mBackgroundColor);
   return val.forget();
 }
 
@@ -2379,7 +2536,7 @@ nsComputedDOMStyle::DoGetBackgroundOrigin()
   return GetBackgroundList(&nsStyleImageLayers::Layer::mOrigin,
                            &nsStyleImageLayers::mOriginCount,
                            StyleBackground()->mImage,
-                           nsCSSProps::kImageLayerOriginKTable);
+                           nsCSSProps::kBackgroundOriginKTable);
 }
 
 void
@@ -3113,28 +3270,28 @@ already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBorderBottomLeftRadius()
 {
   return GetEllipseRadii(StyleBorder()->mBorderRadius,
-                         NS_CORNER_BOTTOM_LEFT);
+                         eCornerBottomLeft);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBorderBottomRightRadius()
 {
   return GetEllipseRadii(StyleBorder()->mBorderRadius,
-                         NS_CORNER_BOTTOM_RIGHT);
+                         eCornerBottomRight);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBorderTopLeftRadius()
 {
   return GetEllipseRadii(StyleBorder()->mBorderRadius,
-                         NS_CORNER_TOP_LEFT);
+                         eCornerTopLeft);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetBorderTopRightRadius()
 {
   return GetEllipseRadii(StyleBorder()->mBorderRadius,
-                         NS_CORNER_TOP_RIGHT);
+                         eCornerTopRight);
 }
 
 already_AddRefed<CSSValue>
@@ -3364,28 +3521,28 @@ already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetOutlineRadiusBottomLeft()
 {
   return GetEllipseRadii(StyleOutline()->mOutlineRadius,
-                         NS_CORNER_BOTTOM_LEFT);
+                         eCornerBottomLeft);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetOutlineRadiusBottomRight()
 {
   return GetEllipseRadii(StyleOutline()->mOutlineRadius,
-                         NS_CORNER_BOTTOM_RIGHT);
+                         eCornerBottomRight);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetOutlineRadiusTopLeft()
 {
   return GetEllipseRadii(StyleOutline()->mOutlineRadius,
-                         NS_CORNER_TOP_LEFT);
+                         eCornerTopLeft);
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetOutlineRadiusTopRight()
 {
   return GetEllipseRadii(StyleOutline()->mOutlineRadius,
-                         NS_CORNER_TOP_RIGHT);
+                         eCornerTopRight);
 }
 
 already_AddRefed<CSSValue>
@@ -3398,10 +3555,10 @@ nsComputedDOMStyle::DoGetOutlineColor()
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::GetEllipseRadii(const nsStyleCorners& aRadius,
-                                    uint8_t aFullCorner)
+                                    Corner aFullCorner)
 {
-  nsStyleCoord radiusX = aRadius.Get(NS_FULL_TO_HALF_CORNER(aFullCorner, false));
-  nsStyleCoord radiusY = aRadius.Get(NS_FULL_TO_HALF_CORNER(aFullCorner, true));
+  nsStyleCoord radiusX = aRadius.Get(FullToHalfCorner(aFullCorner, false));
+  nsStyleCoord radiusY = aRadius.Get(FullToHalfCorner(aFullCorner, true));
 
   // for compatibility, return a single value if X and Y are equal
   if (radiusX == radiusY) {
@@ -4134,6 +4291,14 @@ nsComputedDOMStyle::DoGetUnicodeBidi()
   val->SetIdent(
     nsCSSProps::ValueToKeywordEnum(StyleTextReset()->mUnicodeBidi,
                                    nsCSSProps::kUnicodeBidiKTable));
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetCaretColor()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  SetValueFromComplexColor(val, StyleUserInterface()->mCaretColor);
   return val.forget();
 }
 
@@ -5019,12 +5184,6 @@ already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetTop()
 {
   return GetOffsetWidthFor(eSideTop);
-}
-
-nsDOMCSSValueList*
-nsComputedDOMStyle::GetROCSSValueList(bool aCommaDelimited)
-{
-  return new nsDOMCSSValueList(aCommaDelimited, true);
 }
 
 already_AddRefed<CSSValue>
@@ -5943,9 +6102,9 @@ nsComputedDOMStyle::BasicShapeRadiiToString(nsAString& aCssText,
   nsAutoString horizontalString, verticalString;
   NS_FOR_CSS_FULL_CORNERS(corner) {
     horizontal.AppendElement(
-      aCorners.Get(NS_FULL_TO_HALF_CORNER(corner, false)));
+      aCorners.Get(FullToHalfCorner(corner, false)));
     vertical.AppendElement(
-      aCorners.Get(NS_FULL_TO_HALF_CORNER(corner, true)));
+      aCorners.Get(FullToHalfCorner(corner, true)));
   }
   BoxValuesToString(horizontalString, horizontal);
   BoxValuesToString(verticalString, vertical);
@@ -6188,8 +6347,8 @@ nsComputedDOMStyle::DoGetMask()
   // need to support computed style for the cases where it used to be
   // a longhand.
   if (svg->mMask.mImageCount > 1 ||
-      firstLayer.mClip != NS_STYLE_IMAGELAYER_CLIP_BORDER ||
-      firstLayer.mOrigin != NS_STYLE_IMAGELAYER_ORIGIN_BORDER ||
+      firstLayer.mClip != StyleGeometryBox::Border ||
+      firstLayer.mOrigin != StyleGeometryBox::Border ||
       firstLayer.mComposite != NS_STYLE_MASK_COMPOSITE_ADD ||
       firstLayer.mMaskMode != NS_STYLE_MASK_MODE_MATCH_SOURCE ||
       !nsStyleImageLayers::IsInitialPositionForLayerType(
@@ -6215,7 +6374,7 @@ nsComputedDOMStyle::DoGetMaskClip()
   return GetBackgroundList(&nsStyleImageLayers::Layer::mClip,
                            &nsStyleImageLayers::mClipCount,
                            StyleSVGReset()->mMask,
-                           nsCSSProps::kImageLayerOriginKTable);
+                           nsCSSProps::kMaskClipKTable);
 }
 
 already_AddRefed<CSSValue>
@@ -6249,7 +6408,7 @@ nsComputedDOMStyle::DoGetMaskOrigin()
   return GetBackgroundList(&nsStyleImageLayers::Layer::mOrigin,
                            &nsStyleImageLayers::mOriginCount,
                            StyleSVGReset()->mMask,
-                           nsCSSProps::kImageLayerOriginKTable);
+                           nsCSSProps::kMaskOriginKTable);
 }
 
 already_AddRefed<CSSValue>

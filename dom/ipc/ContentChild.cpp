@@ -27,13 +27,16 @@
 #include "mozilla/dom/VideoDecoderManagerChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/DOMStorageIPC.h"
+#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/ExternalHelperAppChild.h"
 #include "mozilla/dom/FlyWebPublishedServerIPC.h"
 #include "mozilla/dom/GetFilesHelper.h"
+#include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/dom/PCrashReporterChild.h"
 #include "mozilla/dom/ProcessGlobal.h"
 #include "mozilla/dom/PushNotifier.h"
+#include "mozilla/dom/StorageIPC.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
 #include "mozilla/dom/nsIContentChild.h"
 #include "mozilla/dom/URLClassifierChild.h"
@@ -132,7 +135,6 @@
 #include "nsFrameMessageManager.h"
 
 #include "nsIGeolocationProvider.h"
-#include "mozilla/dom/PMemoryReportRequestChild.h"
 #include "mozilla/dom/PCycleCollectWithLogsChild.h"
 
 #include "nsIScriptSecurityManager.h"
@@ -194,6 +196,7 @@
 #include "mozilla/widget/PuppetBidiKeyboard.h"
 #include "mozilla/RemoteSpellCheckEngineChild.h"
 #include "GMPServiceChild.h"
+#include "GfxInfoBase.h"
 #include "gfxPlatform.h"
 #include "nscore.h" // for NS_FREE_PERMANENT_DATA
 #include "VRManagerChild.h"
@@ -220,39 +223,8 @@ using namespace mozilla::system;
 using namespace mozilla::widget;
 
 namespace mozilla {
+
 namespace dom {
-
-class MemoryReportRequestChild : public PMemoryReportRequestChild,
-                                 public nsIRunnable
-{
-public:
-  NS_DECL_ISUPPORTS
-
-  MemoryReportRequestChild(bool aAnonymize,
-                           const MaybeFileDesc& aDMDFile);
-  NS_IMETHOD Run() override;
-
-private:
-  ~MemoryReportRequestChild() override;
-
-  bool     mAnonymize;
-  FileDescriptor mDMDFile;
-};
-
-NS_IMPL_ISUPPORTS(MemoryReportRequestChild, nsIRunnable)
-
-MemoryReportRequestChild::MemoryReportRequestChild(
-  bool aAnonymize, const MaybeFileDesc& aDMDFile)
-: mAnonymize(aAnonymize)
-{
-  if (aDMDFile.type() == MaybeFileDesc::TFileDescriptor) {
-    mDMDFile = aDMDFile.get_FileDescriptor();
-  }
-}
-
-MemoryReportRequestChild::~MemoryReportRequestChild()
-{
-}
 
 // IPC sender for remote GC/CC logging.
 class CycleCollectWithLogsChild final
@@ -609,6 +581,10 @@ ContentChild::Init(MessageLoop* aIOLoop,
 
   SetProcessName(NS_LITERAL_STRING("Web Content"), true);
 
+  nsTArray<mozilla::dom::GfxInfoFeatureStatus> featureStatus;
+  SendGetGfxInfoFeatureStatus(&featureStatus);
+  GfxInfoBase::SetFeatureStatus(featureStatus);
+
   return true;
 }
 
@@ -665,7 +641,7 @@ ContentChild::ProvideWindow(mozIDOMWindowProxy* aParent,
 static nsresult
 GetWindowParamsFromParent(mozIDOMWindowProxy* aParent,
                           nsACString& aBaseURIString, float* aFullZoom,
-                          DocShellOriginAttributes& aOriginAttributes)
+                          OriginAttributes& aOriginAttributes)
 {
   *aFullZoom = 1.0f;
   auto* opener = nsPIDOMWindowOuter::From(aParent);
@@ -732,7 +708,7 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
       if (NS_SUCCEEDED(rv) && !shouldLoad) {
         nsAutoCString baseURIString;
         float fullZoom;
-        DocShellOriginAttributes originAttributes;
+        OriginAttributes originAttributes;
         rv = GetWindowParamsFromParent(aParent, baseURIString, &fullZoom,
                                        originAttributes);
         if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -786,6 +762,19 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
     ipcContext->get_PopupIPCTabContext().opener() = aTabOpener;
   }
 
+  // We need to assign a TabGroup to the PBrowser actor before we send it to the
+  // parent. Otherwise, the parent could send messages to us before we have a
+  // proper TabGroup for that actor.
+  RefPtr<TabGroup> tabGroup;
+  if (aTabOpener && !aForceNoOpener) {
+    // The new actor will use the same tab group as the opener.
+    tabGroup = aTabOpener->TabGroup();
+  } else {
+    tabGroup = new TabGroup();
+  }
+  nsCOMPtr<nsIEventTarget> target = tabGroup->EventTargetFor(TaskCategory::Other);
+  SetEventTargetForActor(newChild, target);
+
   Unused << SendPBrowserConstructor(
     // We release this ref in DeallocPBrowserChild
     RefPtr<TabChild>(newChild).forget().take(),
@@ -819,7 +808,7 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
   } else {
     nsAutoCString baseURIString;
     float fullZoom;
-    DocShellOriginAttributes originAttributes;
+    OriginAttributes originAttributes;
     rv = GetWindowParamsFromParent(aParent, baseURIString, &fullZoom,
                                    originAttributes);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1029,135 +1018,19 @@ ContentChild::InitXPCOM()
   mozilla::dom::time::InitializeDateCacheCleaner();
 }
 
-PMemoryReportRequestChild*
-ContentChild::AllocPMemoryReportRequestChild(const uint32_t& aGeneration,
-                                             const bool &aAnonymize,
-                                             const bool &aMinimizeMemoryUsage,
-                                             const MaybeFileDesc& aDMDFile)
-{
-  auto *actor =
-    new MemoryReportRequestChild(aAnonymize, aDMDFile);
-  actor->AddRef();
-  return actor;
-}
-
-class HandleReportCallback final : public nsIHandleReportCallback
-{
-public:
-  NS_DECL_ISUPPORTS
-
-  explicit HandleReportCallback(MemoryReportRequestChild* aActor,
-                                const nsACString& aProcess)
-  : mActor(aActor)
-  , mProcess(aProcess)
-  { }
-
-  NS_IMETHOD Callback(const nsACString& aProcess, const nsACString &aPath,
-                      int32_t aKind, int32_t aUnits, int64_t aAmount,
-                      const nsACString& aDescription,
-                      nsISupports* aUnused) override
-  {
-    MemoryReport memreport(mProcess, nsCString(aPath), aKind, aUnits,
-                           aAmount, nsCString(aDescription));
-    mActor->SendReport(memreport);
-    return NS_OK;
-  }
-private:
-  ~HandleReportCallback() = default;
-
-  RefPtr<MemoryReportRequestChild> mActor;
-  const nsCString mProcess;
-};
-
-NS_IMPL_ISUPPORTS(
-  HandleReportCallback
-, nsIHandleReportCallback
-)
-
-class FinishReportingCallback final : public nsIFinishReportingCallback
-{
-public:
-  NS_DECL_ISUPPORTS
-
-  explicit FinishReportingCallback(MemoryReportRequestChild* aActor)
-  : mActor(aActor)
-  {
-  }
-
-  NS_IMETHOD Callback(nsISupports* aUnused) override
-  {
-    bool sent = PMemoryReportRequestChild::Send__delete__(mActor);
-    return sent ? NS_OK : NS_ERROR_FAILURE;
-  }
-
-private:
-  ~FinishReportingCallback() = default;
-
-  RefPtr<MemoryReportRequestChild> mActor;
-};
-
-NS_IMPL_ISUPPORTS(
-  FinishReportingCallback
-, nsIFinishReportingCallback
-)
-
 mozilla::ipc::IPCResult
-ContentChild::RecvPMemoryReportRequestConstructor(
-  PMemoryReportRequestChild* aChild,
-  const uint32_t& aGeneration,
-  const bool& aAnonymize,
-  const bool& aMinimizeMemoryUsage,
-  const MaybeFileDesc& aDMDFile)
+ContentChild::RecvRequestMemoryReport(const uint32_t& aGeneration,
+                                      const bool& aAnonymize,
+                                      const bool& aMinimizeMemoryUsage,
+                                      const MaybeFileDesc& aDMDFile)
 {
-  MemoryReportRequestChild *actor =
-    static_cast<MemoryReportRequestChild*>(aChild);
-  DebugOnly<nsresult> rv;
-
-  if (aMinimizeMemoryUsage) {
-    nsCOMPtr<nsIMemoryReporterManager> mgr =
-      do_GetService("@mozilla.org/memory-reporter-manager;1");
-    rv = mgr->MinimizeMemoryUsage(actor);
-    // mgr will eventually call actor->Run()
-  } else {
-    rv = actor->Run();
-  }
-
-  // Bug 1295622: don't kill the process just because this failed.
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "actor operation failed");
-  return IPC_OK();
-}
-
-NS_IMETHODIMP MemoryReportRequestChild::Run()
-{
-  ContentChild *child = static_cast<ContentChild*>(Manager());
-  nsCOMPtr<nsIMemoryReporterManager> mgr =
-    do_GetService("@mozilla.org/memory-reporter-manager;1");
-
   nsCString process;
-  child->GetProcessName(process);
-  child->AppendProcessId(process);
+  GetProcessName(process);
+  AppendProcessId(process);
 
-  // Run the reporters.  The callback will turn each measurement into a
-  // MemoryReport.
-  RefPtr<HandleReportCallback> handleReport =
-    new HandleReportCallback(this, process);
-  RefPtr<FinishReportingCallback> finishReporting =
-    new FinishReportingCallback(this);
-
-  nsresult rv =
-    mgr->GetReportsForThisProcessExtended(handleReport, nullptr, mAnonymize,
-                                          FileDescriptorToFILE(mDMDFile, "wb"),
-                                          finishReporting, nullptr);
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "GetReportsForThisProcessExtended failed");
-  return rv;
-}
-
-bool
-ContentChild::DeallocPMemoryReportRequestChild(PMemoryReportRequestChild* actor)
-{
-  static_cast<MemoryReportRequestChild*>(actor)->Release();
-  return true;
+  MemoryReportRequestClient::Start(
+    aGeneration, aAnonymize, aMinimizeMemoryUsage, aDMDFile, process);
+  return IPC_OK();
 }
 
 PCycleCollectWithLogsChild*
@@ -1196,13 +1069,6 @@ ContentChild::DeallocPCycleCollectWithLogsChild(PCycleCollectWithLogsChild* /* a
   return true;
 }
 
-mozilla::plugins::PPluginModuleParent*
-ContentChild::AllocPPluginModuleParent(mozilla::ipc::Transport* aTransport,
-                                       base::ProcessId aOtherProcess)
-{
-  return plugins::PluginModuleContentParent::Initialize(aTransport, aOtherProcess);
-}
-
 PContentBridgeChild*
 ContentChild::AllocPContentBridgeChild(mozilla::ipc::Transport* aTransport,
                                        base::ProcessId aOtherProcess)
@@ -1220,17 +1086,26 @@ ContentChild::AllocPContentBridgeParent(mozilla::ipc::Transport* aTransport,
   return mLastBridge;
 }
 
-PGMPServiceChild*
-ContentChild::AllocPGMPServiceChild(mozilla::ipc::Transport* aTransport,
-                                    base::ProcessId aOtherProcess)
+mozilla::ipc::IPCResult
+ContentChild::RecvInitGMPService(Endpoint<PGMPServiceChild>&& aGMPService)
 {
-  return GMPServiceChild::Create(aTransport, aOtherProcess);
+  if (!GMPServiceChild::Create(Move(aGMPService))) {
+    return IPC_FAIL_NO_REASON(this);
+  }
+  return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 ContentChild::RecvGMPsChanged(nsTArray<GMPCapabilityData>&& capabilities)
 {
   GeckoMediaPluginServiceChild::UpdateGMPCapabilities(Move(capabilities));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+ContentChild::RecvInitProcessHangMonitor(Endpoint<PProcessHangMonitorChild>&& aHangMonitor)
+{
+  CreateHangMonitorChild(Move(aHangMonitor));
   return IPC_OK();
 }
 
@@ -1288,20 +1163,6 @@ ContentChild::RecvReinitRendering(Endpoint<PCompositorBridgeChild>&& aCompositor
 
   VideoDecoderManagerChild::InitForContent(Move(aVideoManager));
   return IPC_OK();
-}
-
-PBackgroundChild*
-ContentChild::AllocPBackgroundChild(Transport* aTransport,
-                                    ProcessId aOtherProcess)
-{
-  return BackgroundChild::Alloc(aTransport, aOtherProcess);
-}
-
-PProcessHangMonitorChild*
-ContentChild::AllocPProcessHangMonitorChild(Transport* aTransport,
-                                            ProcessId aOtherProcess)
-{
-  return CreateHangMonitorChild(aTransport, aOtherProcess);
 }
 
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
@@ -1408,8 +1269,10 @@ StartMacOSContentSandbox()
     MOZ_CRASH("Failed to get NS_OS_TEMP_DIR path");
   }
 
+  ContentChild* cc = ContentChild::GetSingleton();
+
   nsCOMPtr<nsIFile> profileDir;
-  ContentChild::GetSingleton()->GetProfileDir(getter_AddRefs(profileDir));
+  cc->GetProfileDir(getter_AddRefs(profileDir));
   nsCString profileDirPath;
   if (profileDir) {
     rv = profileDir->GetNativePath(profileDirPath);
@@ -1418,9 +1281,14 @@ StartMacOSContentSandbox()
     }
   }
 
+  bool isFileProcess = cc->GetRemoteType().EqualsLiteral(FILE_REMOTE_TYPE);
+
   MacSandboxInfo info;
   info.type = MacSandboxType_Content;
-  info.level = info.level = sandboxLevel;
+  info.level = sandboxLevel;
+  info.hasFilePrivileges = isFileProcess;
+  info.shouldLog = Preferences::GetBool("security.sandbox.logging.enabled") ||
+                   PR_GetEnv("MOZ_SANDBOX_LOGGING");
   info.appPath.assign(appPath.get());
   info.appBinaryPath.assign(appBinaryPath.get());
   info.appDir.assign(appDir.get());
@@ -1479,7 +1347,20 @@ ContentChild::RecvSetProcessSandbox(const MaybeFileDesc& aBroker)
       // didn't intend it.
       MOZ_RELEASE_ASSERT(brokerFd >= 0);
     }
-    sandboxEnabled = SetContentProcessSandbox(brokerFd);
+    // Allow user overrides of seccomp-bpf syscall filtering
+    std::vector<int> syscallWhitelist;
+    nsAdoptingCString extraSyscalls =
+      Preferences::GetCString("security.sandbox.content.syscall_whitelist");
+    if (extraSyscalls) {
+      for (const nsCSubstring& callNrString : extraSyscalls.Split(',')) {
+        nsresult rv;
+        int callNr = PromiseFlatCString(callNrString).ToInteger(&rv);
+        if (NS_SUCCEEDED(rv)) {
+          syscallWhitelist.push_back(callNr);
+        }
+      }
+    }
+    sandboxEnabled = SetContentProcessSandbox(brokerFd, syscallWhitelist);
   }
 #elif defined(XP_WIN)
   mozilla::SandboxTarget::Instance()->StartSandbox();
@@ -1554,6 +1435,10 @@ ContentChild::SendPBrowserConstructor(PBrowserChild* aActor,
                                       const ContentParentId& aCpID,
                                       const bool& aIsForBrowser)
 {
+  if (IsShuttingDown()) {
+    return false;
+  }
+
   return PContentChild::SendPBrowserConstructor(aActor,
                                                 aTabId,
                                                 aContext,
@@ -1570,17 +1455,10 @@ ContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
                                       const ContentParentId& aCpID,
                                       const bool& aIsForBrowser)
 {
-  // This runs after AllocPBrowserChild() returns and the IPC machinery for this
-  // PBrowserChild has been set up.
+  MOZ_ASSERT(!IsShuttingDown());
 
-  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-  if (os) {
-    nsITabChild* tc =
-      static_cast<nsITabChild*>(static_cast<TabChild*>(aActor));
-    os->NotifyObservers(tc, "tab-child-created", nullptr);
-  }
-
-  return IPC_OK();
+  return nsIContentChild::RecvPBrowserConstructor(aActor, aTabId, aContext,
+                                                  aChromeFlags, aCpID, aIsForBrowser);
 }
 
 void
@@ -1592,6 +1470,10 @@ ContentChild::GetAvailableDictionaries(InfallibleTArray<nsString>& aDictionaries
 PFileDescriptorSetChild*
 ContentChild::SendPFileDescriptorSetConstructor(const FileDescriptor& aFD)
 {
+  if (IsShuttingDown()) {
+    return nullptr;
+  }
+
   return PContentChild::SendPFileDescriptorSetConstructor(aFD);
 }
 
@@ -1643,6 +1525,10 @@ PBlobChild*
 ContentChild::SendPBlobConstructor(PBlobChild* aActor,
                                    const BlobConstructorParams& aParams)
 {
+  if (IsShuttingDown()) {
+    return nullptr;
+  }
+
   return PContentChild::SendPBlobConstructor(aActor, aParams);
 }
 
@@ -1833,6 +1719,10 @@ ContentChild::DeallocPPrintingChild(PPrintingChild* printing)
 PSendStreamChild*
 ContentChild::SendPSendStreamConstructor(PSendStreamChild* aActor)
 {
+  if (IsShuttingDown()) {
+    return nullptr;
+  }
+
   return PContentChild::SendPSendStreamConstructor(aActor);
 }
 
@@ -1894,6 +1784,7 @@ ContentChild::AllocPExternalHelperAppChild(const OptionalURIParams& uri,
                                            const nsString& aContentDispositionFilename,
                                            const bool& aForceSave,
                                            const int64_t& aContentLength,
+                                           const bool& aWasFileChannel,
                                            const OptionalURIParams& aReferrer,
                                            PBrowserChild* aBrowser)
 {
@@ -1946,7 +1837,7 @@ ContentChild::AllocPStorageChild()
 bool
 ContentChild::DeallocPStorageChild(PStorageChild* aActor)
 {
-  DOMStorageDBChild* child = static_cast<DOMStorageDBChild*>(aActor);
+  StorageDBChild* child = static_cast<StorageDBChild*>(aActor);
   child->ReleaseIPDLReference();
   return true;
 }
@@ -2258,12 +2149,12 @@ ContentChild::RecvAsyncMessage(const nsString& aMsg,
                                const IPC::Principal& aPrincipal,
                                const ClonedMessageData& aData)
 {
+  CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> cpm =
     nsFrameMessageManager::GetChildProcessManager();
   if (cpm) {
     StructuredCloneData data;
     ipc::UnpackClonedMessageDataForChild(aData, data);
-    CrossProcessCpowHolder cpows(this, aCpows);
     cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()),
                         nullptr, aMsg, false, &data, &cpows, aPrincipal,
                         nullptr);
@@ -2318,7 +2209,7 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
   // note we do not need to force mUserContextId to the default here because
   // the permission manager does that internally.
   nsAutoCString originNoSuffix;
-  PrincipalOriginAttributes attrs;
+  OriginAttributes attrs;
   bool success = attrs.PopulateFromOrigin(permission.origin, originNoSuffix);
   NS_ENSURE_TRUE(success, IPC_FAIL_NO_REASON(this));
 
@@ -2441,7 +2332,10 @@ mozilla::ipc::IPCResult
 ContentChild::RecvInitServiceWorkers(const ServiceWorkerConfiguration& aConfig)
 {
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  MOZ_ASSERT(swm);
+  if (!swm) {
+    // browser shutdown began
+    return IPC_OK();
+  }
   swm->LoadRegistrations(aConfig.serviceWorkerRegistrations());
   return IPC_OK();
 }
@@ -2664,10 +2558,13 @@ ContentChild::RecvLoadPluginResult(const uint32_t& aPluginId,
                                    const bool& aResult)
 {
   nsresult rv;
-  bool finalResult = aResult && SendConnectPluginBridge(aPluginId, &rv) &&
+  Endpoint<PPluginModuleParent> endpoint;
+  bool finalResult = aResult &&
+                     SendConnectPluginBridge(aPluginId, &rv, &endpoint) &&
                      NS_SUCCEEDED(rv);
   plugins::PluginModuleContentParent::OnLoadPluginResult(aPluginId,
-                                                         finalResult);
+                                                         finalResult,
+                                                         Move(endpoint));
   return IPC_OK();
 }
 
@@ -2820,7 +2717,7 @@ ContentChild::RecvShutdown()
 
   GetIPCChannel()->SetAbortOnError(false);
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
   if (profiler_is_active()) {
     // We're shutting down while we were profiling. Send the
     // profile up to the parent so that we don't lose this
@@ -3232,6 +3129,23 @@ ContentChild::DeallocPURLClassifierChild(PURLClassifierChild* aActor)
   MOZ_ASSERT(aActor);
   delete aActor;
   return true;
+}
+
+// The IPC code will call this method asking us to assign an event target to new
+// actors created by the ContentParent.
+already_AddRefed<nsIEventTarget>
+ContentChild::GetConstructedEventTarget(const Message& aMsg)
+{
+  // Currently we only set targets for PBrowser.
+  if (aMsg.type() != PContent::Msg_PBrowserConstructor__ID) {
+    return nullptr;
+  }
+
+  // If the request for a new TabChild is coming from the parent process, then
+  // there is no opener. Therefore, we create a fresh TabGroup.
+  RefPtr<TabGroup> tabGroup = new TabGroup();
+  nsCOMPtr<nsIEventTarget> target = tabGroup->EventTargetFor(TaskCategory::Other);
+  return target.forget();
 }
 
 } // namespace dom

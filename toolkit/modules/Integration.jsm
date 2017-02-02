@@ -143,7 +143,7 @@ this.Integration = new Proxy({}, {
 this.IntegrationPoint = function() {
   this._overrideFns = new Set();
   this._combined = {
-    QueryInterface: function() {
+    QueryInterface() {
       let ex = new Components.Exception(
                    "Integration objects should not be used with XPCOM because" +
                    " they change when new overrides are registered.",
@@ -233,7 +233,7 @@ this.IntegrationPoint.prototype = {
       try {
         // Obtain a new set of methods from the next override function in the
         // list, specifying the current combined object as the base argument.
-        let override = overrideFn.call(null, combined);
+        let override = overrideFn(combined);
 
         // Retrieve a list of property descriptors from the returned object, and
         // use them to build a new combined object whose prototype points to the

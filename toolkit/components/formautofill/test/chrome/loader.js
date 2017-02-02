@@ -20,6 +20,7 @@ Cu.import("resource://gre/modules/Services.jsm", this);
 Services.scriptloader.loadSubScript(
   "chrome://mochikit/content/tests/SimpleTest/SimpleTest.js", this);
 
+/* import-globals-from ../loader_common.js */
 var sharedUrl = SimpleTest.getTestFileURL("loader_common.js");
 Services.scriptloader.loadSubScript(sharedUrl, this);
 
@@ -33,7 +34,7 @@ var testUrl = location.href.replace(/\.\w+$/, ".js");
 var promiseParentInitFinished = new Promise(function(resolve) {
   parentScript.addMessageListener("finish_load_in_parent", resolve);
 });
-parentScript.sendAsyncMessage("start_load_in_parent", { testUrl: testUrl });
+parentScript.sendAsyncMessage("start_load_in_parent", { testUrl });
 
 // Define output functions so they look the same across all frameworks.
 var Output = {
@@ -65,9 +66,7 @@ function add_task_in_both_processes(taskFn) {
 }
 var add_task_in_child_process = add_task;
 
-window.addEventListener("load", function onLoad() {
-  window.removeEventListener("load", onLoad);
-
+window.addEventListener("load", function() {
   Task.spawn(function* () {
     try {
       for (let [taskFn, taskType, taskId] of gTestTasks) {
@@ -92,7 +91,7 @@ window.addEventListener("load", function onLoad() {
 
     SimpleTest.finish();
   });
-});
+}, {once: true});
 
 // Wait for the test script to be loaded in the parent process.  This means that
 // test tasks are registered and ready, but have not been executed yet.
@@ -100,6 +99,7 @@ add_task(function* wait_loading_in_parent_process() {
   yield promiseParentInitFinished;
 });
 
+/* import-globals-from ../head_common.js */
 var headUrl = SimpleTest.getTestFileURL("head_common.js");
 Services.scriptloader.loadSubScript(headUrl, this);
 

@@ -15,7 +15,8 @@ namespace widget {
 class InProcessCompositorWidget : public CompositorWidget
 {
 public:
-  explicit InProcessCompositorWidget(nsBaseWidget* aWidget);
+  explicit InProcessCompositorWidget(const layers::CompositorOptions& aOptions,
+                                     nsBaseWidget* aWidget);
 
   virtual bool PreRender(WidgetRenderingContext* aManager) override;
   virtual void PostRender(WidgetRenderingContext* aManager) override;
@@ -42,7 +43,7 @@ public:
   // If you can override this method, inherit from CompositorWidget instead.
   nsIWidget* RealWidget() override;
 
-private:
+protected:
   nsBaseWidget* mWidget;
 };
 

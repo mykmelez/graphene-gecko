@@ -22,13 +22,7 @@ include protocol PHeapSnapshotTempFileHelper;
 include protocol PProcessHangMonitor;
 include protocol PImageBridge;
 include protocol PMedia;
-include protocol PMemoryReportRequest;
 include protocol PNecko;
-// FIXME This is pretty ridiculous, but we have to keep the order of the
-//       following 4 includes, or the parser is confused about PGMPContent
-//       bridging PContent and PGMP. As soon as it registers the bridge between
-//       PContent and PPluginModule it seems to think that PContent's parent and
-//       child live in the same process!
 include protocol PGMPContent;
 include protocol PGMPService;
 include protocol PPluginModule;
@@ -62,6 +56,7 @@ include PContentPermission;
 include ServiceWorkerConfiguration;
 include GraphicsMessages;
 include ProfilerTypes;
+include MemoryReportTypes;
 
 // Workaround to prevent error if PContentChild.cpp & PContentBridgeParent.cpp
 // are put into different UnifiedProtocolsXX.cpp files.
@@ -79,7 +74,6 @@ using base::ProcessId from "base/process.h";
 using struct IPC::Permission from "mozilla/net/NeckoMessageUtils.h";
 using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
 using struct mozilla::null_t from "ipc/IPCMessageUtils.h";
-using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
 using mozilla::dom::NativeThreadId from "mozilla/dom/TabMessageUtils.h";
 using mozilla::hal::ProcessPriority from "mozilla/HalTypes.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/2D.h";
@@ -90,11 +84,13 @@ using struct LookAndFeelInt from "mozilla/widget/WidgetMessageUtils.h";
 using class mozilla::dom::MessagePort from "mozilla/dom/MessagePort.h";
 using class mozilla::dom::ipc::StructuredCloneData from "mozilla/dom/ipc/StructuredCloneData.h";
 using mozilla::DataStorageType from "ipc/DataStorageIPCUtils.h";
-using mozilla::DocShellOriginAttributes from "mozilla/ipc/BackgroundUtils.h";
+using mozilla::OriginAttributes from "mozilla/ipc/BackgroundUtils.h";
 using struct mozilla::layers::TextureFactoryIdentifier from "mozilla/layers/CompositorTypes.h";
 using struct mozilla::dom::FlyWebPublishOptions from "mozilla/dom/FlyWebPublishOptionsIPCSerializer.h";
 using mozilla::Telemetry::Accumulation from "mozilla/TelemetryComms.h";
 using mozilla::Telemetry::KeyedAccumulation from "mozilla/TelemetryComms.h";
+using mozilla::Telemetry::ScalarAction from "mozilla/TelemetryComms.h";
+using mozilla::Telemetry::KeyedScalarAction from "mozilla/TelemetryComms.h";
 
 union ChromeRegistryItem
 {
@@ -270,11 +266,6 @@ struct ClipboardCapabilities {
   bool supportsFindClipboard;
 };
 
-union MaybeFileDesc {
-    FileDescriptor;
-    void_t;
-};
-
 union FileDescOrError {
     FileDescriptor;
     nsresult;
@@ -343,14 +334,20 @@ struct GMPCapabilityData
     GMPAPITags[] capabilities;
 };
 
+struct GfxInfoFeatureStatus
+{
+    int32_t feature;
+    int32_t status;
+    nsCString failureId;
+};
+
+/**
+ * The PContent protocol is a top-level protocol between the UI process
+ * and a content process. There is exactly one PContentParent/PContentChild pair
+ * for each content process.
+ */
 nested(upto inside_cpow) sync protocol PContent
 {
-    parent spawns PPluginModule;
-
-    parent opens PProcessHangMonitor;
-    parent opens PGMPService;
-    child opens PBackground;
-
     manages PBlob;
     manages PBrowser;
     manages PContentPermissionRequest;
@@ -364,7 +361,6 @@ nested(upto inside_cpow) sync protocol PContent
     manages PHandlerService;
     manages PHeapSnapshotTempFileHelper;
     manages PMedia;
-    manages PMemoryReportRequest;
     manages PNecko;
     manages POfflineCacheUpdate;
     manages PPrinting;
@@ -415,6 +411,9 @@ both:
                                      uint64_t aOuterWindowID);
 
 child:
+    async InitGMPService(Endpoint<PGMPServiceChild> service);
+    async InitProcessHangMonitor(Endpoint<PProcessHangMonitorChild> hangMonitor);
+
     // Give the content process its endpoints to the compositor.
     async InitRendering(
       Endpoint<PCompositorBridgeChild> compositor,
@@ -438,8 +437,10 @@ child:
      */
     async SetProcessSandbox(MaybeFileDesc aBroker);
 
-    async PMemoryReportRequest(uint32_t generation, bool anonymize,
-                               bool minimizeMemoryUsage, MaybeFileDesc DMDFile);
+    async RequestMemoryReport(uint32_t generation,
+                              bool anonymize,
+                              bool minimizeMemoryUsage,
+                              MaybeFileDesc DMDFile);
 
     /**
      * Communication between the PuppetBidiKeyboard and the actual
@@ -646,6 +647,8 @@ child:
     async GMPsChanged(GMPCapabilityData[] capabilities);
 
 parent:
+    async InitBackground(Endpoint<PBackgroundParent> aEndpoint);
+
     /**
      * Tell the content process some attributes of itself.  This is
      * among the first information queried by content processes after
@@ -679,20 +682,21 @@ parent:
     async CreateGMPService();
 
     /**
-     * This call connects the content process to a plugin process. While this
-     * call runs, a new PluginModuleParent will be created in the ContentChild
-     * via bridging. The corresponding PluginModuleChild will live in the plugin
-     * process.
+     * This call connects the content process to a plugin process. This call
+     * returns an endpoint for a new PluginModuleParent. The corresponding
+     * PluginModuleChild will be started up in the plugin process.
      */
-    sync LoadPlugin(uint32_t aPluginId) returns (nsresult aResult, uint32_t aRunID);
+    sync LoadPlugin(uint32_t aPluginId)
+        returns (nsresult aResult, uint32_t aRunID, Endpoint<PPluginModuleParent> aEndpoint);
 
     /**
      * This call is used by asynchronous plugin instantiation to notify the
      * content parent that it is now safe to initiate the plugin bridge for
-     * the specified plugin id. When this call returns, the requested bridge
-     * connection has been made.
+     * the specified plugin id. The endpoint for the content process part of the
+     * bridge is returned.
      */
-    sync ConnectPluginBridge(uint32_t aPluginId) returns (nsresult rv);
+    sync ConnectPluginBridge(uint32_t aPluginId)
+        returns (nsresult rv, Endpoint<PPluginModuleParent> aEndpoint);
 
     /**
      * Return the current blocklist state for a particular plugin.
@@ -844,6 +848,7 @@ parent:
                              nsString aContentDispositionFilename,
                              bool aForceSave,
                              int64_t aContentLength,
+                             bool aWasFileChannel,
                              OptionalURIParams aReferrer,
                              nullable PBrowser aBrowser);
 
@@ -926,8 +931,7 @@ parent:
                                 bool isAudio,
                                 bool isVideo);
 
-    sync GetGraphicsFeatureStatus(int32_t aFeature) returns (int32_t aStatus, nsCString aFailureCode,
-                                                             bool aSuccess);
+    sync GetGfxInfoFeatureStatus() returns (GfxInfoFeatureStatus[] features);
 
     // Graphics errors
     async GraphicsError(nsCString aError);
@@ -1065,7 +1069,7 @@ parent:
                       bool aSizeSpecified,
                       nsCString aFeatures,
                       nsCString aBaseURI,
-                      DocShellOriginAttributes aOpenerOriginAttributes,
+                      OriginAttributes aOpenerOriginAttributes,
                       float aFullZoom)
       returns (nsresult rv,
                bool windowOpened,
@@ -1083,7 +1087,7 @@ parent:
       URIParams aURIToLoad,
       nsCString aFeatures,
       nsCString aBaseURI,
-      DocShellOriginAttributes aOpenerOriginAttributes,
+      OriginAttributes aOpenerOriginAttributes,
       float aFullZoom);
 
     sync GetDeviceStorageLocation(nsString type)
@@ -1149,8 +1153,13 @@ parent:
      */
     async AccumulateChildHistogram(Accumulation[] accumulations);
     async AccumulateChildKeyedHistogram(KeyedAccumulation[] accumulations);
+    async UpdateChildScalars(ScalarAction[] updates);
+    async UpdateChildKeyedScalars(KeyedScalarAction[] updates);
 
     sync GetA11yContentId() returns (uint32_t aContentId);
+
+    async AddMemoryReport(MemoryReport aReport);
+    async FinishMemoryReport(uint32_t aGeneration);
 
 both:
      async AsyncMessage(nsString aMessage, CpowEntry[] aCpows,

@@ -156,13 +156,6 @@ LayerManager::CreatePersistentBufferProvider(const mozilla::gfx::IntSize &aSize,
   return bufferProvider.forget();
 }
 
-#ifdef DEBUG
-void
-LayerManager::Mutated(Layer* aLayer)
-{
-}
-#endif  // DEBUG
-
 already_AddRefed<ImageContainer>
 LayerManager::CreateImageContainer(ImageContainer::Mode flag)
 {
@@ -198,22 +191,7 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mNextSibling(nullptr),
   mPrevSibling(nullptr),
   mImplData(aImplData),
-  mMaskLayer(nullptr),
-  mPostXScale(1.0f),
-  mPostYScale(1.0f),
-  mOpacity(1.0),
-  mMixBlendMode(CompositionOp::OP_OVER),
-  mForceIsolatedGroup(false),
-  mContentFlags(0),
   mUseTileSourceRect(false),
-  mIsFixedPosition(false),
-  mTransformIsPerspective(false),
-  mFixedPositionData(nullptr),
-  mStickyPositionData(nullptr),
-  mScrollbarTargetId(FrameMetrics::NULL_SCROLL_ID),
-  mScrollbarDirection(ScrollDirection::NONE),
-  mScrollbarThumbRatio(0.0f),
-  mIsScrollbarContainer(false),
 #ifdef DEBUG
   mDebugColorIndex(0),
 #endif
@@ -432,6 +410,8 @@ ToStyleAnimationValue(const Animatable& aAnimatable)
   StyleAnimationValue result;
 
   switch (aAnimatable.type()) {
+    case Animatable::Tnull_t:
+      break;
     case Animatable::TArrayOfTransformFunction: {
       const InfallibleTArray<TransformFunction>& transforms =
         aAnimatable.get_ArrayOfTransformFunction();
@@ -471,9 +451,8 @@ Layer::SetAnimations(const AnimationArray& aAnimations)
         break;
     }
 
-    if (animation.baseStyle().type() != BaseAnimationStyle::Tnull_t) {
-      mBaseAnimationStyle =
-        ToStyleAnimationValue(animation.baseStyle().get_Animatable());
+    if (animation.baseStyle().type() != Animatable::Tnull_t) {
+      mBaseAnimationStyle = ToStyleAnimationValue(animation.baseStyle());
     }
 
     AnimData* data = mAnimationData.AppendElement();
@@ -848,7 +827,8 @@ Layer::CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect)
 Maybe<ParentLayerIntRect>
 Layer::GetScrolledClipRect() const
 {
-  return mScrolledClip ? Some(mScrolledClip->GetClipRect()) : Nothing();
+  const Maybe<LayerClip> clip = mSimpleAttrs.ScrolledClip();
+  return clip ? Some(clip->GetClipRect()) : Nothing();
 }
 
 const ScrollMetadata&
@@ -887,7 +867,7 @@ Layer::IsScrollInfoLayer() const
 Matrix4x4
 Layer::GetTransform() const
 {
-  Matrix4x4 transform = mTransform;
+  Matrix4x4 transform = mSimpleAttrs.Transform();
   transform.PostScale(GetPostXScale(), GetPostYScale(), 1.0f);
   if (const ContainerLayer* c = AsContainerLayer()) {
     transform.PreScale(c->GetPreXScale(), c->GetPreYScale(), 1.0f);
@@ -930,10 +910,10 @@ Layer::HasTransformAnimation() const
 void
 Layer::ApplyPendingUpdatesForThisTransaction()
 {
-  if (mPendingTransform && *mPendingTransform != mTransform) {
+  if (mPendingTransform && *mPendingTransform != mSimpleAttrs.Transform()) {
     MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) PendingUpdatesForThisTransaction", this));
-    mTransform = *mPendingTransform;
-    Mutated();
+    mSimpleAttrs.SetTransform(*mPendingTransform);
+    MutatedSimple();
   }
   mPendingTransform = nullptr;
 
@@ -957,7 +937,7 @@ Layer::ApplyPendingUpdatesForThisTransaction()
 float
 Layer::GetLocalOpacity()
 {
-  float opacity = mOpacity;
+  float opacity = mSimpleAttrs.Opacity();
   if (HostLayer* shadow = AsHostLayer())
     opacity = shadow->GetShadowOpacity();
   return std::min(std::max(opacity, 0.0f), 1.0f);
@@ -977,15 +957,15 @@ Layer::GetEffectiveOpacity()
 CompositionOp
 Layer::GetEffectiveMixBlendMode()
 {
-  if(mMixBlendMode != CompositionOp::OP_OVER)
-    return mMixBlendMode;
+  if (mSimpleAttrs.MixBlendMode() != CompositionOp::OP_OVER)
+    return mSimpleAttrs.MixBlendMode();
   for (ContainerLayer* c = GetParent(); c && !c->UseIntermediateSurface();
     c = c->GetParent()) {
-    if(c->mMixBlendMode != CompositionOp::OP_OVER)
-      return c->mMixBlendMode;
+    if(c->mSimpleAttrs.MixBlendMode() != CompositionOp::OP_OVER)
+      return c->mSimpleAttrs.MixBlendMode();
   }
 
-  return mMixBlendMode;
+  return mSimpleAttrs.MixBlendMode();
 }
 
 void
@@ -1125,7 +1105,6 @@ ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
     mChildrenChanged(false),
     mEventRegionsOverride(EventRegionsOverride::NoOverride)
 {
-  mContentFlags = 0; // Clear NO_TEXT, NO_TEXT_OVER_TRANSPARENT
 }
 
 ContainerLayer::~ContainerLayer()
@@ -1181,6 +1160,43 @@ ContainerLayer::InsertAfter(Layer* aChild, Layer* aAfter)
   return true;
 }
 
+void
+ContainerLayer::RemoveAllChildren()
+{
+  // Optimizes "while (mFirstChild) ContainerLayer::RemoveChild(mFirstChild);"
+  Layer* current = mFirstChild;
+
+  // This is inlining DidRemoveChild() on each layer; we can skip the calls
+  // to NotifyPaintedLayerRemoved as it gets taken care of when as we call
+  // NotifyRemoved prior to removing any layers.
+  while (current) {
+    Layer* next = current->GetNextSibling();
+    if (current->GetType() == TYPE_READBACK) {
+      static_cast<ReadbackLayer*>(current)->NotifyRemoved();
+    }
+    current = next;
+  }
+
+  current = mFirstChild;
+  mFirstChild = nullptr;
+  while (current) {
+    MOZ_ASSERT(!current->GetPrevSibling());
+
+    Layer* next = current->GetNextSibling();
+    current->SetParent(nullptr);
+    current->SetNextSibling(nullptr);
+    if (next) {
+      next->SetPrevSibling(nullptr);
+    }
+    NS_RELEASE(current);
+    current = next;
+  }
+}
+
+// Note that ContainerLayer::RemoveAllChildren is an optimized
+// version of this code; if you make changes to ContainerLayer::RemoveChild
+// consider whether the matching changes need to be made to
+// ContainerLayer::RemoveAllChildren
 bool
 ContainerLayer::RemoveChild(Layer *aChild)
 {
@@ -1624,6 +1640,10 @@ ContainerLayer::HasOpaqueAncestorLayer(Layer* aLayer)
   return false;
 }
 
+// Note that ContainerLayer::RemoveAllChildren contains an optimized
+// version of this code; if you make changes to ContainerLayer::DidRemoveChild
+// consider whether the matching changes need to be made to
+// ContainerLayer::RemoveAllChildren
 void
 ContainerLayer::DidRemoveChild(Layer* aLayer)
 {
@@ -2017,23 +2037,23 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (mClipRect) {
     AppendToString(aStream, *mClipRect, " [clip=", "]");
   }
-  if (mScrolledClip) {
-    AppendToString(aStream, mScrolledClip->GetClipRect(), " [scrolled-clip=", "]");
+  if (mSimpleAttrs.ScrolledClip()) {
+    AppendToString(aStream, mSimpleAttrs.ScrolledClip()->GetClipRect(), " [scrolled-clip=", "]");
   }
-  if (1.0 != mPostXScale || 1.0 != mPostYScale) {
-    aStream << nsPrintfCString(" [postScale=%g, %g]", mPostXScale, mPostYScale).get();
+  if (1.0 != mSimpleAttrs.PostXScale() || 1.0 != mSimpleAttrs.PostYScale()) {
+    aStream << nsPrintfCString(" [postScale=%g, %g]", mSimpleAttrs.PostXScale(), mSimpleAttrs.PostYScale()).get();
   }
-  if (!mTransform.IsIdentity()) {
-    AppendToString(aStream, mTransform, " [transform=", "]");
+  if (!GetBaseTransform().IsIdentity()) {
+    AppendToString(aStream, GetBaseTransform(), " [transform=", "]");
   }
   if (!GetEffectiveTransform().IsIdentity()) {
     AppendToString(aStream, GetEffectiveTransform(), " [effective-transform=", "]");
   }
-  if (mTransformIsPerspective) {
+  if (GetTransformIsPerspective()) {
     aStream << " [perspective]";
   }
-  if (!mLayerBounds.IsEmpty()) {
-    AppendToString(aStream, mLayerBounds, " [bounds=", "]");
+  if (!GetLayerBounds().IsEmpty()) {
+    AppendToString(aStream, GetLayerBounds(), " [bounds=", "]");
   }
   if (!mVisibleRegion.IsEmpty()) {
     AppendToString(aStream, mVisibleRegion.ToUnknownRegion(), " [visible=", "]");
@@ -2043,8 +2063,8 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (!mEventRegions.IsEmpty()) {
     AppendToString(aStream, mEventRegions, " ", "");
   }
-  if (1.0 != mOpacity) {
-    aStream << nsPrintfCString(" [opacity=%g]", mOpacity).get();
+  if (1.0 != GetOpacity()) {
+    aStream << nsPrintfCString(" [opacity=%g]", GetOpacity()).get();
   }
   if (IsOpaque()) {
     aStream << " [opaqueContent]";
@@ -2067,10 +2087,10 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (IsScrollbarContainer()) {
     aStream << " [scrollbar]";
   }
-  if (GetScrollbarDirection() == VERTICAL) {
+  if (GetScrollbarDirection() == ScrollDirection::VERTICAL) {
     aStream << nsPrintfCString(" [vscrollbar=%lld]", GetScrollbarTargetContainerId()).get();
   }
-  if (GetScrollbarDirection() == HORIZONTAL) {
+  if (GetScrollbarDirection() == ScrollDirection::HORIZONTAL) {
     aStream << nsPrintfCString(" [hscrollbar=%lld]", GetScrollbarTargetContainerId()).get();
   }
   if (GetIsFixedPosition()) {
@@ -2082,11 +2102,16 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
   if (GetIsStickyPosition()) {
     aStream << nsPrintfCString(" [isStickyPosition scrollId=%d outer=(%.3f,%.3f)-(%.3f,%.3f) "
-                     "inner=(%.3f,%.3f)-(%.3f,%.3f)]", mStickyPositionData->mScrollId,
-                     mStickyPositionData->mOuter.x, mStickyPositionData->mOuter.y,
-                     mStickyPositionData->mOuter.XMost(), mStickyPositionData->mOuter.YMost(),
-                     mStickyPositionData->mInner.x, mStickyPositionData->mInner.y,
-                     mStickyPositionData->mInner.XMost(), mStickyPositionData->mInner.YMost()).get();
+                     "inner=(%.3f,%.3f)-(%.3f,%.3f)]",
+                     GetStickyScrollContainerId(),
+                     GetStickyScrollRangeOuter().x,
+                     GetStickyScrollRangeOuter().y,
+                     GetStickyScrollRangeOuter().XMost(),
+                     GetStickyScrollRangeOuter().YMost(),
+                     GetStickyScrollRangeInner().x,
+                     GetStickyScrollRangeInner().y,
+                     GetStickyScrollRangeInner().XMost(),
+                     GetStickyScrollRangeInner().YMost()).get();
   }
   if (mMaskLayer) {
     aStream << nsPrintfCString(" [mMaskLayer=%p]", mMaskLayer.get()).get();
@@ -2096,6 +2121,9 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
       aStream << nsPrintfCString(" [metrics%d=", i).get();
       AppendToString(aStream, mScrollMetadata[i], "", "]");
     }
+  }
+  if (!mAnimations.IsEmpty()) {
+    aStream << nsPrintfCString(" [%d animations]", (int) mAnimations.Length()).get();
   }
 }
 
@@ -2173,8 +2201,8 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
     DumpRect(layer->mutable_clip(), *mClipRect);
   }
   // Transform
-  if (!mTransform.IsIdentity()) {
-    DumpTransform(layer->mutable_transform(), mTransform);
+  if (!GetBaseTransform().IsIdentity()) {
+    DumpTransform(layer->mutable_transform(), GetBaseTransform());
   }
   // Visible region
   if (!mVisibleRegion.ToUnknownRegion().IsEmpty()) {
@@ -2200,14 +2228,14 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
     }
   }
   // Opacity
-  layer->set_opacity(mOpacity);
+  layer->set_opacity(GetOpacity());
   // Content opaque
   layer->set_copaque(static_cast<bool>(GetContentFlags() & CONTENT_OPAQUE));
   // Component alpha
   layer->set_calpha(static_cast<bool>(GetContentFlags() & CONTENT_COMPONENT_ALPHA));
   // Vertical or horizontal bar
-  if (GetScrollbarDirection() != NONE) {
-    layer->set_direct(GetScrollbarDirection() == VERTICAL ?
+  if (GetScrollbarDirection() != ScrollDirection::NONE) {
+    layer->set_direct(GetScrollbarDirection() == ScrollDirection::VERTICAL ?
                       LayersPacket::Layer::VERTICAL :
                       LayersPacket::Layer::HORIZONTAL);
     layer->set_barid(GetScrollbarTargetContainerId());

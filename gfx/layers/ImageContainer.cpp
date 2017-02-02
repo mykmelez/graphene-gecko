@@ -16,7 +16,6 @@
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
 #include "mozilla/layers/ImageClient.h"  // for ImageClient
-#include "mozilla/layers/ImageContainerChild.h"
 #include "mozilla/layers/LayersMessages.h"
 #include "mozilla/layers/SharedPlanarYCbCrImage.h"
 #include "mozilla/layers/SharedRGBImage.h"
@@ -98,6 +97,32 @@ BufferRecycleBin::ClearRecycledBuffers()
   mRecycledBufferSize = 0;
 }
 
+ImageContainerListener::ImageContainerListener(ImageContainer* aImageContainer)
+  : mLock("mozilla.layers.ImageContainerListener.mLock")
+  , mImageContainer(aImageContainer)
+{
+}
+
+ImageContainerListener::~ImageContainerListener()
+{
+}
+
+void
+ImageContainerListener::NotifyComposite(const ImageCompositeNotification& aNotification)
+{
+  MutexAutoLock lock(mLock);
+  if (mImageContainer) {
+    mImageContainer->NotifyComposite(aNotification);
+  }
+}
+
+void
+ImageContainerListener::ClearImageContainer()
+{
+  MutexAutoLock lock(mLock);
+  mImageContainer = nullptr;
+}
+
 void
 ImageContainer::EnsureImageClient(bool aCreate)
 {
@@ -109,10 +134,10 @@ ImageContainer::EnsureImageClient(bool aCreate)
 
   RefPtr<ImageBridgeChild> imageBridge = ImageBridgeChild::GetSingleton();
   if (imageBridge) {
-    mIPDLChild = new ImageContainerChild(this);
-    mImageClient = imageBridge->CreateImageClient(CompositableType::IMAGE, this, mIPDLChild);
+    mImageClient = imageBridge->CreateImageClient(CompositableType::IMAGE, this);
     if (mImageClient) {
-      mAsyncContainerID = mImageClient->GetAsyncID();
+      mAsyncContainerHandle = mImageClient->GetAsyncHandle();
+      mNotifyCompositeListener = new ImageContainerListener(this);
     }
   }
 }
@@ -128,30 +153,30 @@ ImageContainer::ImageContainer(Mode flag)
 {
   if (flag == ASYNCHRONOUS) {
     EnsureImageClient(true);
-  } else {
-    mAsyncContainerID = sInvalidAsyncContainerId;
   }
 }
 
-ImageContainer::ImageContainer(uint64_t aAsyncContainerID)
+ImageContainer::ImageContainer(const CompositableHandle& aHandle)
   : mReentrantMonitor("ImageContainer.mReentrantMonitor"),
   mGenerationCounter(++sGenerationCounter),
   mPaintCount(0),
   mDroppedImageCount(0),
   mImageFactory(nullptr),
   mRecycleBin(nullptr),
-  mAsyncContainerID(aAsyncContainerID),
+  mAsyncContainerHandle(aHandle),
   mCurrentProducerID(-1)
 {
-  MOZ_ASSERT(mAsyncContainerID != sInvalidAsyncContainerId);
+  MOZ_ASSERT(mAsyncContainerHandle);
 }
 
 ImageContainer::~ImageContainer()
 {
-  if (mIPDLChild) {
-    mIPDLChild->ForgetImageContainer();
+  if (mNotifyCompositeListener) {
+    mNotifyCompositeListener->ClearImageContainer();
+  }
+  if (mAsyncContainerHandle) {
     if (RefPtr<ImageBridgeChild> imageBridge = ImageBridgeChild::GetSingleton()) {
-      imageBridge->ReleaseImageContainer(mIPDLChild);
+      imageBridge->ForgetImageContainer(mAsyncContainerHandle);
     }
   }
 }
@@ -317,14 +342,14 @@ ImageContainer::SetCurrentImagesInTransaction(const nsTArray<NonOwningImage>& aI
 
 bool ImageContainer::IsAsync() const
 {
-  return mAsyncContainerID != sInvalidAsyncContainerId;
+  return !!mAsyncContainerHandle;
 }
 
-uint64_t ImageContainer::GetAsyncContainerID()
+CompositableHandle ImageContainer::GetAsyncContainerHandle()
 {
   NS_ASSERTION(IsAsync(),"Shared image ID is only relevant to async ImageContainers");
   EnsureImageClient(false);
-  return mAsyncContainerID;
+  return mAsyncContainerHandle;
 }
 
 bool
@@ -360,7 +385,7 @@ ImageContainer::GetCurrentSize()
 }
 
 void
-ImageContainer::NotifyCompositeInternal(const ImageCompositeNotification& aNotification)
+ImageContainer::NotifyComposite(const ImageCompositeNotification& aNotification)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
@@ -758,12 +783,6 @@ SourceSurfaceImage::GetTextureClient(KnowsCompositor* aForwarder)
 
   mTextureClients.Put(aForwarder->GetSerial(), textureClient);
   return textureClient;
-}
-
-PImageContainerChild*
-ImageContainer::GetPImageContainerChild()
-{
-  return mIPDLChild;
 }
 
 ImageContainer::ProducerID

@@ -19,6 +19,7 @@
 #include "mozilla/Casting.h"
 #include "mozilla/Move.h"
 #include "mozilla/PodOperations.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
 #include "nsNSSCertificate.h"
 #include "nsServiceManagerUtils.h"
@@ -55,7 +56,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
                                            ValidityCheckingMode validityCheckingMode,
                                            CertVerifier::SHA1Mode sha1Mode,
                                            NetscapeStepUpPolicy netscapeStepUpPolicy,
-                                           const NeckoOriginAttributes& originAttributes,
+                                           const OriginAttributes& originAttributes,
                                            UniqueCERTCertList& builtChain,
                               /*optional*/ PinningTelemetryInfo* pinningTelemetryInfo,
                               /*optional*/ const char* hostname)
@@ -192,25 +193,29 @@ NSSCertDBTrustDomain::GetCertTrust(EndEntityOrCA endEntityOrCA,
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
   }
 
-  bool isCertRevoked;
-  nsresult nsrv = mCertBlocklist->IsCertRevoked(
-                    candidateCert->derIssuer.data,
-                    candidateCert->derIssuer.len,
-                    candidateCert->serialNumber.data,
-                    candidateCert->serialNumber.len,
-                    candidateCert->derSubject.data,
-                    candidateCert->derSubject.len,
-                    candidateCert->derPublicKey.data,
-                    candidateCert->derPublicKey.len,
-                    &isCertRevoked);
-  if (NS_FAILED(nsrv)) {
-    return Result::FATAL_ERROR_LIBRARY_FAILURE;
-  }
+  // The certificate blocklist currently only applies to TLS server
+  // certificates.
+  if (mCertDBTrustType == trustSSL) {
+    bool isCertRevoked;
+    nsresult nsrv = mCertBlocklist->IsCertRevoked(
+                      candidateCert->derIssuer.data,
+                      candidateCert->derIssuer.len,
+                      candidateCert->serialNumber.data,
+                      candidateCert->serialNumber.len,
+                      candidateCert->derSubject.data,
+                      candidateCert->derSubject.len,
+                      candidateCert->derPublicKey.data,
+                      candidateCert->derPublicKey.len,
+                      &isCertRevoked);
+    if (NS_FAILED(nsrv)) {
+      return Result::FATAL_ERROR_LIBRARY_FAILURE;
+    }
 
-  if (isCertRevoked) {
-    MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
-           ("NSSCertDBTrustDomain: certificate is in blocklist"));
-    return Result::ERROR_REVOKED_CERTIFICATE;
+    if (isCertRevoked) {
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+             ("NSSCertDBTrustDomain: certificate is in blocklist"));
+      return Result::ERROR_REVOKED_CERTIFICATE;
+    }
   }
 
   // XXX: CERT_GetCertTrust seems to be abusing SECStatus as a boolean, where
@@ -262,25 +267,25 @@ NSSCertDBTrustDomain::DigestBuf(Input item, DigestAlgorithm digestAlg,
   return DigestBufNSS(item, digestAlg, digestBuf, digestBufLen);
 }
 
-static PRIntervalTime
+static TimeDuration
 OCSPFetchingTypeToTimeoutTime(NSSCertDBTrustDomain::OCSPFetching ocspFetching)
 {
   switch (ocspFetching) {
     case NSSCertDBTrustDomain::FetchOCSPForDVSoftFail:
-      return PR_SecondsToInterval(2);
+      return TimeDuration::FromSeconds(2);
     case NSSCertDBTrustDomain::FetchOCSPForEV:
     case NSSCertDBTrustDomain::FetchOCSPForDVHardFail:
-      return PR_SecondsToInterval(10);
+      return TimeDuration::FromSeconds(10);
     // The rest of these are error cases. Assert in debug builds, but return
     // the default value corresponding to 2 seconds in release builds.
     case NSSCertDBTrustDomain::NeverFetchOCSP:
     case NSSCertDBTrustDomain::LocalOnlyOCSPForEV:
-      PR_NOT_REACHED("we should never see this OCSPFetching type here");
+      MOZ_ASSERT_UNREACHABLE("we should never see this OCSPFetching type here");
       break;
   }
 
-  PR_NOT_REACHED("we're not handling every OCSPFetching type");
-  return PR_SecondsToInterval(2);
+  MOZ_ASSERT_UNREACHABLE("we're not handling every OCSPFetching type");
+  return TimeDuration::FromSeconds(2);
 }
 
 // Copied and modified from CERT_GetOCSPAuthorityInfoAccessLocation and
@@ -377,7 +382,7 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
   // OCSP_STAPLING_NONE unless/until we implement multi-stapling.
   Result stapledOCSPResponseResult = Success;
   if (stapledOCSPResponse) {
-    PR_ASSERT(endEntityOrCA == EndEntityOrCA::MustBeEndEntity);
+    MOZ_ASSERT(endEntityOrCA == EndEntityOrCA::MustBeEndEntity);
     bool expired;
     stapledOCSPResponseResult =
       VerifyAndMaybeCacheEncodedOCSPResponse(certID, time,
@@ -455,8 +460,8 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
   }
   // At this point, if and only if cachedErrorResult is Success, there was no
   // cached response.
-  PR_ASSERT((!cachedResponsePresent && cachedResponseResult == Success) ||
-            (cachedResponsePresent && cachedResponseResult != Success));
+  MOZ_ASSERT((!cachedResponsePresent && cachedResponseResult == Success) ||
+             (cachedResponsePresent && cachedResponseResult != Success));
 
   // If we have a fresh OneCRL Blocklist we can skip OCSP for CA certs
   bool blocklistIsFresh;
@@ -665,7 +670,7 @@ NSSCertDBTrustDomain::VerifyAndMaybeCacheEncodedOCSPResponse(
   // If a response was stapled and expired, we don't want to cache it. Return
   // early to simplify the logic here.
   if (responseSource == ResponseWasStapled && expired) {
-    PR_ASSERT(rv != Success);
+    MOZ_ASSERT(rv != Success);
     return rv;
   }
   // validThrough is only trustworthy if the response successfully verifies
@@ -982,7 +987,7 @@ NSSCertDBTrustDomain::CheckValidityIsAcceptable(Time notBefore, Time notAfter,
       maxValidityDuration = DURATION_27_MONTHS_PLUS_SLOP;
       break;
     default:
-      PR_NOT_REACHED("We're not handling every ValidityCheckingMode type");
+      MOZ_ASSERT_UNREACHABLE("We're not handling every ValidityCheckingMode type");
   }
 
   if (validityDuration > maxValidityDuration) {
@@ -1152,7 +1157,7 @@ LoadLoadableRoots(const nsCString& dir, const nsCString& modNameUTF8)
 void
 UnloadLoadableRoots(const char* modNameUTF8)
 {
-  PR_ASSERT(modNameUTF8);
+  MOZ_ASSERT(modNameUTF8);
   UniqueSECMODModule rootsModule(SECMOD_FindModule(modNameUTF8));
 
   if (rootsModule) {

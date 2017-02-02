@@ -45,8 +45,6 @@
 #include "gfx2DGlue.h"
 #include "GeckoProfiler.h"
 
-class nsIWidget;
-
 namespace android {
     class GraphicBuffer;
 } // namespace android
@@ -72,6 +70,10 @@ namespace mozilla {
     namespace layers {
         class ColorTextureLayerProgram;
     } // namespace layers
+
+    namespace widget {
+        class CompositorWidget;
+    } // namespace widget
 } // namespace mozilla
 
 namespace mozilla {
@@ -327,6 +329,10 @@ public:
 
     bool IsContextLost() const {
         return mContextLost;
+    }
+
+    bool HasPBOState() const {
+        return (!IsGLES() || Version() >= 300);
     }
 
     /**
@@ -887,17 +893,21 @@ public:
     void fBindFramebuffer(GLenum target, GLuint framebuffer);
 
     void fInvalidateFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         ASSERT_SYMBOL_PRESENT(fInvalidateFramebuffer);
         mSymbols.fInvalidateFramebuffer(target, numAttachments, attachments);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fInvalidateSubFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments, GLint x, GLint y, GLsizei width, GLsizei height) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         ASSERT_SYMBOL_PRESENT(fInvalidateSubFramebuffer);
         mSymbols.fInvalidateSubFramebuffer(target, numAttachments, attachments, x, y, width, height);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fBindTexture(GLenum target, GLuint texture) {
@@ -983,27 +993,35 @@ public:
     }
 
     void fClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         mSymbols.fClearBufferfi(buffer, drawbuffer, depth, stencil);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         mSymbols.fClearBufferfv(buffer, drawbuffer, value);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         mSymbols.fClearBufferiv(buffer, drawbuffer, value);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        BeforeGLDrawCall();
         BEFORE_GL_CALL;
         mSymbols.fClearBufferuiv(buffer, drawbuffer, value);
         AFTER_GL_CALL;
+        AfterGLDrawCall();
     }
 
     void fClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
@@ -3132,11 +3150,13 @@ public:
                             GLint yoffset, GLint zoffset, GLint x,
                             GLint y, GLsizei width, GLsizei height)
     {
+        BeforeGLReadCall();
         BEFORE_GL_CALL;
         ASSERT_SYMBOL_PRESENT(fCopyTexSubImage3D);
         mSymbols.fCopyTexSubImage3D(target, level, xoffset, yoffset, zoffset,
                                     x, y, width, height);
         AFTER_GL_CALL;
+        AfterGLReadCall();
     }
 
     void fCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat,
@@ -3362,7 +3382,7 @@ public:
             LOCAL_GL_TEXTURE_EXTERNAL : LOCAL_GL_TEXTURE_2D;
     }
 
-    virtual bool RenewSurface(nsIWidget* aWidget) { return false; }
+    virtual bool RenewSurface(widget::CompositorWidget* aWidget) { return false; }
 
     // Shared code for GL extensions and GLX extensions.
     static bool ListHasExtension(const GLubyte* extensions,
@@ -3654,6 +3674,15 @@ public:
     static bool ShouldSpew();
     static bool ShouldDumpExts();
     void Readback(SharedSurface* src, gfx::DataSourceSurface* dest);
+
+    ////
+
+    void TexParams_SetClampNoMips(GLenum target = LOCAL_GL_TEXTURE_2D) {
+        fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
+        fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_T, LOCAL_GL_CLAMP_TO_EDGE);
+        fTexParameteri(target, LOCAL_GL_TEXTURE_MAG_FILTER, LOCAL_GL_NEAREST);
+        fTexParameteri(target, LOCAL_GL_TEXTURE_MIN_FILTER, LOCAL_GL_NEAREST);
+    }
 };
 
 bool DoesStringMatch(const char* aString, const char* aWantedString);

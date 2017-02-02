@@ -8,6 +8,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtrExtensions.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "nsGlobalWindow.h"
 #include "nsIDOMClientRect.h"
 #include "nsIDocShell.h"
@@ -150,7 +151,7 @@ nsresult
 MediaEngineTabVideoSource::Allocate(const dom::MediaTrackConstraints& aConstraints,
                                     const MediaEnginePrefs& aPrefs,
                                     const nsString& aDeviceId,
-                                    const nsACString& aOrigin,
+                                    const mozilla::ipc::PrincipalInfo& aPrincipalInfo,
                                     AllocationHandle** aOutHandle,
                                     const char** aOutBadConstraint)
 {
@@ -284,7 +285,7 @@ MediaEngineTabVideoSource::Draw() {
   {
     float pixelRatio;
     if (mWindow) {
-      mWindow->GetDevicePixelRatio(&pixelRatio);
+      pixelRatio = mWindow->GetDevicePixelRatio(CallerType::System);
     } else {
       pixelRatio = 1.0f;
     }

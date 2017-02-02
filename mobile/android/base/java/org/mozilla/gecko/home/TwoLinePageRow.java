@@ -10,8 +10,6 @@ import java.util.concurrent.Future;
 
 import android.content.Context;
 import android.database.Cursor;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.graphics.drawable.DrawableCompat;
 import android.support.v4.view.ViewCompat;
 import android.support.v4.widget.TextViewCompat;
 import android.text.TextUtils;
@@ -167,9 +165,6 @@ public class TwoLinePageRow extends LinearLayout
         }
 
         mSwitchToTabIconId = iconId;
-        if (mSwitchToTabIconId != 0) {
-            DrawableCompat.setAutoMirrored(ActivityCompat.getDrawable(getContext(), mSwitchToTabIconId), true);
-        }
         TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(mUrl, mSwitchToTabIconId, 0, 0, 0);
     }
 
@@ -274,7 +269,9 @@ public class TwoLinePageRow extends LinearLayout
         // remove the about:reader prefix to ensure the Favicon loads properly.
         final String pageURL = ReaderModeUtils.stripAboutReaderUrl(url);
 
-        if (bookmarkId < BrowserContract.Bookmarks.FAKE_PARTNER_BOOKMARKS_START) {
+        if (TextUtils.isEmpty(pageURL)) {
+            // If url is empty, display the item as-is but do not load an icon if we do not have a page URL (bug 1310622)
+        } else if (bookmarkId < BrowserContract.Bookmarks.FAKE_PARTNER_BOOKMARKS_START) {
             mOngoingIconLoad = Icons.with(getContext())
                     .pageUrl(pageURL)
                     .skipNetwork()

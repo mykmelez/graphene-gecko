@@ -5,8 +5,7 @@ Cu.import("resource://gre/modules/TelemetryController.jsm", this);
 Cu.import("resource://gre/modules/AppConstants.jsm", this);
 
 // We need both in order to capture stacks.
-const ENABLE_TESTS = AppConstants.MOZ_ENABLE_PROFILER_SPS &&
-                     AppConstants.MOZ_STACKWALKING;
+const ENABLE_TESTS = AppConstants.MOZ_GECKO_PROFILER;
 
 /**
  * Ensures that the sctucture of the javascript object used for capturing stacks
@@ -157,7 +156,7 @@ add_task({
 
   // Capture stack for a new key.
   let uniqueKey = TEST_STACK_KEYS[1] + "-UNIQUE-KEY-2";
-  updated = captureStacks(uniqueKey);
+  let updated = captureStacks(uniqueKey);
 
   // The length of captured stacks should increase to reflect the new capture.
   Assert.equal(original.stacks.length + 1, updated.stacks.length);

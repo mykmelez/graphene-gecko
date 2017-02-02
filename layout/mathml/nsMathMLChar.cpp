@@ -1986,9 +1986,9 @@ nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
       nsDisplayMathMLSelectionRect(aBuilder, aForFrame, *aSelectedRect));
   }
   else if (mRect.width && mRect.height) {
-    const nsStyleBackground* backg = styleContext->StyleBackground();
     if (styleContext != parentContext &&
-        NS_GET_A(backg->mBackgroundColor) > 0) {
+        NS_GET_A(styleContext->StyleBackground()->
+                 BackgroundColor(styleContext)) > 0) {
       nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
         aBuilder, aForFrame, mRect, aLists.BorderBackground(),
         /* aAllowWillPaintBorderOptimization */ true, styleContext);
@@ -2056,7 +2056,7 @@ nsMathMLChar::PaintForeground(nsPresContext* aPresContext,
 
   // Set color ...
   nscolor fgColor = styleContext->
-    GetVisitedDependentColor(eCSSProperty__webkit_text_fill_color);
+    GetVisitedDependentColor(&nsStyleText::mWebkitTextFillColor);
   if (aIsSelected) {
     // get color to use for selection from the look&feel object
     fgColor = LookAndFeel::GetColor(LookAndFeel::eColorID_TextSelectForeground,

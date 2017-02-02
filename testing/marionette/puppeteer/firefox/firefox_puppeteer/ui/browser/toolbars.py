@@ -98,7 +98,7 @@ class LocationBar(UIBaseLib):
         self.focus('shortcut')
         self.urlbar.send_keys(keys.Keys.DELETE)
         Wait(self.marionette).until(
-            lambda _: self.urlbar.get_attribute('value') == '',
+            lambda _: self.value == '',
             message='Contents of location bar could not be cleared.')
 
     def close_context_menu(self):
@@ -149,7 +149,7 @@ class LocationBar(UIBaseLib):
         if event == 'click':
             self.urlbar.click()
         elif event == 'shortcut':
-            cmd_key = self.window.get_entity('openCmd.commandkey')
+            cmd_key = self.window.localize_entity('openCmd.commandkey')
             self.window.send_shortcut(cmd_key, accel=True)
         else:
             raise ValueError("An unknown event type was passed: %s" % event)
@@ -263,7 +263,7 @@ class LocationBar(UIBaseLib):
         if trigger == 'button':
             self.reload_button.click()
         elif trigger == 'shortcut':
-            cmd_key = self.window.get_entity('reloadCmd.commandkey')
+            cmd_key = self.window.localize_entity('reloadCmd.commandkey')
             self.window.send_shortcut(cmd_key)
         elif trigger == 'shortcut2':
             self.window.send_shortcut(keys.Keys.F5)
@@ -298,7 +298,7 @@ class LocationBar(UIBaseLib):
 
         :returns: The urlbar value.
         """
-        return self.urlbar.get_attribute('value')
+        return self.urlbar.get_property('value')
 
 
 class AutocompleteResults(UIBaseLib):
@@ -342,7 +342,7 @@ class AutocompleteResults(UIBaseLib):
             {'class': 'ac-emphasize-text ac-emphasize-text-%s' % match_type}
         )
 
-        return [node.get_attribute('textContent') for node in emphasized_nodes]
+        return [node.get_property('textContent') for node in emphasized_nodes]
 
     @property
     def visible_results(self):
@@ -350,7 +350,7 @@ class AutocompleteResults(UIBaseLib):
 
         :returns: The list of visible results.
         """
-        match_count = self.element.get_attribute('_matchCount')
+        match_count = self.element.get_property('_matchCount')
 
         return self.marionette.execute_script("""
           let rv = [];
@@ -370,7 +370,7 @@ class AutocompleteResults(UIBaseLib):
 
         :returns: True when the popup is open, otherwise false.
         """
-        return self.element.get_attribute('state') == 'open'
+        return self.element.get_property('state') == 'open'
 
     @property
     def is_complete(self):
@@ -404,7 +404,7 @@ class AutocompleteResults(UIBaseLib):
 
         :returns: The index.
         """
-        return self.results.get_attribute('selectedIndex')
+        return self.results.get_property('selectedIndex')
 
 
 class IdentityPopup(UIBaseLib):
@@ -421,7 +421,7 @@ class IdentityPopup(UIBaseLib):
 
         :returns: True when the popup is open, otherwise false.
         """
-        return self.element.get_attribute('state') == 'open'
+        return self.element.get_property('state') == 'open'
 
     def close(self, force=False):
         """Closes the identity popup by hitting the escape key.
@@ -527,7 +527,7 @@ class IdentityPopupMainView(IdentityPopupView):
 
         :returns: Reference to the identity-popup content host.
         """
-        return self.element.find_element(By.CLASS_NAME, 'identity-popup-headline host')
+        return self.element.find_element(By.CLASS_NAME, 'identity-popup-host')
 
     @property
     def insecure_connection_label(self):
@@ -588,7 +588,7 @@ class IdentityPopupSecurityView(IdentityPopupView):
 
         :returns: Reference to the identity-popup content host.
         """
-        return self.element.find_element(By.CLASS_NAME, 'identity-popup-headline host')
+        return self.element.find_element(By.CLASS_NAME, 'identity-popup-host')
 
     @property
     def insecure_connection_label(self):
@@ -604,7 +604,7 @@ class IdentityPopupSecurityView(IdentityPopupView):
 
         :returns: Reference to the identity-popup more info button.
         """
-        label = self.window.get_entity('identity.moreInfoLinkText2')
+        label = self.window.localize_entity('identity.moreInfoLinkText2')
 
         return self.element.find_element(By.CSS_SELECTOR, u'button[label="{}"]'.format(label))
 

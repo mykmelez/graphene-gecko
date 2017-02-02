@@ -36,6 +36,8 @@ namespace Telemetry {
 
 struct Accumulation;
 struct KeyedAccumulation;
+struct ScalarAction;
+struct KeyedScalarAction;
 
 enum TimerResolution {
   Millisecond,
@@ -142,6 +144,20 @@ void AccumulateChild(GeckoProcessType aProcessType, const nsTArray<Accumulation>
  * @param aAccumulations - accumulation actions to perform
  */
 void AccumulateChildKeyed(GeckoProcessType aProcessType, const nsTArray<KeyedAccumulation>& aAccumulations);
+
+/**
+ * Update scalars for the given process type with the data coming from child process.
+ *
+ * @param aScalarActions - actions to update the scalar data
+ */
+void UpdateChildScalars(GeckoProcessType aProcessType, const nsTArray<ScalarAction>& aScalarActions);
+
+/**
+ * Update keyed  scalars for the given process type with the data coming from child process.
+ *
+ * @param aScalarActions - actions to update the keyed scalar data
+ */
+void UpdateChildKeyedScalars(GeckoProcessType aProcessType, const nsTArray<KeyedScalarAction>& aScalarActions);
 
 /**
  * Enable/disable recording for this histogram at runtime.
@@ -321,7 +337,7 @@ class ProcessedStack;
  * @param aFirefoxUptime - Firefox uptime at the time of the hang, in minutes
  * @param aAnnotations - Any annotations to be added to the report
  */
-#if defined(MOZ_ENABLE_PROFILER_SPS)
+#if defined(MOZ_GECKO_PROFILER)
 void RecordChromeHang(uint32_t aDuration,
                       ProcessedStack &aStack,
                       int32_t aSystemUptime,

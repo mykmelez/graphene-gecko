@@ -11,9 +11,11 @@
 
 #include "xpcprivate.h"
 #include "nsIAtom.h"
+#include "nsIScriptError.h"
 #include "nsWrapperCache.h"
 #include "nsJSUtils.h"
 #include "nsQueryObject.h"
+#include "nsScriptError.h"
 #include "WrapperFactory.h"
 
 #include "nsWrapperCacheInlines.h"
@@ -524,7 +526,13 @@ XPCConvert::JSData2Native(void* d, HandleValue s,
             // The characters represent an existing nsStringBuffer that
             // was shared by XPCStringConvert::ReadableToJSVal.
             const char16_t* chars = JS_GetTwoByteExternalStringChars(str);
-            nsStringBuffer::FromData((void*)chars)->ToString(length, *ws);
+            if (chars[length] == '\0') {
+                // Safe to share the buffer.
+                nsStringBuffer::FromData((void*)chars)->ToString(length, *ws);
+            } else {
+                // We have to copy to ensure null-termination.
+                ws->Assign(chars, length);
+            }
         } else if (XPCStringConvert::IsLiteral(str)) {
             // The characters represent a literal char16_t string constant
             // compiled into libxul, such as the string "undefined" above.

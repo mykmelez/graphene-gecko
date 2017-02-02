@@ -136,7 +136,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Blob)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(Blob)
@@ -443,9 +442,9 @@ File::CreateMemoryFile(nsISupports* aParent, void* aMemoryBuffer,
 }
 
 /* static */ already_AddRefed<File>
-File::CreateFromFile(nsISupports* aParent, nsIFile* aFile, bool aTemporary)
+File::CreateFromFile(nsISupports* aParent, nsIFile* aFile)
 {
-  RefPtr<File> file = new File(aParent, new BlobImplFile(aFile, aTemporary));
+  RefPtr<File> file = new File(aParent, new BlobImplFile(aFile));
   return file.forget();
 }
 
@@ -922,7 +921,7 @@ BlobImplFile::GetType(nsAString& aType)
         new GetTypeRunnable(workerPrivate, this);
 
       ErrorResult rv;
-      runnable->Dispatch(rv);
+      runnable->Dispatch(Terminating, rv);
       if (NS_WARN_IF(rv.Failed())) {
         rv.SuppressException();
       }

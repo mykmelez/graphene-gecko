@@ -277,10 +277,6 @@ WidgetEvent::HasKeyEventMessage() const
     case eKeyUp:
     case eKeyDownOnPlugin:
     case eKeyUpOnPlugin:
-    case eBeforeKeyDown:
-    case eBeforeKeyUp:
-    case eAfterKeyDown:
-    case eAfterKeyUp:
     case eAccessKeyNotFound:
       return true;
     default:
@@ -316,6 +312,41 @@ WidgetEvent::HasPluginActivationEventMessage() const
  *
  * Specific event checking methods.
  ******************************************************************************/
+
+bool
+WidgetEvent::CanBeSentToRemoteProcess() const
+{
+  // If this event is explicitly marked as shouldn't be sent to remote process,
+  // just return false.
+  if (mFlags.mNoCrossProcessBoundaryForwarding) {
+    return false;
+  }
+
+  if (mClass == eKeyboardEventClass ||
+      mClass == eWheelEventClass) {
+    return true;
+  }
+
+  switch (mMessage) {
+    case eMouseDown:
+    case eMouseUp:
+    case eMouseMove:
+    case eContextMenu:
+    case eMouseEnterIntoWidget:
+    case eMouseExitFromWidget:
+    case eMouseTouchDrag:
+    case eTouchStart:
+    case eTouchMove:
+    case eTouchEnd:
+    case eTouchCancel:
+    case eDragOver:
+    case eDragExit:
+    case eDrop:
+      return true;
+    default:
+      return false;
+  }
+}
 
 bool
 WidgetEvent::IsRetargetedNativeEventDelivererForPlugin() const
@@ -386,6 +417,9 @@ WidgetEvent::IsAllowedToDispatchDOMEvent() const
       if (DefaultPreventedByContent() &&
           (mMessage == eMouseMove || mMessage == eMouseDown ||
            mMessage == eMouseUp)) {
+        return false;
+      }
+      if (mMessage == eMouseTouchDrag) {
         return false;
       }
       MOZ_FALLTHROUGH;

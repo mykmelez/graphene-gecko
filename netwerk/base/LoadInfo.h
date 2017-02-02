@@ -78,6 +78,7 @@ public:
   already_AddRefed<nsILoadInfo> CloneForNewRequest() const;
 
   void SetIsPreflight();
+  void SetUpgradeInsecureRequests();
 
 private:
   // private constructor that is only allowed to be called from within
@@ -101,7 +102,7 @@ private:
            bool aEnforceSecurity,
            bool aInitialSecurityCheckDone,
            bool aIsThirdPartyRequest,
-           const NeckoOriginAttributes& aOriginAttributes,
+           const OriginAttributes& aOriginAttributes,
            nsTArray<nsCOMPtr<nsIPrincipal>>& aRedirectChainIncludingInternalRedirects,
            nsTArray<nsCOMPtr<nsIPrincipal>>& aRedirectChain,
            const nsTArray<nsCString>& aUnsafeHeaders,
@@ -145,7 +146,7 @@ private:
   bool                             mEnforceSecurity;
   bool                             mInitialSecurityCheckDone;
   bool                             mIsThirdPartyContext;
-  NeckoOriginAttributes            mOriginAttributes;
+  OriginAttributes                 mOriginAttributes;
   nsTArray<nsCOMPtr<nsIPrincipal>> mRedirectChainIncludingInternalRedirects;
   nsTArray<nsCOMPtr<nsIPrincipal>> mRedirectChain;
   nsTArray<nsCString>              mCorsUnsafeHeaders;

@@ -9,7 +9,6 @@ from datetime import datetime
 import mozfile
 
 from firefox_puppeteer import PuppeteerMixin
-from firefox_puppeteer.api.prefs import Preferences
 from firefox_puppeteer.api.software_update import SoftwareUpdate
 from firefox_puppeteer.ui.update_wizard import UpdateWizardDialog
 from marionette_driver import Wait
@@ -53,9 +52,25 @@ class UpdateTestCase(PuppeteerMixin, MarionetteTestCase):
 
         self.software_update = SoftwareUpdate(self.marionette)
 
+        # If a custom update channel has to be set, force a restart of
+        # Firefox to actually get it applied as a default pref. Use the clean
+        # option to force a non in_app restart, which would allow Firefox to
+        # dump the logs to the console.
+        if self.update_channel:
+            self.software_update.update_channel = self.update_channel
+            self.restart(clean=True)
+
+            self.assertEqual(self.software_update.update_channel, self.update_channel)
+
         # If requested modify the list of allowed MAR channels
         if self.update_mar_channels:
             self.software_update.mar_channels.add_channels(self.update_mar_channels)
+
+            self.assertTrue(self.update_mar_channels.issubset(
+                            self.software_update.mar_channels.channels),
+                            'Allowed MAR channels have been set: expected "{}" in "{}"'.format(
+                                ', '.join(self.update_mar_channels),
+                                ', '.join(self.software_update.mar_channels.channels)))
 
         # Ensure that there exists no already partially downloaded update
         self.remove_downloaded_update()
@@ -70,12 +85,6 @@ class UpdateTestCase(PuppeteerMixin, MarionetteTestCase):
             'patch': {},
             'success': False,
         }]
-
-        self.assertTrue(self.update_mar_channels.issubset(
-                        self.software_update.mar_channels.channels),
-                        'Allowed MAR channels have been set: expected "{}" in "{}"'.format(
-                            ', '.join(self.update_mar_channels),
-                            ', '.join(self.software_update.mar_channels.channels)))
 
         # Check if the user has permissions to run the update
         self.assertTrue(self.software_update.allowed,
@@ -189,8 +198,7 @@ class UpdateTestCase(PuppeteerMixin, MarionetteTestCase):
 
             :param dialog: Instance of :class:`UpdateWizardDialog`.
             """
-            prefs = Preferences(self.marionette)
-            prefs.set_pref(self.PREF_APP_UPDATE_ALTWINDOWTYPE, dialog.window_type)
+            self.marionette.set_pref(self.PREF_APP_UPDATE_ALTWINDOWTYPE, dialog.window_type)
 
             try:
                 # If updates have already been found, proceed to download
@@ -351,8 +359,6 @@ class UpdateTestCase(PuppeteerMixin, MarionetteTestCase):
 
     def set_preferences_defaults(self):
         """Set the default value for specific preferences to force its usage."""
-        if self.update_channel:
-            self.software_update.update_channel = self.update_channel
         if self.update_url:
             self.software_update.update_url = self.update_url
 

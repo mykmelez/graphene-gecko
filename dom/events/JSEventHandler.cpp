@@ -63,7 +63,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(JSEventHandler)
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(JSEventHandler, tmp->mRefCnt.get())
   }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_RAWPTR(mTypedHandler.Ptr())
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(JSEventHandler)
@@ -163,13 +162,14 @@ JSEventHandler::HandleEvent(nsIDOMEvent* aEvent)
     RefPtr<OnErrorEventHandlerNonNull> handler =
       mTypedHandler.OnErrorEventHandler();
     ErrorResult rv;
-    bool handled = handler->Call(mTarget, msgOrEvent, fileName, lineNumber,
-                                 columnNumber, error, rv);
+    JS::Rooted<JS::Value> retval(RootingCx());
+    handler->Call(mTarget, msgOrEvent, fileName, lineNumber,
+                  columnNumber, error, &retval, rv);
     if (rv.Failed()) {
       return rv.StealNSResult();
     }
 
-    if (handled) {
+    if (retval.isBoolean() && retval.toBoolean()) {
       event->PreventDefaultInternal(isChromeHandler);
     }
     return NS_OK;

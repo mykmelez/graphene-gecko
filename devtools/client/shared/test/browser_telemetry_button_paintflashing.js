@@ -13,6 +13,7 @@ const TOOL_DELAY = 200;
 add_task(function* () {
   yield addTab(TEST_URI);
   let Telemetry = loadTelemetryAndRecordLogs();
+  yield pushPref("devtools.command-button-paintflashing.enabled", true);
 
   let target = TargetFactory.forTab(gBrowser.selectedTab);
   let toolbox = yield gDevTools.showToolbox(target, "inspector");
@@ -43,16 +44,13 @@ function* delayedClicks(toolbox, node, clicks) {
       setTimeout(() => resolve(), TOOL_DELAY);
     });
 
-    // this event will fire once the command execution starts and
-    // the output object is created
-    let clicked = toolbox._requisition.commandOutputManager.onOutput.once();
+    let PaintFlashingCmd = require("devtools/shared/gcli/commands/paintflashing");
+    let clicked = PaintFlashingCmd.eventEmitter.once("changed");
 
     info("Clicking button " + node.id);
     node.click();
 
-    let outputEvent = yield clicked;
-    // promise gets resolved once execution finishes and output is ready
-    yield outputEvent.output.promise;
+    yield clicked;
   }
 }
 

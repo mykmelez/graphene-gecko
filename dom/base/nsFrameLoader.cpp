@@ -141,8 +141,7 @@ NS_IMPL_CYCLE_COLLECTION(nsFrameLoader,
                          mMessageManager,
                          mChildMessageManager,
                          mOpener,
-                         mPartialSessionHistory,
-                         mGroupedSessionHistory)
+                         mPartialSHistory)
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsFrameLoader)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsFrameLoader)
 
@@ -365,25 +364,51 @@ nsFrameLoader::MakePrerenderedLoaderActive()
 }
 
 NS_IMETHODIMP
-nsFrameLoader::GetPartialSessionHistory(nsIPartialSHistory** aResult)
+nsFrameLoader::GetPartialSHistory(nsIPartialSHistory** aResult)
 {
-  if (mRemoteBrowser && !mPartialSessionHistory) {
+  if (mRemoteBrowser && !mPartialSHistory) {
     // For remote case we can lazy initialize PartialSHistory since
     // it doens't need to be registered as a listener to nsISHistory directly.
-    mPartialSessionHistory = new PartialSHistory(this);
+    mPartialSHistory = new PartialSHistory(this);
   }
 
-  nsCOMPtr<nsIPartialSHistory> partialHistory(mPartialSessionHistory);
+  nsCOMPtr<nsIPartialSHistory> partialHistory(mPartialSHistory);
   partialHistory.forget(aResult);
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFrameLoader::EnsureGroupedSHistory(nsIGroupedSHistory** aResult)
+{
+  nsCOMPtr<nsIPartialSHistory> partialHistory;
+  GetPartialSHistory(getter_AddRefs(partialHistory));
+  MOZ_ASSERT(partialHistory);
+
+  nsCOMPtr<nsIGroupedSHistory> groupedHistory;
+  partialHistory->GetGroupedSHistory(getter_AddRefs(groupedHistory));
+  if (!groupedHistory) {
+    groupedHistory = new GroupedSHistory();
+    groupedHistory->AppendPartialSHistory(partialHistory);
+
+#ifdef DEBUG
+    nsCOMPtr<nsIGroupedSHistory> test;
+    GetGroupedSHistory(getter_AddRefs(test));
+    MOZ_ASSERT(test == groupedHistory, "GroupedHistory must match");
+#endif
+  }
+
+  groupedHistory.forget(aResult);
+  return NS_OK;
+}
 
 NS_IMETHODIMP
-nsFrameLoader::GetGroupedSessionHistory(nsIGroupedSHistory** aResult)
+nsFrameLoader::GetGroupedSHistory(nsIGroupedSHistory** aResult)
 {
-  nsCOMPtr<nsIGroupedSHistory> groupedHistory(mGroupedSessionHistory);
-  groupedHistory.forget(aResult);
+  nsCOMPtr<nsIGroupedSHistory> groupedSHistory;
+  if (mPartialSHistory) {
+    mPartialSHistory->GetGroupedSHistory(getter_AddRefs(groupedSHistory));
+  }
+  groupedSHistory.forget(aResult);
   return NS_OK;
 }
 
@@ -407,9 +432,6 @@ nsFrameLoader::SwapBrowsersAndNotify(nsFrameLoader* aOther)
     return false;
   }
 
-  // Swap the GroupedSessionHistory
-  mGroupedSessionHistory.swap(aOther->mGroupedSessionHistory);
-
   // Dispatch the BrowserChangedProcess event to tell JS that the process swap
   // has occurred.
   GroupedHistoryEventInit eventInit;
@@ -427,22 +449,22 @@ nsFrameLoader::SwapBrowsersAndNotify(nsFrameLoader* aOther)
   return true;
 }
 
-class AppendPartialSessionHistoryAndSwapHelper : public PromiseNativeHandler
+class AppendPartialSHistoryAndSwapHelper : public PromiseNativeHandler
 {
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_CLASS(AppendPartialSessionHistoryAndSwapHelper)
+  NS_DECL_CYCLE_COLLECTION_CLASS(AppendPartialSHistoryAndSwapHelper)
 
-  AppendPartialSessionHistoryAndSwapHelper(nsFrameLoader* aThis,
-                                           nsFrameLoader* aOther,
-                                           Promise* aPromise)
+  AppendPartialSHistoryAndSwapHelper(nsFrameLoader* aThis,
+                                     nsFrameLoader* aOther,
+                                     Promise* aPromise)
     : mThis(aThis), mOther(aOther), mPromise(aPromise) {}
 
   void
   ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
   {
     nsCOMPtr<nsIGroupedSHistory> otherGroupedHistory;
-    mOther->GetGroupedSessionHistory(getter_AddRefs(otherGroupedHistory));
+    mOther->GetGroupedSHistory(getter_AddRefs(otherGroupedHistory));
     MOZ_ASSERT(!otherGroupedHistory,
                "Cannot append a GroupedSHistory owner to another.");
     if (otherGroupedHistory) {
@@ -452,21 +474,17 @@ public:
 
     // Append ourselves.
     nsresult rv;
-    if (!mThis->mGroupedSessionHistory) {
-      mThis->mGroupedSessionHistory = new GroupedSHistory();
-      nsCOMPtr<nsIPartialSHistory> partialSHistory;
-      MOZ_ALWAYS_SUCCEEDS(mThis->GetPartialSessionHistory(getter_AddRefs(partialSHistory)));
-      rv = mThis->mGroupedSessionHistory->AppendPartialSessionHistory(partialSHistory);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        mPromise->MaybeRejectWithUndefined();
-        return;
-      }
+    nsCOMPtr<nsIGroupedSHistory> groupedSHistory;
+    rv = mThis->EnsureGroupedSHistory(getter_AddRefs(groupedSHistory));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mPromise->MaybeRejectWithUndefined();
+      return;
     }
 
     // Append the other.
     nsCOMPtr<nsIPartialSHistory> otherPartialSHistory;
-    MOZ_ALWAYS_SUCCEEDS(mOther->GetPartialSessionHistory(getter_AddRefs(otherPartialSHistory)));
-    rv = mThis->mGroupedSessionHistory->AppendPartialSessionHistory(otherPartialSHistory);
+    MOZ_ALWAYS_SUCCEEDS(mOther->GetPartialSHistory(getter_AddRefs(otherPartialSHistory)));
+    rv = groupedSHistory->AppendPartialSHistory(otherPartialSHistory);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       mPromise->MaybeRejectWithUndefined();
       return;
@@ -487,18 +505,18 @@ public:
   }
 
 private:
-  ~AppendPartialSessionHistoryAndSwapHelper() {}
+  ~AppendPartialSHistoryAndSwapHelper() {}
   RefPtr<nsFrameLoader> mThis;
   RefPtr<nsFrameLoader> mOther;
   RefPtr<Promise> mPromise;
 };
 
-NS_IMPL_CYCLE_COLLECTING_ADDREF(AppendPartialSessionHistoryAndSwapHelper)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(AppendPartialSessionHistoryAndSwapHelper)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AppendPartialSessionHistoryAndSwapHelper)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(AppendPartialSHistoryAndSwapHelper)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(AppendPartialSHistoryAndSwapHelper)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AppendPartialSHistoryAndSwapHelper)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
-NS_IMPL_CYCLE_COLLECTION(AppendPartialSessionHistoryAndSwapHelper,
+NS_IMPL_CYCLE_COLLECTION(AppendPartialSHistoryAndSwapHelper,
                          mThis, mPromise)
 
 class RequestGroupedHistoryNavigationHelper : public PromiseNativeHandler
@@ -520,10 +538,16 @@ public:
       return;
     }
 
+    nsCOMPtr<nsIGroupedSHistory> groupedSHistory;
+    mThis->GetGroupedSHistory(getter_AddRefs(groupedSHistory));
+    if (NS_WARN_IF(!groupedSHistory)) {
+      mPromise->MaybeRejectWithUndefined();
+      return;
+    }
+
     // Navigate the loader to the new index
     nsCOMPtr<nsIFrameLoader> otherLoader;
-    nsresult rv = mThis->mGroupedSessionHistory->
-                    GotoIndex(mGlobalIndex, getter_AddRefs(otherLoader));
+    nsresult rv = groupedSHistory->GotoIndex(mGlobalIndex, getter_AddRefs(otherLoader));
 
     // Check if the gotoIndex failed because the target frameloader is dead. We
     // need to perform a navigateAndRestoreByIndex and then return to recover.
@@ -649,7 +673,7 @@ nsFrameLoader::FireWillChangeProcessEvent()
 }
 
 NS_IMETHODIMP
-nsFrameLoader::AppendPartialSessionHistoryAndSwap(nsIFrameLoader* aOther, nsISupports** aPromise)
+nsFrameLoader::AppendPartialSHistoryAndSwap(nsIFrameLoader* aOther, nsISupports** aPromise)
 {
   if (!aOther) {
     return NS_ERROR_INVALID_POINTER;
@@ -676,8 +700,8 @@ nsFrameLoader::AppendPartialSessionHistoryAndSwap(nsIFrameLoader* aOther, nsISup
 
   // Attach our handler to the ready promise, and make it fulfil the complete
   // promise when we are done.
-  RefPtr<AppendPartialSessionHistoryAndSwapHelper> helper =
-    new AppendPartialSessionHistoryAndSwapHelper(this, otherLoader, complete);
+  RefPtr<AppendPartialSHistoryAndSwapHelper> helper =
+    new AppendPartialSHistoryAndSwapHelper(this, otherLoader, complete);
   ready->AppendNativeHandler(helper);
   complete.forget(aPromise);
   return NS_OK;
@@ -686,9 +710,6 @@ nsFrameLoader::AppendPartialSessionHistoryAndSwap(nsIFrameLoader* aOther, nsISup
 NS_IMETHODIMP
 nsFrameLoader::RequestGroupedHistoryNavigation(uint32_t aGlobalIndex, nsISupports** aPromise)
 {
-  if (!mGroupedSessionHistory) {
-    return NS_ERROR_UNEXPECTED;
-  }
 
   RefPtr<Promise> ready = FireWillChangeProcessEvent();
   if (NS_WARN_IF(!ready)) {
@@ -967,8 +988,15 @@ nsFrameLoader::AddTreeItemToTreeOwner(nsIDocShellTreeItem* aItem,
   NS_PRECONDITION(mOwnerContent, "Must have owning content");
 
   nsAutoString value;
-  bool isContent = mOwnerContent->AttrValueIs(
-    kNameSpaceID_None, TypeAttrName(), nsGkAtoms::content, eIgnoreCase);
+  bool isContent = false;
+  mOwnerContent->GetAttr(kNameSpaceID_None, TypeAttrName(), value);
+
+  // we accept "content" and "content-xxx" values.
+  // We ignore anything that comes after 'content-'.
+  isContent = value.LowerCaseEqualsLiteral("content") ||
+    StringBeginsWith(value, NS_LITERAL_STRING("content-"),
+                     nsCaseInsensitiveStringComparator());
+
 
   // Force mozbrowser frames to always be typeContent, even if the
   // mozbrowser interfaces are disabled.
@@ -1320,6 +1348,15 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
+  // Remote types must match to swap loaders.
+  const nsAString& currentRemoteType =
+    mRemoteBrowser->Manager()->AsContentParent()->GetRemoteType();
+  const nsAString& newRemoteType =
+    aOther->mRemoteBrowser->Manager()->AsContentParent()->GetRemoteType();
+  if (!currentRemoteType.Equals(newRemoteType)) {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
   if (mRemoteBrowser->IsIsolatedMozBrowserElement() !=
       aOther->mRemoteBrowser->IsIsolatedMozBrowserElement()) {
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -1333,12 +1370,12 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
   // This is the reason why now we must retrieve the correct value from the
   // usercontextid attribute before comparing our originAttributes with the
   // other one.
-  DocShellOriginAttributes ourOriginAttributes =
+  OriginAttributes ourOriginAttributes =
     mRemoteBrowser->OriginAttributesRef();
   rv = PopulateUserContextIdFromAttribute(ourOriginAttributes);
   NS_ENSURE_SUCCESS(rv,rv);
 
-  DocShellOriginAttributes otherOriginAttributes =
+  OriginAttributes otherOriginAttributes =
     aOther->mRemoteBrowser->OriginAttributesRef();
   rv = aOther->PopulateUserContextIdFromAttribute(otherOriginAttributes);
   NS_ENSURE_SUCCESS(rv,rv);
@@ -1448,8 +1485,8 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
   ourShell->BackingScaleFactorChanged();
   otherShell->BackingScaleFactorChanged();
 
-  ourDoc->FlushPendingNotifications(Flush_Layout);
-  otherDoc->FlushPendingNotifications(Flush_Layout);
+  ourDoc->FlushPendingNotifications(FlushType::Layout);
+  otherDoc->FlushPendingNotifications(FlushType::Layout);
 
   // Initialize browser API if needed now that owner content has changed.
   InitializeBrowserAPI();
@@ -1731,12 +1768,12 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   // This is the reason why now we must retrieve the correct value from the
   // usercontextid attribute before comparing our originAttributes with the
   // other one.
-  DocShellOriginAttributes ourOriginAttributes =
+  OriginAttributes ourOriginAttributes =
     ourDocshell->GetOriginAttributes();
   rv = PopulateUserContextIdFromAttribute(ourOriginAttributes);
   NS_ENSURE_SUCCESS(rv,rv);
 
-  DocShellOriginAttributes otherOriginAttributes =
+  OriginAttributes otherOriginAttributes =
     otherDocshell->GetOriginAttributes();
   rv = aOther->PopulateUserContextIdFromAttribute(otherOriginAttributes);
   NS_ENSURE_SUCCESS(rv,rv);
@@ -1877,8 +1914,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   ourShell->BackingScaleFactorChanged();
   otherShell->BackingScaleFactorChanged();
 
-  ourParentDocument->FlushPendingNotifications(Flush_Layout);
-  otherParentDocument->FlushPendingNotifications(Flush_Layout);
+  ourParentDocument->FlushPendingNotifications(FlushType::Layout);
+  otherParentDocument->FlushPendingNotifications(FlushType::Layout);
 
   // Initialize browser API if needed now that owner content has changed
   InitializeBrowserAPI();
@@ -1989,8 +2026,15 @@ nsFrameLoader::StartDestroy()
   }
 
   // Destroy the other frame loader owners now that we are being destroyed.
-  if (mGroupedSessionHistory) {
-    mGroupedSessionHistory->CloseInactiveFrameLoaderOwners();
+  if (mPartialSHistory &&
+      mPartialSHistory->GetActiveState() == nsIPartialSHistory::STATE_ACTIVE) {
+    nsCOMPtr<nsIGroupedSHistory> groupedSHistory;
+    GetGroupedSHistory(getter_AddRefs(groupedSHistory));
+    if (groupedSHistory) {
+      NS_DispatchToCurrentThread(NS_NewRunnableFunction([groupedSHistory] () {
+        groupedSHistory->CloseInactiveFrameLoaderOwners();
+      }));
+    }
   }
 
   nsCOMPtr<nsIRunnable> destroyRunnable = new nsFrameLoaderDestroyRunnable(this);
@@ -2363,15 +2407,15 @@ nsFrameLoader::MaybeCreateDocShell()
 
 
     if (GroupedSHistory::GroupedHistoryEnabled()) {
-      mPartialSessionHistory = new PartialSHistory(this);
-      nsCOMPtr<nsISHistoryListener> listener(do_QueryInterface(mPartialSessionHistory));
-      nsCOMPtr<nsIPartialSHistoryListener> partialListener(do_QueryInterface(mPartialSessionHistory));
+      mPartialSHistory = new PartialSHistory(this);
+      nsCOMPtr<nsISHistoryListener> listener(do_QueryInterface(mPartialSHistory));
+      nsCOMPtr<nsIPartialSHistoryListener> partialListener(do_QueryInterface(mPartialSHistory));
       sessionHistory->AddSHistoryListener(listener);
       sessionHistory->SetPartialSHistoryListener(partialListener);
     }
   }
 
-  DocShellOriginAttributes attrs;
+  OriginAttributes attrs;
   if (docShell->ItemType() == mDocShell->ItemType()) {
     attrs = nsDocShell::Cast(docShell)->GetOriginAttributes();
   }
@@ -2386,7 +2430,7 @@ nsFrameLoader::MaybeCreateDocShell()
   if (parentType == nsIDocShellTreeItem::typeContent &&
       !nsContentUtils::IsSystemPrincipal(doc->NodePrincipal()) &&
       !OwnerIsMozBrowserFrame()) {
-    PrincipalOriginAttributes poa = BasePrincipal::Cast(doc->NodePrincipal())->OriginAttributesRef();
+    OriginAttributes oa = doc->NodePrincipal()->OriginAttributesRef();
 
     // Assert on the firstPartyDomain from top-level docshell should be empty
     if (mIsTopLevelContent) {
@@ -2394,18 +2438,18 @@ nsFrameLoader::MaybeCreateDocShell()
                  "top-level docshell shouldn't have firstPartyDomain attribute.");
     }
 
-    // So far we want to make sure InheritFromDocToChildDocShell doesn't override
-    // any other origin attribute than firstPartyDomain.
-    MOZ_ASSERT(attrs.mAppId == poa.mAppId,
+    // So far we want to make sure Inherit doesn't override any other origin
+    // attribute than firstPartyDomain.
+    MOZ_ASSERT(attrs.mAppId == oa.mAppId,
               "docshell and document should have the same appId attribute.");
-    MOZ_ASSERT(attrs.mUserContextId == poa.mUserContextId,
+    MOZ_ASSERT(attrs.mUserContextId == oa.mUserContextId,
               "docshell and document should have the same userContextId attribute.");
-    MOZ_ASSERT(attrs.mInIsolatedMozBrowser == poa.mInIsolatedMozBrowser,
+    MOZ_ASSERT(attrs.mInIsolatedMozBrowser == oa.mInIsolatedMozBrowser,
               "docshell and document should have the same inIsolatedMozBrowser attribute.");
-    MOZ_ASSERT(attrs.mPrivateBrowsingId == poa.mPrivateBrowsingId,
+    MOZ_ASSERT(attrs.mPrivateBrowsingId == oa.mPrivateBrowsingId,
               "docshell and document should have the same privateBrowsingId attribute.");
 
-    attrs.InheritFromDocToChildDocShell(poa);
+    attrs.Inherit(oa);
   }
 
   if (OwnerIsMozBrowserFrame()) {
@@ -2865,8 +2909,12 @@ nsFrameLoader::TryRemoteBrowser()
       return false;
     }
 
-    if (!mOwnerContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                                    nsGkAtoms::content, eIgnoreCase)) {
+    nsAutoString value;
+    mOwnerContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, value);
+
+    if (!value.LowerCaseEqualsLiteral("content") &&
+        !StringBeginsWith(value, NS_LITERAL_STRING("content-"),
+                          nsCaseInsensitiveStringComparator())) {
       return false;
     }
 
@@ -2898,6 +2946,8 @@ nsFrameLoader::TryRemoteBrowser()
   if (!mRemoteBrowser) {
     return false;
   }
+  // Now that mRemoteBrowser is set, we can initialize the RenderFrameParent
+  mRemoteBrowser->InitRenderFrame();
 
   MaybeUpdatePrimaryTabParent(eTabParentChanged);
 
@@ -3326,7 +3376,13 @@ nsFrameLoader::AttributeChanged(nsIDocument* aDocument,
 #endif
 
   parentTreeOwner->ContentShellRemoved(mDocShell);
-  if (aElement->AttrValueIs(kNameSpaceID_None, TypeAttrName(), nsGkAtoms::content, eIgnoreCase)) {
+
+  nsAutoString value;
+  aElement->GetAttr(kNameSpaceID_None, TypeAttrName(), value);
+
+  if (value.LowerCaseEqualsLiteral("content") ||
+      StringBeginsWith(value, NS_LITERAL_STRING("content-"),
+                       nsCaseInsensitiveStringComparator())) {
     parentTreeOwner->ContentShellAdded(mDocShell, is_primary);
   }
 }
@@ -3547,7 +3603,7 @@ nsresult
 nsFrameLoader::GetNewTabContext(MutableTabContext* aTabContext,
                                 nsIURI* aURI)
 {
-  DocShellOriginAttributes attrs;
+  OriginAttributes attrs;
   attrs.mInIsolatedMozBrowser = OwnerIsIsolatedMozBrowserFrame();
   nsresult rv;
 
@@ -3596,7 +3652,7 @@ nsFrameLoader::GetNewTabContext(MutableTabContext* aTabContext,
 }
 
 nsresult
-nsFrameLoader::PopulateUserContextIdFromAttribute(DocShellOriginAttributes& aAttr)
+nsFrameLoader::PopulateUserContextIdFromAttribute(OriginAttributes& aAttr)
 {
   if (aAttr.mUserContextId ==
         nsIScriptSecurityManager::DEFAULT_USER_CONTEXT_ID)  {
@@ -3620,6 +3676,13 @@ NS_IMETHODIMP
 nsFrameLoader::GetIsDead(bool* aIsDead)
 {
   *aIsDead = mDestroyCalled;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFrameLoader::GetIsFreshProcess(bool* aIsFreshProcess)
+{
+  *aIsFreshProcess = mFreshProcess;
   return NS_OK;
 }
 

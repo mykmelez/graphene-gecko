@@ -53,7 +53,7 @@ function* testDirectorScriptMessagePort(directorManager) {
       exports.attach = function ({port}) {
         port.onmessage = function (evt) {
           // echo messages
-          evt.source.postMessage(evt.data);
+          evt.target.postMessage(evt.data);
         };
       };
     }).toString() + ")();",
@@ -90,7 +90,7 @@ function* testDirectorScriptWindowEval(directorManager) {
         if (window.document && window.document.readyState === "complete") {
           onpageloaded();
         } else {
-          window.addEventListener("load", onpageloaded, false);
+          window.addEventListener("load", onpageloaded);
         }
       };
     }).toString() + ")();",

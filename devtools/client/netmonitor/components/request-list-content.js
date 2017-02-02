@@ -6,7 +6,7 @@
 "use strict";
 
 const { Task } = require("devtools/shared/task");
-const { createClass, createFactory, DOM } = require("devtools/client/shared/vendor/react");
+const { createClass, createFactory, DOM, PropTypes } = require("devtools/client/shared/vendor/react");
 const { div } = DOM;
 const Actions = require("../actions/index");
 const RequestListItem = createFactory(require("./request-list-item"));
@@ -26,6 +26,22 @@ const REQUESTS_TOOLTIP_TOGGLE_DELAY = 500;
 const RequestListContent = createClass({
   displayName: "RequestListContent",
 
+  propTypes: {
+    displayedRequests: PropTypes.object.isRequired,
+    firstRequestStartedMillis: PropTypes.number.isRequired,
+    onItemContextMenu: PropTypes.func.isRequired,
+    onItemMouseDown: PropTypes.func.isRequired,
+    onSecurityIconClick: PropTypes.func.isRequired,
+    onSelectDelta: PropTypes.func.isRequired,
+    scale: PropTypes.number,
+    selectedRequestId: PropTypes.string,
+    tooltip: PropTypes.shape({
+      hide: PropTypes.func.isRequired,
+      startTogglingOnHover: PropTypes.func.isRequired,
+      stopTogglingOnHover: PropTypes.func.isRequired,
+    }).isRequired
+  },
+
   componentDidMount() {
     // Set the CSS variables for waterfall scaling
     this.setScalingStyles();
@@ -40,14 +56,16 @@ const RequestListContent = createClass({
     this.refs.contentEl.addEventListener("scroll", this.onScroll, true);
   },
 
-  componentWillUpdate() {
-    // Check if the list is scrolled to bottom, before UI update
-    this.shouldScrollBottom = this.isScrolledToBottom();
+  componentWillUpdate(nextProps) {
+    // Check if the list is scrolled to bottom before the UI update.
+    // The scroll is ever needed only if new rows are added to the list.
+    const delta = nextProps.displayedRequests.size - this.props.displayedRequests.size;
+    this.shouldScrollBottom = delta > 0 && this.isScrolledToBottom();
   },
 
   componentDidUpdate(prevProps) {
     // Update the CSS variables for waterfall scaling after props change
-    this.setScalingStyles();
+    this.setScalingStyles(prevProps);
 
     // Keep the list scrolled to bottom if a new row was added
     if (this.shouldScrollBottom) {
@@ -72,11 +90,9 @@ const RequestListContent = createClass({
    */
   setScalingStyles(prevProps) {
     const { scale } = this.props;
-    if (scale == this.currentScale) {
+    if (prevProps && prevProps.scale === scale) {
       return;
     }
-
-    this.currentScale = scale;
 
     const { style } = this.refs.contentEl;
     style.removeProperty("--timings-scale");
@@ -246,9 +262,9 @@ module.exports = connect(
      */
     onSecurityIconClick: (e, item) => {
       const { securityState } = item;
+      // Choose the security tab.
       if (securityState && securityState !== "insecure") {
-        // Choose the security tab.
-        NetMonitorView.NetworkDetails.widget.selectedIndex = 5;
+        dispatch(Actions.selectDetailsPanelTab("security"));
       }
     },
   })

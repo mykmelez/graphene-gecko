@@ -10,7 +10,8 @@
 "use strict";
 
 const baseURL = "https://developer.mozilla.org/docs/Web/JavaScript/Reference/Errors/";
-const params = "?utm_source=mozilla&utm_medium=firefox-console-errors&utm_campaign=default";
+const params =
+  "?utm_source=mozilla&utm_medium=firefox-console-errors&utm_campaign=default";
 const ErrorDocs = {
   JSMSG_READ_ONLY: "Read-only",
   JSMSG_BAD_ARRAY_LENGTH: "Invalid_array_length",
@@ -48,6 +49,7 @@ const ErrorDocs = {
   JSMSG_NOT_CONSTRUCTOR: "Not_a_constructor",
   JSMSG_CURLY_AFTER_LIST: "Missing_curly_after_property_list",
   JSMSG_DEPRECATED_FOR_EACH: "For-each-in_loops_are_deprecated",
+  JSMSG_STRICT_NON_SIMPLE_PARAMS: "Strict_Non_Simple_Params",
 };
 
 const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Web/Security/Mixed_content";
@@ -70,7 +72,7 @@ const ErrorCategories = {
 
 exports.GetURL = (error) => {
   if (!error) {
-    return;
+    return undefined;
   }
 
   let doc = ErrorDocs[error.errorMessageName];
@@ -82,4 +84,5 @@ exports.GetURL = (error) => {
   if (categoryURL) {
     return categoryURL + params;
   }
+  return undefined;
 };

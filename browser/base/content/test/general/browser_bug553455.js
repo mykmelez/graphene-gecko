@@ -10,16 +10,16 @@ const PREF_INSTALL_REQUIREBUILTINCERTS = "extensions.install.requireBuiltInCerts
 const PROGRESS_NOTIFICATION = "addon-progress";
 
 const { REQUIRE_SIGNING } = Cu.import("resource://gre/modules/addons/AddonConstants.jsm", {});
-const { Task } = Cu.import("resource://gre/modules/Task.jsm");
+const { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 
 var rootDir = getRootDirectory(gTestPath);
-var rootPath = rootDir.split('/');
-var chromeName = rootPath[0] + '//' + rootPath[2];
+var rootPath = rootDir.split("/");
+var chromeName = rootPath[0] + "//" + rootPath[2];
 var croot = chromeName + "/content/browser/toolkit/mozapps/extensions/test/xpinstall/";
 var jar = getJar(croot);
 if (jar) {
   var tmpdir = extractJarToTmp(jar);
-  croot = 'file://' + tmpdir.path + '/';
+  croot = "file://" + tmpdir.path + "/";
 }
 const CHROMEROOT = croot;
 
@@ -61,10 +61,9 @@ function waitForProgressNotification(aPanelOpen = false, aExpectedCount = 1) {
       panelEventPromise = Promise.resolve();
     } else {
       panelEventPromise = new Promise(resolve => {
-        PopupNotifications.panel.addEventListener("popupshowing", function eventListener() {
-          PopupNotifications.panel.removeEventListener("popupshowing", eventListener);
+        PopupNotifications.panel.addEventListener("popupshowing", function() {
           resolve();
-        });
+        }, {once: true});
       });
     }
 
@@ -134,10 +133,9 @@ function waitForNotification(aId, aExpectedCount = 1) {
 function waitForNotificationClose() {
   return new Promise(resolve => {
     info("Waiting for notification to close");
-    PopupNotifications.panel.addEventListener("popuphidden", function listener() {
-      PopupNotifications.panel.removeEventListener("popuphidden", listener, false);
+    PopupNotifications.panel.addEventListener("popuphidden", function() {
       resolve();
-    }, false);
+    }, {once: true});
   });
 }
 
@@ -152,13 +150,13 @@ function waitForInstallDialog() {
 
     let window = yield new Promise(resolve => {
       Services.wm.addListener({
-        onOpenWindow: function(aXULWindow) {
+        onOpenWindow(aXULWindow) {
           Services.wm.removeListener(this);
           resolve(aXULWindow);
         },
-        onCloseWindow: function(aXULWindow) {
+        onCloseWindow(aXULWindow) {
         },
-        onWindowTitleChange: function(aXULWindow, aNewTitle) {
+        onWindowTitleChange(aXULWindow, aNewTitle) {
         }
       });
     });
@@ -260,8 +258,7 @@ function test_disabledInstall() {
 
     try {
       ok(Services.prefs.getBoolPref("xpinstall.enabled"), "Installation should be enabled");
-    }
-    catch (e) {
+    } catch (e) {
       ok(false, "xpinstall.enabled should be set");
     }
 
@@ -471,46 +468,6 @@ function test_restartless() {
   });
 },
 
-function test_multiple() {
-  return Task.spawn(function* () {
-    let pm = Services.perms;
-    pm.add(makeURI("http://example.com/"), "install", pm.ALLOW_ACTION);
-
-    let progressPromise = waitForProgressNotification();
-    let dialogPromise = waitForInstallDialog();
-    let triggers = encodeURIComponent(JSON.stringify({
-      "Unsigned XPI": "amosigned.xpi",
-      "Restartless XPI": "restartless.xpi"
-    }));
-    BrowserTestUtils.openNewForegroundTab(gBrowser, TESTROOT + "installtrigger.html?" + triggers);
-    let panel = yield progressPromise;
-    let installDialog = yield dialogPromise;
-
-    let notificationPromise = waitForNotification("addon-install-restart");
-    acceptInstallDialog(installDialog);
-    yield notificationPromise;
-
-    let notification = panel.childNodes[0];
-    is(notification.button.label, "Restart Now", "Should have seen the right button");
-    is(notification.getAttribute("label"),
-       "2 add-ons will be installed after you restart " + gApp + ".",
-       "Should have seen the right message");
-
-    let installs = yield getInstalls();
-    is(installs.length, 1, "Should be one pending install");
-    installs[0].cancel();
-
-    let addon = yield new Promise(resolve => {
-      AddonManager.getAddonByID("restartless-xpi@tests.mozilla.org", function(result) {
-        resolve(result);
-      });
-    });
-    addon.uninstall();
-    Services.perms.remove(makeURI("http://example.com/"), "install");
-    yield removeTab();
-  });
-},
-
 function test_sequential() {
   return Task.spawn(function* () {
     // This test is only relevant if using the new doorhanger UI
@@ -584,64 +541,6 @@ function test_sequential() {
     cancelInstallDialog(installDialog);
     yield closePromise;
     yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
-  });
-},
-
-function test_someUnverified() {
-  return Task.spawn(function* () {
-    // This test is only relevant if using the new doorhanger UI and allowing
-    // unsigned add-ons
-    if (!Preferences.get("xpinstall.customConfirmationUI", false) ||
-        Preferences.get("xpinstall.signatures.required", true) ||
-        REQUIRE_SIGNING) {
-      return;
-    }
-    let pm = Services.perms;
-    pm.add(makeURI("http://example.com/"), "install", pm.ALLOW_ACTION);
-
-    let progressPromise = waitForProgressNotification();
-    let dialogPromise = waitForInstallDialog();
-    let triggers = encodeURIComponent(JSON.stringify({
-      "Extension XPI": "restartless-unsigned.xpi",
-      "Theme XPI": "theme.xpi"
-    }));
-    BrowserTestUtils.openNewForegroundTab(gBrowser, TESTROOT + "installtrigger.html?" + triggers);
-    yield progressPromise;
-    let installDialog = yield dialogPromise;
-
-    let notification = document.getElementById("addon-install-confirmation-notification");
-    let message = notification.getAttribute("label");
-    is(message, "Caution: This site would like to install 2 add-ons in " + gApp +
-       ", some of which are unverified. Proceed at your own risk.",
-       "Should see the right message");
-
-    let container = document.getElementById("addon-install-confirmation-content");
-    is(container.childNodes.length, 2, "Should be two items listed");
-    is(container.childNodes[0].firstChild.getAttribute("value"), "XPI Test", "Should have the right add-on");
-    is(container.childNodes[0].lastChild.getAttribute("class"),
-       "addon-install-confirmation-unsigned", "Should have the unverified marker");
-    is(container.childNodes[1].firstChild.getAttribute("value"), "Theme Test", "Should have the right add-on");
-    is(container.childNodes[1].childNodes.length, 1, "Shouldn't have the unverified marker");
-
-    let notificationPromise = waitForNotification("addon-install-restart");
-    acceptInstallDialog(installDialog);
-    yield notificationPromise;
-
-    let [addon, theme] = yield new Promise(resolve => {
-      AddonManager.getAddonsByIDs(["restartless-xpi@tests.mozilla.org",
-                                  "theme-xpi@tests.mozilla.org"],
-                                  function(addons) {
-        resolve(addons);
-      });
-    });
-    addon.uninstall();
-    // Installing a new theme tries to switch to it, switch back to the
-    // default theme.
-    theme.userDisabled = true;
-    theme.uninstall();
-
-    Services.perms.remove(makeURI("http://example.com/"), "install");
-    yield removeTab();
   });
 },
 
@@ -882,12 +781,12 @@ function test_reload() {
     function testFail() {
       ok(false, "Reloading should not have hidden the notification");
     }
-    PopupNotifications.panel.addEventListener("popuphiding", testFail, false);
+    PopupNotifications.panel.addEventListener("popuphiding", testFail);
     let requestedUrl = TESTROOT2 + "enabled.html";
     let loadedPromise = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser, false, requestedUrl);
     gBrowser.loadURI(TESTROOT2 + "enabled.html");
     yield loadedPromise;
-    PopupNotifications.panel.removeEventListener("popuphiding", testFail, false);
+    PopupNotifications.panel.removeEventListener("popuphiding", testFail);
 
     let installs = yield getInstalls();
     is(installs.length, 1, "Should be one pending install");
@@ -1055,7 +954,7 @@ function test_cancel() {
     let install = notification.notification.options.installs[0];
     let cancelledPromise = new Promise(resolve => {
       install.addListener({
-        onDownloadCancelled: function() {
+        onDownloadCancelled() {
           install.removeListener(this);
           resolve();
         }
@@ -1124,7 +1023,7 @@ function test_failedSecurity() {
 var gTestStart = null;
 
 var XPInstallObserver = {
-  observe: function(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic, aData) {
     var installInfo = aSubject.QueryInterface(Components.interfaces.amIWebInstallInfo);
     info("Observed " + aTopic + " for " + installInfo.installs.length + " installs");
     installInfo.installs.forEach(function(aInstall) {

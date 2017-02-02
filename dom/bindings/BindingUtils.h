@@ -812,15 +812,17 @@ MaybeWrapNonDOMObjectOrNullValue(JSContext* cx, JS::MutableHandle<JS::Value> rva
 MOZ_ALWAYS_INLINE bool
 MaybeWrapValue(JSContext* cx, JS::MutableHandle<JS::Value> rval)
 {
-  if (rval.isString()) {
-    return MaybeWrapStringValue(cx, rval);
+  if (rval.isGCThing()) {
+    if (rval.isString()) {
+      return MaybeWrapStringValue(cx, rval);
+    }
+    if (rval.isObject()) {
+      return MaybeWrapObjectValue(cx, rval);
+    }
+    MOZ_ASSERT(rval.isSymbol());
+    JS_MarkCrossZoneId(cx, SYMBOL_TO_JSID(rval.toSymbol()));
   }
-
-  if (!rval.isObject()) {
-    return true;
-  }
-
-  return MaybeWrapObjectValue(cx, rval);
+  return true;
 }
 
 namespace binding_detail {
@@ -1728,7 +1730,7 @@ template <class T>
 inline JSObject*
 GetCallbackFromCallbackObject(T* aObj)
 {
-  return aObj->Callback();
+  return aObj->CallbackOrNull();
 }
 
 // Helper for getting the callback JSObject* of a smart ptr around a
@@ -1851,16 +1853,6 @@ bool
 AppendNamedPropertyIds(JSContext* cx, JS::Handle<JSObject*> proxy,
                        nsTArray<nsString>& names,
                        bool shadowPrototypeProperties, JS::AutoIdVector& props);
-
-namespace binding_detail {
-
-class FastErrorResult :
-    public mozilla::binding_danger::TErrorResult<
-      mozilla::binding_danger::JustAssertCleanupPolicy>
-{
-};
-
-} // namespace binding_detail
 
 enum StringificationBehavior {
   eStringify,
@@ -3006,6 +2998,9 @@ class PinnedStringId
 
 bool
 GenericBindingGetter(JSContext* cx, unsigned argc, JS::Value* vp);
+
+bool
+GenericPromiseReturningBindingGetter(JSContext* cx, unsigned argc, JS::Value* vp);
 
 bool
 GenericBindingSetter(JSContext* cx, unsigned argc, JS::Value* vp);

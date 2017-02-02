@@ -47,7 +47,6 @@
 
 #include "harfbuzz/hb.h"
 #include "harfbuzz/hb-ot.h"
-#include "graphite2/Font.h"
 
 #include <algorithm>
 #include <limits>
@@ -2305,7 +2304,7 @@ gfxFont::Measure(const gfxTextRun *aTextRun,
     if (aBoundingBoxType == TIGHT_HINTED_OUTLINE_EXTENTS &&
         mAntialiasOption != kAntialiasNone) {
         if (!mNonAAFont) {
-            mNonAAFont.reset(CopyWithAntialiasOption(kAntialiasNone));
+            mNonAAFont = Move(CopyWithAntialiasOption(kAntialiasNone));
         }
         // if font subclass doesn't implement CopyWithAntialiasOption(),
         // it will return null and we'll proceed to use the existing font
@@ -3154,8 +3153,11 @@ gfxFont::InitFakeSmallCapsRun(DrawTarget     *aDrawTarget,
                         // These are handled by using the full-size font with the
                         // uppercasing transform.
                         mozilla::GreekCasing::State state;
-                        uint32_t ch2 = mozilla::GreekCasing::UpperCase(ch, state);
-                        if (ch != ch2 && !aSyntheticUpper) {
+                        bool markEta, updateEta;
+                        uint32_t ch2 =
+                            mozilla::GreekCasing::UpperCase(ch, state, markEta,
+                                                            updateEta);
+                        if ((ch != ch2 || markEta) && !aSyntheticUpper) {
                             chAction = kUppercase;
                         }
                     }

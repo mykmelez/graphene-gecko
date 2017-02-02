@@ -51,7 +51,6 @@
 #include "nsIDOMNode.h"
 #include "nsIDocument.h"
 #include "nsIEditor.h"
-#include "nsIEditorIMESupport.h"
 #include "nsIEditorMailSupport.h"
 #include "nsIEditRules.h"
 #include "nsIFile.h"
@@ -1662,6 +1661,9 @@ HTMLEditor::PasteAsCitedQuotation(const nsAString& aCitation,
   rv = selection->Collapse(newNode, 0);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Ensure that the inserted <blockquote> has a frame to make it IsEditable.
+  FlushFrames();
+
   return Paste(aSelectionType);
 }
 
@@ -1718,6 +1720,7 @@ HTMLEditor::PasteAsPlaintextQuotation(int32_t aSelectionType)
 NS_IMETHODIMP
 HTMLEditor::InsertTextWithQuotations(const nsAString& aStringToInsert)
 {
+  AutoEditBatch beginBatching(this);
   // The whole operation should be undoable in one transaction:
   BeginTransaction();
 
@@ -1776,6 +1779,13 @@ HTMLEditor::InsertTextWithQuotations(const nsAString& aStringToInsert)
       // the quoted block.
       if (curHunkIsQuoted) {
         lineStart = firstNewline;
+
+        // 'firstNewline' points to the first '\n'. We want to
+        // ensure that this first newline goes into the hunk
+        // since quoted hunks can be displayed as blocks
+        // (and the newline should become invisible in this case).
+        // So the next line needs to start at the next character.
+        lineStart++;
       }
     }
 
@@ -1874,6 +1884,9 @@ HTMLEditor::InsertAsPlaintextQuotation(const nsAString& aQuotedText,
     selection->Collapse(newNode, 0);
   }
 
+  // Ensure that the inserted <span> has a frame to make it IsEditable.
+  FlushFrames();
+
   if (aAddCites) {
     rv = TextEditor::InsertAsQuotation(aQuotedText, aNodeInserted);
   } else {
@@ -1956,6 +1969,9 @@ HTMLEditor::InsertAsCitedQuotation(const nsAString& aQuotedText,
 
   // Set the selection inside the blockquote so aQuotedText will go there:
   selection->Collapse(newNode, 0);
+
+  // Ensure that the inserted <blockquote> has a frame to make it IsEditable.
+  FlushFrames();
 
   if (aInsertHTML) {
     rv = LoadHTML(aQuotedText);
@@ -2367,27 +2383,26 @@ HTMLEditor::ReplaceOrphanedStructure(
   }
 
   // If we found substructure, paste it instead of its descendants.
-  // Only replace with the substructure if all the nodes in the list are
-  // descendants.
-  bool shouldReplaceNodes = true;
-  for (uint32_t i = 0; i < aNodeArray.Length(); i++) {
+  // Postprocess list to remove any descendants of this node so that we don't
+  // insert them twice.
+  uint32_t removedCount = 0;
+  uint32_t originalLength = aNodeArray.Length();
+  for (uint32_t i = 0; i < originalLength; i++) {
     uint32_t idx = aStartOrEnd == StartOrEnd::start ?
-      i : (aNodeArray.Length() - i - 1);
+      (i - removedCount) : (originalLength - i - 1);
     OwningNonNull<nsINode> endpoint = aNodeArray[idx];
-    if (!EditorUtils::IsDescendantOf(endpoint, replaceNode)) {
-      shouldReplaceNodes = false;
-      break;
+    if (endpoint == replaceNode ||
+        EditorUtils::IsDescendantOf(endpoint, replaceNode)) {
+      aNodeArray.RemoveElementAt(idx);
+      removedCount++;
     }
   }
 
-  if (shouldReplaceNodes) {
-    // Now replace the removed nodes with the structural parent
-    aNodeArray.Clear();
-    if (aStartOrEnd == StartOrEnd::end) {
-      aNodeArray.AppendElement(*replaceNode);
-    } else {
-      aNodeArray.InsertElementAt(0, *replaceNode);
-    }
+  // Now replace the removed nodes with the structural parent
+  if (aStartOrEnd == StartOrEnd::end) {
+    aNodeArray.AppendElement(*replaceNode);
+  } else {
+    aNodeArray.InsertElementAt(0, *replaceNode);
   }
 }
 

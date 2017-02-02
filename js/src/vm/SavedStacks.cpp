@@ -28,8 +28,8 @@
 #include "js/CharacterEncoding.h"
 #include "js/Vector.h"
 #include "vm/Debugger.h"
+#include "vm/GeckoProfiler.h"
 #include "vm/SavedFrame.h"
-#include "vm/SPSProfiler.h"
 #include "vm/StringBuffer.h"
 #include "vm/Time.h"
 #include "vm/WrapperObject.h"
@@ -157,8 +157,8 @@ struct SavedFrame::Lookup {
         activation(activation)
     {
         MOZ_ASSERT(source);
-        MOZ_ASSERT_IF(framePtr.isSome(), pc);
         MOZ_ASSERT_IF(framePtr.isSome(), activation);
+        MOZ_ASSERT_IF(framePtr.isSome() && !activation->isWasm(), pc);
 
 #ifdef JS_MORE_DETERMINISTIC
         column = 0;
@@ -489,8 +489,19 @@ SavedFrame::initParent(SavedFrame* maybeParent)
 }
 
 void
-SavedFrame::initFromLookup(SavedFrame::HandleLookup lookup)
+SavedFrame::initFromLookup(JSContext* cx, SavedFrame::HandleLookup lookup)
 {
+    // Make sure any atoms used in the lookup are marked in the current zone.
+    // Normally we would try to keep these mark bits up to date around the
+    // points where the context moves between compartments, but Lookups live on
+    // the stack (where the atoms are kept alive regardless) and this is a
+    // more convenient pinchpoint.
+    cx->markAtom(lookup->source);
+    if (lookup->functionDisplayName)
+        cx->markAtom(lookup->functionDisplayName);
+    if (lookup->asyncCause)
+        cx->markAtom(lookup->asyncCause);
+
     initSource(lookup->source);
     initLine(lookup->line);
     initColumn(lookup->column);
@@ -729,14 +740,17 @@ GetSavedFrameSource(JSContext* cx, HandleObject savedFrame, MutableHandleString 
     CHECK_REQUEST(cx);
     MOZ_RELEASE_ASSERT(cx->compartment());
 
-    AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
-    bool skippedAsync;
-    js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
-    if (!frame) {
-        sourcep.set(cx->runtime()->emptyString);
-        return SavedFrameResult::AccessDenied;
+    {
+        AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
+        bool skippedAsync;
+        js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
+        if (!frame) {
+            sourcep.set(cx->runtime()->emptyString);
+            return SavedFrameResult::AccessDenied;
+        }
+        sourcep.set(frame->getSource());
     }
-    sourcep.set(frame->getSource());
+    cx->markAtom(sourcep);
     return SavedFrameResult::Ok;
 }
 
@@ -788,14 +802,18 @@ GetSavedFrameFunctionDisplayName(JSContext* cx, HandleObject savedFrame, Mutable
     CHECK_REQUEST(cx);
     MOZ_RELEASE_ASSERT(cx->compartment());
 
-    AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
-    bool skippedAsync;
-    js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
-    if (!frame) {
-        namep.set(nullptr);
-        return SavedFrameResult::AccessDenied;
+    {
+        AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
+        bool skippedAsync;
+        js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
+        if (!frame) {
+            namep.set(nullptr);
+            return SavedFrameResult::AccessDenied;
+        }
+        namep.set(frame->getFunctionDisplayName());
     }
-    namep.set(frame->getFunctionDisplayName());
+    if (namep)
+        cx->markAtom(namep);
     return SavedFrameResult::Ok;
 }
 
@@ -807,22 +825,26 @@ GetSavedFrameAsyncCause(JSContext* cx, HandleObject savedFrame, MutableHandleStr
     CHECK_REQUEST(cx);
     MOZ_RELEASE_ASSERT(cx->compartment());
 
-    AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
-    bool skippedAsync;
-    // This function is always called with self-hosted frames excluded by
-    // GetValueIfNotCached in dom/bindings/Exceptions.cpp. However, we want
-    // to include them because our Promise implementation causes us to have
-    // the async cause on a self-hosted frame. So we just ignore the
-    // parameter and always include self-hosted frames.
-    js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, SavedFrameSelfHosted::Include,
-                                                    skippedAsync));
-    if (!frame) {
-        asyncCausep.set(nullptr);
-        return SavedFrameResult::AccessDenied;
+    {
+        AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
+        bool skippedAsync;
+        // This function is always called with self-hosted frames excluded by
+        // GetValueIfNotCached in dom/bindings/Exceptions.cpp. However, we want
+        // to include them because our Promise implementation causes us to have
+        // the async cause on a self-hosted frame. So we just ignore the
+        // parameter and always include self-hosted frames.
+        js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, SavedFrameSelfHosted::Include,
+                                                        skippedAsync));
+        if (!frame) {
+            asyncCausep.set(nullptr);
+            return SavedFrameResult::AccessDenied;
+        }
+        asyncCausep.set(frame->getAsyncCause());
+        if (!asyncCausep && skippedAsync)
+            asyncCausep.set(cx->names().Async);
     }
-    asyncCausep.set(frame->getAsyncCause());
-    if (!asyncCausep && skippedAsync)
-        asyncCausep.set(cx->names().Async);
+    if (asyncCausep)
+        cx->markAtom(asyncCausep);
     return SavedFrameResult::Ok;
 }
 
@@ -1147,7 +1169,7 @@ SavedStacks::saveCurrentStack(JSContext* cx, MutableHandleSavedFrame frame,
         return true;
     }
 
-    AutoSPSEntry psuedoFrame(cx->runtime(), "js::SavedStacks::saveCurrentStack");
+    AutoGeckoProfilerEntry psuedoFrame(cx->runtime(), "js::SavedStacks::saveCurrentStack");
     FrameIter iter(cx);
     return insertFrames(cx, iter, frame, mozilla::Move(capture));
 }
@@ -1324,7 +1346,7 @@ SavedStacks::insertFrames(JSContext* cx, FrameIter& iter, MutableHandleSavedFram
             parentIsInCache = iter.hasCachedSavedFrame();
 
         auto principals = iter.compartment()->principals();
-        auto displayAtom = iter.isFunctionFrame() ? iter.functionDisplayAtom() : nullptr;
+        auto displayAtom = (iter.isWasm() || iter.isFunctionFrame()) ? iter.functionDisplayAtom() : nullptr;
         if (!stackChain->emplaceBack(location.source(),
                                      location.line(),
                                      location.column(),
@@ -1492,7 +1514,7 @@ SavedStacks::createFrameFromLookup(JSContext* cx, SavedFrame::HandleLookup looku
     RootedSavedFrame frame(cx, SavedFrame::create(cx));
     if (!frame)
         return nullptr;
-    frame->initFromLookup(lookup);
+    frame->initFromLookup(cx, lookup);
 
     if (!FreezeObject(cx, frame))
         return nullptr;

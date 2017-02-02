@@ -1310,77 +1310,6 @@ auto NativePanZoomController::UpdateOverscrollVelocity(float a0, float a1) const
     return mozilla::jni::Method<UpdateOverscrollVelocity_t>::Call(NativePanZoomController::mCtx, nullptr, a0, a1);
 }
 
-const char ProgressiveUpdateData::name[] =
-        "org/mozilla/gecko/gfx/ProgressiveUpdateData";
-
-constexpr char ProgressiveUpdateData::New_t::name[];
-constexpr char ProgressiveUpdateData::New_t::signature[];
-
-auto ProgressiveUpdateData::New() -> ProgressiveUpdateData::LocalRef
-{
-    return mozilla::jni::Constructor<New_t>::Call(ProgressiveUpdateData::Context(), nullptr);
-}
-
-constexpr char ProgressiveUpdateData::SetViewport_t::name[];
-constexpr char ProgressiveUpdateData::SetViewport_t::signature[];
-
-auto ProgressiveUpdateData::SetViewport(mozilla::jni::Object::Param a0) const -> void
-{
-    return mozilla::jni::Method<SetViewport_t>::Call(ProgressiveUpdateData::mCtx, nullptr, a0);
-}
-
-constexpr char ProgressiveUpdateData::Abort_t::name[];
-constexpr char ProgressiveUpdateData::Abort_t::signature[];
-
-auto ProgressiveUpdateData::Abort() const -> bool
-{
-    return mozilla::jni::Field<Abort_t>::Get(ProgressiveUpdateData::mCtx, nullptr);
-}
-
-auto ProgressiveUpdateData::Abort(bool a0) const -> void
-{
-    return mozilla::jni::Field<Abort_t>::Set(ProgressiveUpdateData::mCtx, nullptr, a0);
-}
-
-constexpr char ProgressiveUpdateData::Scale_t::name[];
-constexpr char ProgressiveUpdateData::Scale_t::signature[];
-
-auto ProgressiveUpdateData::Scale() const -> float
-{
-    return mozilla::jni::Field<Scale_t>::Get(ProgressiveUpdateData::mCtx, nullptr);
-}
-
-auto ProgressiveUpdateData::Scale(float a0) const -> void
-{
-    return mozilla::jni::Field<Scale_t>::Set(ProgressiveUpdateData::mCtx, nullptr, a0);
-}
-
-constexpr char ProgressiveUpdateData::X_t::name[];
-constexpr char ProgressiveUpdateData::X_t::signature[];
-
-auto ProgressiveUpdateData::X() const -> float
-{
-    return mozilla::jni::Field<X_t>::Get(ProgressiveUpdateData::mCtx, nullptr);
-}
-
-auto ProgressiveUpdateData::X(float a0) const -> void
-{
-    return mozilla::jni::Field<X_t>::Set(ProgressiveUpdateData::mCtx, nullptr, a0);
-}
-
-constexpr char ProgressiveUpdateData::Y_t::name[];
-constexpr char ProgressiveUpdateData::Y_t::signature[];
-
-auto ProgressiveUpdateData::Y() const -> float
-{
-    return mozilla::jni::Field<Y_t>::Get(ProgressiveUpdateData::mCtx, nullptr);
-}
-
-auto ProgressiveUpdateData::Y(float a0) const -> void
-{
-    return mozilla::jni::Field<Y_t>::Set(ProgressiveUpdateData::mCtx, nullptr, a0);
-}
-
 const char StackScroller::name[] =
         "org/mozilla/gecko/gfx/StackScroller";
 
@@ -1778,6 +1707,36 @@ auto ViewTransform::Y() const -> float
 auto ViewTransform::Y(float a0) const -> void
 {
     return mozilla::jni::Field<Y_t>::Set(ViewTransform::mCtx, nullptr, a0);
+}
+
+const char VsyncSource::name[] =
+        "org/mozilla/gecko/gfx/VsyncSource";
+
+constexpr char VsyncSource::GetRefreshRate_t::name[];
+constexpr char VsyncSource::GetRefreshRate_t::signature[];
+
+auto VsyncSource::GetRefreshRate() const -> float
+{
+    return mozilla::jni::Method<GetRefreshRate_t>::Call(VsyncSource::mCtx, nullptr);
+}
+
+constexpr char VsyncSource::NotifyVsync_t::name[];
+constexpr char VsyncSource::NotifyVsync_t::signature[];
+
+constexpr char VsyncSource::ObserveVsync_t::name[];
+constexpr char VsyncSource::ObserveVsync_t::signature[];
+
+auto VsyncSource::ObserveVsync(bool a0) const -> bool
+{
+    return mozilla::jni::Method<ObserveVsync_t>::Call(VsyncSource::mCtx, nullptr, a0);
+}
+
+constexpr char VsyncSource::INSTANCE_t::name[];
+constexpr char VsyncSource::INSTANCE_t::signature[];
+
+auto VsyncSource::INSTANCE() -> VsyncSource::LocalRef
+{
+    return mozilla::jni::Field<INSTANCE_t>::Get(VsyncSource::Context(), nullptr);
 }
 
 const char Clipboard::name[] =

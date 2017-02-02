@@ -30,6 +30,9 @@ public:
   DocAccessibleParent() :
     ProxyAccessible(this), mParentDoc(nullptr),
     mTopLevel(false), mShutdown(false)
+#if defined(XP_WIN)
+                                      , mEmulatedWindowHandle(nullptr)
+#endif // defined(XP_WIN)
   { MOZ_COUNT_CTOR_INHERITED(DocAccessibleParent, ProxyAccessible); }
   ~DocAccessibleParent()
   {
@@ -42,6 +45,18 @@ public:
   bool IsTopLevel() const { return mTopLevel; }
 
   bool IsShutdown() const { return mShutdown; }
+
+  /**
+   * Mark this actor as shutdown without doing any cleanup.  This should only
+   * be called on actors that have just been initialized, so probably only from
+   * RecvPDocAccessibleConstructor.
+   */
+  void MarkAsShutdown()
+  {
+    MOZ_ASSERT(mChildDocs.IsEmpty());
+    MOZ_ASSERT(mAccessibles.Count() == 0);
+    mShutdown = true;
+  }
 
   /*
    * Called when a message from a document in a child process notifies the main
@@ -102,8 +117,8 @@ public:
    * Called when a document in a content process notifies the main process of a
    * new child document.
    */
-  bool AddChildDoc(DocAccessibleParent* aChildDoc, uint64_t aParentID,
-                   bool aCreating = true);
+  ipc::IPCResult AddChildDoc(DocAccessibleParent* aChildDoc,
+                             uint64_t aParentID, bool aCreating = true);
 
   /*
    * Called when the document in the content process this object represents
@@ -111,7 +126,11 @@ public:
    */
   void RemoveChildDoc(DocAccessibleParent* aChildDoc)
   {
-    aChildDoc->Parent()->ClearChildDoc(aChildDoc);
+    ProxyAccessible* parent = aChildDoc->Parent();
+    MOZ_ASSERT(parent);
+    if (parent) {
+      aChildDoc->Parent()->ClearChildDoc(aChildDoc);
+    }
     mChildDocs.RemoveElement(aChildDoc);
     aChildDoc->mParentDoc = nullptr;
     MOZ_ASSERT(aChildDoc->mChildDocs.Length() == 0);
@@ -147,6 +166,13 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvGetWindowedPluginIAccessible(
       const WindowsHandle& aHwnd, IAccessibleHolder* aPluginCOMProxy) override;
+
+  /**
+   * Set emulated native window handle for a document.
+   * @param aWindowHandle emulated native window handle
+   */
+  void SetEmulatedWindowHandle(HWND aWindowHandle);
+  HWND GetEmulatedWindowHandle() const { return mEmulatedWindowHandle; }
 #endif
 
 private:
@@ -182,6 +208,11 @@ private:
 
   nsTArray<DocAccessibleParent*> mChildDocs;
   DocAccessibleParent* mParentDoc;
+
+#if defined(XP_WIN)
+  // The handle associated with the emulated window that contains this document
+  HWND mEmulatedWindowHandle;
+#endif
 
   /*
    * Conceptually this is a map from IDs to proxies, but we store the ID in the

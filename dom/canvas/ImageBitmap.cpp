@@ -723,10 +723,10 @@ ImageBitmap::TransferAsImage()
   return image.forget();
 }
 
-ImageBitmapCloneData*
-ImageBitmap::ToCloneData()
+UniquePtr<ImageBitmapCloneData>
+ImageBitmap::ToCloneData() const
 {
-  ImageBitmapCloneData* result = new ImageBitmapCloneData();
+  UniquePtr<ImageBitmapCloneData> result(new ImageBitmapCloneData());
   result->mPictureRect = mPictureRect;
   result->mIsPremultipliedAlpha = mIsPremultipliedAlpha;
   result->mIsCroppingAreaOutSideOfSourceImage = mIsCroppingAreaOutSideOfSourceImage;
@@ -734,7 +734,7 @@ ImageBitmap::ToCloneData()
   result->mSurface = surface->GetDataSurface();
   MOZ_ASSERT(result->mSurface);
 
-  return result;
+  return Move(result);
 }
 
 /* static */ already_AddRefed<ImageBitmap>
@@ -916,7 +916,7 @@ ImageBitmap::CreateInternal(nsIGlobalObject* aGlobal, HTMLCanvasElement& aCanvas
        aCanvasEl.GetCurrentContextType() == CanvasContextType::WebGL2) &&
       aCropRect.isSome()) {
     // The _surface_ must be a DataSourceSurface.
-    MOZ_ASSERT(surface->GetType() == SurfaceType::DATA,
+    MOZ_ASSERT(surface->IsDataSourceSurface(),
                "The snapshot SourceSurface from WebGL rendering contest is not \
                DataSourceSurface.");
     RefPtr<DataSourceSurface> dataSurface = surface->GetDataSurface();
@@ -999,7 +999,7 @@ ImageBitmap::CreateInternal(nsIGlobalObject* aGlobal, ImageData& aImageData,
                                                        imageSize,
                                                        aCropRect,
                                                        getter_AddRefs(data));
-    task->Dispatch(aRv);
+    task->Dispatch(Terminating, aRv);
   }
 
   if (NS_WARN_IF(!data)) {
@@ -1435,10 +1435,10 @@ private:
     RefPtr<DecodeBlobInMainThreadSyncTask> task =
       new DecodeBlobInMainThreadSyncTask(mWorkerPrivate, *mBlob, mCropRect,
                                          getter_AddRefs(data), sourceSize);
-    task->Dispatch(rv); // This is a synchronous call.
+    task->Dispatch(Terminating, rv); // This is a synchronous call.
 
+    // In case the worker is terminating, this rejection can be handled.
     if (NS_WARN_IF(rv.Failed())) {
-      // XXXbz does this really make sense if we're shutting down?  Ah, well.
       mPromise->MaybeReject(rv);
       return nullptr;
     }
@@ -2165,7 +2165,10 @@ ImageBitmap::Create(nsIGlobalObject* aGlobal,
                                                                  aFormat,
                                                                  aLayout,
                                                                  getter_AddRefs(data));
-    task->Dispatch(aRv);
+    task->Dispatch(Terminating, aRv);
+    if (aRv.Failed()) {
+      return promise.forget();
+    }
   }
 
   if (NS_WARN_IF(!data)) {

@@ -24,7 +24,7 @@ function promiseObserverNotified(aTopic) {
 // in history, will not appear in about:newtab or auto-complete, etc.)
 function promiseSocialUrlNotRemembered(url) {
   return new Promise(resolve => {
-    let uri = Services.io.newURI(url, null, null);
+    let uri = Services.io.newURI(url);
     PlacesUtils.asyncHistory.isURIVisited(uri, function(aURI, aIsVisited) {
       ok(!aIsVisited, "social URL " + url + " should not be in global history");
       resolve();
@@ -64,7 +64,7 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
   function* finishCleanUp() {
     for (let i = 0; i < manifests.length; i++) {
       let m = manifests[i];
-      for (let what of ['iconURL', 'shareURL']) {
+      for (let what of ["iconURL", "shareURL"]) {
         if (m[what]) {
           yield promiseSocialUrlNotRemembered(m[what]);
         }
@@ -211,8 +211,8 @@ function setManifestPref(name, manifest) {
 
 function getManifestPrefname(aManifest) {
   // is same as the generated name in SocialServiceInternal.getManifestPrefname
-  let originUri = Services.io.newURI(aManifest.origin, null, null);
-  return "social.manifest." + originUri.hostPort.replace('.', '-');
+  let originUri = Services.io.newURI(aManifest.origin);
+  return "social.manifest." + originUri.hostPort.replace(".", "-");
 }
 
 function ensureFrameLoaded(frame, uri) {
@@ -233,13 +233,13 @@ function ensureFrameLoaded(frame, uri) {
 
 // Support for going on and offline.
 // (via browser/base/content/test/browser_bookmark_titles.js)
-var origProxyType = Services.prefs.getIntPref('network.proxy.type');
+var origProxyType = Services.prefs.getIntPref("network.proxy.type");
 
 function toggleOfflineStatus(goOfflineState) {
   // Bug 968887 fix.  when going on/offline, wait for notification before continuing
   return new Promise(resolve => {
     if (!goOfflineState) {
-      Services.prefs.setIntPref('network.proxy.type', origProxyType);
+      Services.prefs.setIntPref("network.proxy.type", origProxyType);
     }
     if (goOfflineState != Services.io.offline) {
       info("initial offline state " + Services.io.offline);
@@ -255,7 +255,7 @@ function toggleOfflineStatus(goOfflineState) {
       resolve();
     }
     if (goOfflineState) {
-      Services.prefs.setIntPref('network.proxy.type', 0);
+      Services.prefs.setIntPref("network.proxy.type", 0);
       // LOAD_FLAGS_BYPASS_CACHE isn't good enough. So clear the cache.
       Services.cache2.clear();
     }

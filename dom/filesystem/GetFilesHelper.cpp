@@ -25,12 +25,13 @@ public:
                            Sequence<RefPtr<File>>& aFiles,
                            already_AddRefed<nsIGlobalObject> aGlobal)
   {
+    nsCOMPtr<nsIGlobalObject> global(aGlobal);
     if (NS_IsMainThread()) {
       return;
     }
 
     RefPtr<ReleaseRunnable> runnable =
-      new ReleaseRunnable(aPromises, aCallbacks, aFiles, Move(aGlobal));
+      new ReleaseRunnable(aPromises, aCallbacks, aFiles, global.forget());
     NS_DispatchToMainThread(runnable);
   }
 
@@ -271,8 +272,7 @@ GetFilesHelper::RunIO()
   MOZ_ASSERT(!mListingCompleted);
 
   nsCOMPtr<nsIFile> file;
-  mErrorResult = NS_NewNativeLocalFile(NS_ConvertUTF16toUTF8(mDirectoryPath), true,
-                                       getter_AddRefs(file));
+  mErrorResult = NS_NewLocalFile(mDirectoryPath, true, getter_AddRefs(file));
   if (NS_WARN_IF(NS_FAILED(mErrorResult))) {
     return;
   }
@@ -306,8 +306,8 @@ GetFilesHelper::RunMainThread()
   for (uint32_t i = 0; i < mTargetPathArray.Length(); ++i) {
     nsCOMPtr<nsIFile> file;
     mErrorResult =
-      NS_NewNativeLocalFile(NS_ConvertUTF16toUTF8(mTargetPathArray[i].mRealPath),
-                            true, getter_AddRefs(file));
+      NS_NewLocalFile(mTargetPathArray[i].mRealPath, true,
+                      getter_AddRefs(file));
     if (NS_WARN_IF(NS_FAILED(mErrorResult))) {
       mFiles.Clear();
       return;

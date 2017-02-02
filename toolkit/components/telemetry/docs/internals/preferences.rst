@@ -57,6 +57,10 @@ Data-choices notification
 
   This preference is not present until the first run. After, its value is set to false. This is used to show the infobar with a more aggressive timeout if it wasn't shown yet.
 
+``datareporting.policy.firstRunURL``
+
+  If set, a browser tab will be opened on first run instead of the infobar.
+
 ``datareporting.policy.dataSubmissionEnabled``
 
   This is the data submission master kill switch. If disabled, no policy is shown or upload takes place, ever.
@@ -113,3 +117,7 @@ The following prefs are for testing purpose only.
 ``toolkit.telemetry.idleTimeout``
 
   Timeout until we decide whether a user is idle or not (seconds).
+
+``toolkit.telemetry.send.overrideOfficialCheck``
+
+  If true, allows sending pings on unofficial builds. Requires a restart.

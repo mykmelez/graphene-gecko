@@ -1576,29 +1576,24 @@ struct MaskLayerUserData : public LayerUserData
 struct CSSMaskLayerUserData : public LayerUserData
 {
   CSSMaskLayerUserData()
-    : mFrame(nullptr)
+    : mMaskStyle(nsStyleImageLayers::LayerType::Mask)
   { }
 
   CSSMaskLayerUserData(nsIFrame* aFrame, const nsIntSize& aMaskSize)
-    : mFrame(aFrame),
-      mMaskSize(aMaskSize)
-  { }
-
-  CSSMaskLayerUserData& operator=(const CSSMaskLayerUserData& aOther)
+    : mMaskSize(aMaskSize),
+      mMaskStyle(aFrame->StyleSVGReset()->mMask)
   {
-    mFrame = aOther.mFrame;
-    mMaskSize = aOther.mMaskSize;
+  }
 
-    return *this;
+  void operator=(CSSMaskLayerUserData&& aOther)
+  {
+    mMaskSize = aOther.mMaskSize;
+    mMaskStyle = Move(aOther.mMaskStyle);
   }
 
   bool
   operator==(const CSSMaskLayerUserData& aOther) const
   {
-    if (mFrame != aOther.mFrame) {
-      return false;
-    }
-
     // Even if the frame is valid, check the size of the display item's
     // boundary is still necessary. For example, if we scale the masked frame
     // by adding a transform property on it, the masked frame is valid itself
@@ -1608,12 +1603,12 @@ struct CSSMaskLayerUserData : public LayerUserData
       return false;
     }
 
-    return true;
+    return mMaskStyle == aOther.mMaskStyle;
   }
 
 private:
-  nsIFrame* mFrame;
   nsIntSize mMaskSize;
+  nsStyleImageLayers mMaskStyle;
 };
 
 /*
@@ -3885,6 +3880,15 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
   bool snap;
   nsRect bounds = aMaskItem->GetBounds(mBuilder, &snap);
   nsIntRect itemRect = ScaleToOutsidePixels(bounds, snap);
+
+  // Setup mask layer offset.
+  // We do not repaint mask for mask position change, so update base transform
+  // each time is required.
+  Matrix4x4 matrix;
+  matrix.PreTranslate(itemRect.x, itemRect.y, 0);
+  matrix.PreTranslate(mParameters.mOffset.x, mParameters.mOffset.y, 0);
+  maskLayer->SetBaseTransform(matrix);
+
   CSSMaskLayerUserData newUserData(aMaskItem->Frame(), itemRect.Size());
   nsRect dirtyRect;
   if (!aMaskItem->IsInvalid(dirtyRect) && *oldUserData == newUserData) {
@@ -3897,6 +3901,7 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
                       std::min(itemRect.height, maxSize));
 
   if (surfaceSize.IsEmpty()) {
+    // Return early if we know that the size of this mask surface is empty.
     return;
   }
 
@@ -3916,13 +3921,6 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
     return;
   }
 
-  // Setup mask layer offset.
-  Matrix4x4 matrix;
-  matrix.PreTranslate(itemRect.x, itemRect.y, 0);
-  matrix.PreTranslate(mParameters.mOffset.x, mParameters.mOffset.y, 0);
-
-  maskLayer->SetBaseTransform(matrix);
-
   RefPtr<ImageContainer> imgContainer =
     imageData.CreateImageAndImageContainer();
   if (!imgContainer) {
@@ -3930,7 +3928,7 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
   }
   maskLayer->SetContainer(imgContainer);
 
-  *oldUserData = newUserData;
+  *oldUserData = Move(newUserData);
   aLayer->SetMaskLayer(maskLayer);
 }
 
@@ -4314,7 +4312,6 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
                    "If we have rounded rects, we must have a clip rect");
 
       // It has its own layer. Update that layer's clip and visible rects.
-
       ownLayer->SetClipRect(Nothing());
       ownLayer->SetScrolledClip(Nothing());
       if (layerClip.HasClip()) {
@@ -4337,9 +4334,21 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
             SetupMaskLayer(ownLayer, layerClip);
           }
         }
-      } else if (item->GetType() == nsDisplayItem::TYPE_MASK) {
+      }
+
+      if (item->GetType() == nsDisplayItem::TYPE_MASK) {
+        MOZ_ASSERT(layerClip.GetRoundedRectCount() == 0);
+
         nsDisplayMask* maskItem = static_cast<nsDisplayMask*>(item);
         SetupMaskLayerForCSSMask(ownLayer, maskItem);
+
+        nsDisplayItem* next = aList->GetBottom();
+        if (next && next->GetType() == nsDisplayItem::TYPE_SCROLL_INFO_LAYER) {
+          // Since we do build a layer for mask, there is no need for this
+          // scroll info layer anymore.
+          aList->RemoveBottom();
+          next->~nsDisplayItem();
+        }
       }
 
       // Convert the visible rect to a region and give the item
@@ -6281,6 +6290,11 @@ ContainerState::CreateMaskLayer(Layer *aLayer,
   gfx::Matrix maskTransform =
     Matrix::Scaling(surfaceSize.width / boundingRect.Width(),
                     surfaceSize.height / boundingRect.Height());
+  if (surfaceSize.IsEmpty()) {
+    // Return early if we know that the size of this mask surface is empty.
+    return nullptr;
+  }
+
   gfx::Point p = boundingRect.TopLeft();
   maskTransform.PreTranslate(-p.x, -p.y);
   // imageTransform is only used when the clip is painted to the mask

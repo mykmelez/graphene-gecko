@@ -617,6 +617,11 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
     uploadRect.height = rect.height;
   }
 
+  if (uploadRect.IsEmpty()) {
+    // Nothing to be drawn.
+    return nullptr;
+  }
+
   if (uploadRect.width <= aRT->GetMaximumBitmapSize() &&
       uploadRect.height <= aRT->GetMaximumBitmapSize()) {
     {
@@ -707,7 +712,7 @@ static inline void AddRectToSink(ID2D1GeometrySink* aSink, const D2D1_RECT_F& aR
 class DCCommandSink : public ID2D1CommandSink
 {
 public:
-  DCCommandSink(ID2D1DeviceContext* aCtx) : mCtx(aCtx)
+  explicit DCCommandSink(ID2D1DeviceContext* aCtx) : mCtx(aCtx)
   {
   }
 

@@ -194,18 +194,18 @@
  *                  Windows, these should be in UTF8. On unix-like platforms
  *                  these are in the "native" character set.
  *
- * @param aAppData  Information about the application to be run.
- *
- * @param aFlags    Platform specific flags.
+ * @param aConfig  Information about the application to be run.
  *
  * @return         A native result code suitable for returning from main().
  *
  * @note           If the binary is linked against the standalone XPCOM glue,
  *                 XPCOMGlueStartup() should be called before this method.
  */
+namespace mozilla {
+struct BootstrapConfig;
+}
 XRE_API(int,
-        XRE_main, (int argc, char* argv[], const mozilla::XREAppData& aAppData,
-                   uint32_t aFlags))
+        XRE_main, (int argc, char* argv[], const mozilla::BootstrapConfig& aConfig))
 
 /**
  * Given a path relative to the current working directory (or an absolute
@@ -515,11 +515,8 @@ XRE_API(void,
 #include "LibFuzzerRegistry.h"
 
 XRE_API(void,
-        XRE_LibFuzzerSetMain, (int, char**, LibFuzzerMain))
+        XRE_LibFuzzerSetDriver, (LibFuzzerDriver))
 
-XRE_API(void,
-        XRE_LibFuzzerGetFuncs, (const char*, LibFuzzerInitFunc*,
-                                LibFuzzerTestingFunc*))
 #endif // LIBFUZZER
 
 #endif // _nsXULAppAPI_h__

@@ -7,8 +7,13 @@ import time
 import urllib
 
 from marionette_driver import errors, By, Wait
-
-from marionette_harness import MarionetteTestCase, WindowManagerMixin
+from marionette_harness import (
+    MarionetteTestCase,
+    run_if_manage_instance,
+    skip,
+    skip_if_mobile,
+    WindowManagerMixin,
+)
 
 
 def inline(doc):
@@ -47,9 +52,11 @@ class TestNavigate(WindowManagerMixin, MarionetteTestCase):
 
     def test_navigate_chrome_error(self):
         with self.marionette.using_context("chrome"):
-            self.assertRaisesRegexp(
-                errors.MarionetteException, "Cannot navigate in chrome context",
-                                    self.marionette.navigate, "about:blank")
+            self.assertRaises(errors.UnsupportedOperationException,
+                              self.marionette.navigate, "about:blank")
+            self.assertRaises(errors.UnsupportedOperationException, self.marionette.go_back)
+            self.assertRaises(errors.UnsupportedOperationException, self.marionette.go_forward)
+            self.assertRaises(errors.UnsupportedOperationException, self.marionette.refresh)
 
     def test_get_current_url_returns_top_level_browsing_context_url(self):
         self.marionette.navigate(self.iframe_doc)
@@ -101,16 +108,19 @@ class TestNavigate(WindowManagerMixin, MarionetteTestCase):
         self.assertTrue(self.marionette.execute_script(
             "return window.document.getElementById('someDiv') == undefined"))
 
-    """ Disabled due to Bug 977899
-    def test_navigate_frame(self):
-        self.marionette.navigate(self.marionette.absolute_url("test_iframe.html"))
-        self.marionette.switch_to_frame(0)
-        self.marionette.navigate(self.marionette.absolute_url("empty.html"))
-        self.assertTrue('empty.html' in self.marionette.get_url())
-        self.marionette.switch_to_frame()
-        self.assertTrue('test_iframe.html' in self.marionette.get_url())
-    """
+    def test_navigate_in_child_frame_changes_to_top(self):
+        frame_html = self.marionette.absolute_url("frameset.html")
 
+        self.marionette.navigate(frame_html)
+        frame = self.marionette.find_element(By.NAME, "third")
+        self.marionette.switch_to_frame(frame)
+        self.assertRaises(errors.NoSuchElementException,
+                          self.marionette.find_element, By.NAME, "third")
+
+        self.marionette.navigate(frame_html)
+        self.marionette.find_element(By.NAME, "third")
+
+    @skip_if_mobile("Bug 1323755 - Socket timeout")
     def test_invalid_protocol(self):
         with self.assertRaises(errors.MarionetteException):
             self.marionette.navigate("thisprotocoldoesnotexist://")
@@ -131,7 +141,7 @@ class TestNavigate(WindowManagerMixin, MarionetteTestCase):
 
     def test_error_when_exceeding_page_load_timeout(self):
         with self.assertRaises(errors.TimeoutException):
-            self.marionette.timeout.page_load = 0
+            self.marionette.timeout.page_load = 0.1
             self.marionette.navigate(self.marionette.absolute_url("slow"))
             self.marionette.find_element(By.TAG_NAME, "p")
 
@@ -148,12 +158,18 @@ class TestNavigate(WindowManagerMixin, MarionetteTestCase):
         self.assertTrue(self.marionette.execute_script(
             "return window.visited", sandbox=None))
 
+    @skip_if_mobile("Bug 1334095 - Timeout: No new tab has been opened")
     def test_about_blank_for_new_docshell(self):
         """ Bug 1312674 - Hang when loading about:blank for a new docshell."""
-        # Open a window to get a new docshell created for the first tab
-        with self.marionette.using_context("chrome"):
-            tab = self.open_tab(lambda: self.marionette.execute_script(" window.open() "))
-            self.marionette.switch_to_window(tab)
+        def open_with_link():
+            link = self.marionette.find_element(By.ID, "new-blank-tab")
+            link.click()
+
+        # Open a new tab to get a new docshell created
+        self.marionette.navigate(self.marionette.absolute_url("windowHandles.html"))
+        new_tab = self.open_tab(trigger=open_with_link)
+        self.marionette.switch_to_window(new_tab)
+        self.assertEqual(self.marionette.get_url(), "about:blank")
 
         self.marionette.navigate('about:blank')
         self.marionette.close()
@@ -162,6 +178,30 @@ class TestNavigate(WindowManagerMixin, MarionetteTestCase):
     def test_error_on_tls_navigation(self):
         self.assertRaises(errors.InsecureCertificateException,
                           self.marionette.navigate, self.fixtures.where_is("/test.html", on="https"))
+
+    def test_html_document_to_image_document(self):
+        self.marionette.navigate(self.fixtures.where_is("test.html"))
+        self.marionette.navigate(self.fixtures.where_is("white.png"))
+        self.assertIn("white.png", self.marionette.title)
+
+    def test_image_document_to_image_document(self):
+        self.marionette.navigate(self.fixtures.where_is("test.html"))
+
+        self.marionette.navigate(self.fixtures.where_is("white.png"))
+        self.assertIn("white.png", self.marionette.title)
+        self.marionette.navigate(self.fixtures.where_is("black.png"))
+        self.assertIn("black.png", self.marionette.title)
+
+    @run_if_manage_instance("Only runnable if Marionette manages the instance")
+    @skip_if_mobile("Bug 1322993 - Missing temporary folder")
+    def test_focus_after_navigation(self):
+        self.marionette.quit()
+        self.marionette.start_session()
+
+        self.marionette.navigate(inline("<input autofocus>"))
+        active_el = self.marionette.execute_script("return document.activeElement")
+        focus_el = self.marionette.find_element(By.CSS_SELECTOR, ":focus")
+        self.assertEqual(active_el, focus_el)
 
 
 class TestTLSNavigation(MarionetteTestCase):
@@ -172,7 +212,7 @@ class TestTLSNavigation(MarionetteTestCase):
         MarionetteTestCase.setUp(self)
         self.marionette.delete_session()
         self.capabilities = self.marionette.start_session(
-            desired_capabilities=self.insecure_tls)
+            {"requiredCapabilities": self.insecure_tls})
 
     def tearDown(self):
         try:
@@ -185,7 +225,8 @@ class TestTLSNavigation(MarionetteTestCase):
     def safe_session(self):
         try:
             self.capabilities = self.marionette.start_session(
-                desired_capabilities=self.secure_tls)
+                {"requiredCapabilities": self.secure_tls})
+            self.assertFalse(self.capabilities["acceptInsecureCerts"])
             yield self.marionette
         finally:
             self.marionette.delete_session()
@@ -194,7 +235,8 @@ class TestTLSNavigation(MarionetteTestCase):
     def unsafe_session(self):
         try:
             self.capabilities = self.marionette.start_session(
-                desired_capabilities=self.insecure_tls)
+                {"requiredCapabilities": self.insecure_tls})
+            self.assertTrue(self.capabilities["acceptInsecureCerts"])
             yield self.marionette
         finally:
             self.marionette.delete_session()

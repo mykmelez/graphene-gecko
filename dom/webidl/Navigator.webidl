@@ -192,7 +192,7 @@ partial interface Navigator {
   readonly attribute MozPowerManager mozPower;
 
   // WebKit/Blink/Trident/Presto support this.
-  [Throws]
+  [Throws, NeedsCallerType]
   boolean javaEnabled();
 
   /**
@@ -272,7 +272,6 @@ partial interface Navigator {
   readonly attribute NetworkInformation connection;
 };
 
-#ifdef MOZ_GAMEPAD
 // https://dvcs.w3.org/hg/gamepad/raw-file/default/gamepad.html#navigator-interface-extension
 partial interface Navigator {
   [Throws, Pref="dom.gamepad.enabled"]
@@ -282,7 +281,6 @@ partial interface Navigator {
   [Pref="dom.gamepad.test.enabled"]
   GamepadServiceTest requestGamepadServiceTest();
 };
-#endif // MOZ_GAMEPAD
 
 partial interface Navigator {
   [Throws, Pref="dom.vr.enabled"]
@@ -351,7 +349,7 @@ partial interface Navigator {
 partial interface Navigator {
   [Throws, Pref="beacon.enabled"]
   boolean sendBeacon(DOMString url,
-                     optional (ArrayBufferView or Blob or DOMString or FormData)? data = null);
+                     optional BodyInit? data = null);
 };
 
 partial interface Navigator {
@@ -381,4 +379,9 @@ partial interface Navigator {
 [NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorConcurrentHardware {
   readonly attribute unsigned long long hardwareConcurrency;
+};
+
+partial interface Navigator {
+  [Pref="security.webauth.webauthn", SameObject]
+  readonly attribute WebAuthentication authentication;
 };

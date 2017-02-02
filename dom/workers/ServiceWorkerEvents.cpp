@@ -874,6 +874,10 @@ public:
   {
     AssertIsOnMainThread();
     RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+    if (!swm) {
+      // browser shutdown
+      return;
+    }
 
     // TODO: Make the error message a localized string. (bug 1222720)
     nsString message;
@@ -915,7 +919,9 @@ ExtendableEvent::ExtendableEvent(EventTarget* aOwner)
 bool
 ExtendableEvent::WaitOnPromise(Promise& aPromise)
 {
-  MOZ_ASSERT(mExtensionsHandler);
+  if (!mExtensionsHandler) {
+    return false;
+  }
   return mExtensionsHandler->WaitOnPromise(aPromise);
 }
 

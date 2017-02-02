@@ -55,21 +55,12 @@ const EVENTS = {
   // When the request post params are displayed in the UI.
   REQUEST_POST_PARAMS_DISPLAYED: "NetMonitor:RequestPostParamsAvailable",
 
-  // When the response body is displayed in the UI.
-  RESPONSE_BODY_DISPLAYED: "NetMonitor:ResponseBodyAvailable",
-
   // When the image response thumbnail is displayed in the UI.
   RESPONSE_IMAGE_THUMBNAIL_DISPLAYED:
     "NetMonitor:ResponseImageThumbnailAvailable",
 
-  // When a tab is selected in the NetworkDetailsView and subsequently rendered.
-  TAB_UPDATED: "NetMonitor:TabUpdated",
-
   // Fired when Sidebar has finished being populated.
   SIDEBAR_POPULATED: "NetMonitor:SidebarPopulated",
-
-  // Fired when NetworkDetailsView has finished being populated.
-  NETWORKDETAILSVIEW_POPULATED: "NetMonitor:NetworkDetailsViewPopulated",
 
   // Fired when CustomRequestView has finished being populated.
   CUSTOMREQUESTVIEW_POPULATED: "NetMonitor:CustomRequestViewPopulated",

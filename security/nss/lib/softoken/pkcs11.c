@@ -480,6 +480,10 @@ static const struct mechanismList mechanisms[] = {
     { CKM_NETSCAPE_PBE_SHA1_HMAC_KEY_GEN, { 20, 20, CKF_GENERATE }, PR_TRUE },
     { CKM_NETSCAPE_PBE_MD5_HMAC_KEY_GEN, { 16, 16, CKF_GENERATE }, PR_TRUE },
     { CKM_NETSCAPE_PBE_MD2_HMAC_KEY_GEN, { 16, 16, CKF_GENERATE }, PR_TRUE },
+    { CKM_NSS_PKCS12_PBE_SHA224_HMAC_KEY_GEN, { 28, 28, CKF_GENERATE }, PR_TRUE },
+    { CKM_NSS_PKCS12_PBE_SHA256_HMAC_KEY_GEN, { 32, 32, CKF_GENERATE }, PR_TRUE },
+    { CKM_NSS_PKCS12_PBE_SHA384_HMAC_KEY_GEN, { 48, 48, CKF_GENERATE }, PR_TRUE },
+    { CKM_NSS_PKCS12_PBE_SHA512_HMAC_KEY_GEN, { 64, 64, CKF_GENERATE }, PR_TRUE },
     /* ------------------ AES Key Wrap (also encrypt)  ------------------- */
     { CKM_NETSCAPE_AES_KEY_WRAP, { 16, 32, CKF_EN_DE_WR_UN }, PR_TRUE },
     { CKM_NETSCAPE_AES_KEY_WRAP_PAD, { 16, 32, CKF_EN_DE_WR_UN }, PR_TRUE },
@@ -3145,9 +3149,11 @@ nsc_CommonFinalize(CK_VOID_PTR pReserved, PRBool isFIPS)
      * this call doesn't force freebl to be reloaded. */
     BL_SetForkState(PR_FALSE);
 
+#ifndef NSS_TEST_BUILD
     /* unload freeBL shared library from memory. This may only decrement the
      * OS refcount if it's been loaded multiple times, eg. by libssl */
     BL_Unload();
+#endif
 
     /* clean up the default OID table */
     SECOID_Shutdown();

@@ -34,7 +34,7 @@ var sharedPrefs = SharedPreferences.forApp();
 var healthReportWrapper = {
   init: function () {
     let iframe = document.getElementById("remote-report");
-    iframe.addEventListener("load", healthReportWrapper.initRemotePage, false);
+    iframe.addEventListener("load", healthReportWrapper.initRemotePage);
     let report = this._getReportURI();
     iframe.src = report.spec;
     console.log("AboutHealthReport: loading content from " + report.spec);
@@ -59,7 +59,7 @@ var healthReportWrapper = {
   _getReportURI: function () {
     let url = Services.urlFormatter.formatURLPref(PREF_REPORTURL);
     // This handles URLs that already have query parameters.
-    let uri = Services.io.newURI(url, null, null).QueryInterface(Ci.nsIURL);
+    let uri = Services.io.newURI(url).QueryInterface(Ci.nsIURL);
     uri.query += ((uri.query != "") ? "&v=" : "v=") + WRAPPER_VERSION;
     return uri;
   },
@@ -165,8 +165,7 @@ var healthReportWrapper = {
   initRemotePage: function () {
     let iframe = document.getElementById("remote-report").contentDocument;
     iframe.addEventListener("RemoteHealthReportCommand",
-                            function onCommand(e) {healthReportWrapper.handleRemoteCommand(e);},
-                            false);
+                            function onCommand(e) {healthReportWrapper.handleRemoteCommand(e);});
     healthReportWrapper.injectData("begin", null);
   },
 
@@ -191,5 +190,5 @@ var healthReportWrapper = {
   },
 };
 
-window.addEventListener("load", healthReportWrapper.init.bind(healthReportWrapper), false);
-window.addEventListener("unload", healthReportWrapper.uninit.bind(healthReportWrapper), false);
+window.addEventListener("load", healthReportWrapper.init.bind(healthReportWrapper));
+window.addEventListener("unload", healthReportWrapper.uninit.bind(healthReportWrapper));

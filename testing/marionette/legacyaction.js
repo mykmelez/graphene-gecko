@@ -13,11 +13,11 @@ Cu.import("chrome://marionette/content/event.js");
 const CONTEXT_MENU_DELAY_PREF = "ui.click_hold_context_menus.delay";
 const DEFAULT_CONTEXT_MENU_DELAY = 750;  // ms
 
-this.EXPORTED_SYMBOLS = ["action"];
+this.EXPORTED_SYMBOLS = ["legacyaction"];
 
 const logger = Log.repository.getLogger("Marionette");
 
-this.action = {};
+this.legacyaction = this.action = {};
 
 /**
  * Functionality for (single finger) action chains.
@@ -318,7 +318,7 @@ action.Chain.prototype.actions = function (chain, touchId, i, keyModifiers, cb) 
  * form [clientX, clientY, pageX, pageY, screenX, screenY].
  */
 action.Chain.prototype.getCoordinateInfo = function (el, corx, cory) {
-  let win = el.ownerDocument.defaultView;
+  let win = el.ownerGlobal;
   return [
     corx, // clientX
     cory, // clientY
@@ -449,7 +449,7 @@ action.Chain.prototype.generateEvents = function (
           "contextmenu",
           true,
           true,
-          target.ownerDocument.defaultView,
+          target.ownerGlobal,
           1,
           screenX,
           screenY,

@@ -42,7 +42,7 @@ function init_category_if_required(category) {
 function register_module(categoryName, categoryObject) {
   gCategoryInits.set(categoryName, {
     inited: false,
-    init: function() {
+    init() {
       categoryObject.init();
       this.inited = true;
     }
@@ -86,8 +86,8 @@ function init_all() {
   init_dynamic_padding();
 
   var initFinished = new CustomEvent("Initialized", {
-    'bubbles': true,
-    'cancelable': true
+    "bubbles": true,
+    "cancelable": true
   });
   document.dispatchEvent(initFinished);
 
@@ -108,7 +108,7 @@ function init_all() {
 function init_dynamic_padding() {
   let categories = document.getElementById("categories");
   let catPadding = Number.parseInt(getComputedStyle(categories)
-                                     .getPropertyValue('padding-top'));
+                                     .getPropertyValue("padding-top"));
   let fullHeight = categories.lastElementChild.getBoundingClientRect().bottom;
   let mediaRule = `
   @media (max-height: ${fullHeight}px) {
@@ -117,10 +117,40 @@ function init_dynamic_padding() {
     }
   }
   `;
-  let mediaStyle = document.createElementNS('http://www.w3.org/1999/xhtml', 'html:style');
-  mediaStyle.setAttribute('type', 'text/css');
+  let mediaStyle = document.createElementNS("http://www.w3.org/1999/xhtml", "html:style");
+  mediaStyle.setAttribute("type", "text/css");
   mediaStyle.appendChild(document.createCDATASection(mediaRule));
   document.documentElement.appendChild(mediaStyle);
+}
+
+function telemetryBucketForCategory(category) {
+  switch (category) {
+    case "general":
+    case "search":
+    case "content":
+    case "applications":
+    case "privacy":
+    case "security":
+    case "sync":
+      return category;
+    case "advanced":
+      let advancedPaneTabs = document.getElementById("advancedPrefs");
+      switch (advancedPaneTabs.selectedTab.id) {
+        case "generalTab":
+          return "advancedGeneral";
+        case "dataChoicesTab":
+          return "advancedDataChoices";
+        case "networkTab":
+          return "advancedNetwork";
+        case "updateTab":
+          return "advancedUpdates";
+        case "encryptionTab":
+          return "advancedCerts";
+      }
+      // fall-through for unknown.
+    default:
+      return "unknown";
+  }
 }
 
 function onHashChange() {
@@ -151,9 +181,9 @@ function gotoPref(aCategory) {
     throw ex;
   }
 
-  let newHash = internalPrefCategoryNameToFriendlyName(category);
+  let friendlyName = internalPrefCategoryNameToFriendlyName(category);
   if (gLastHash || category != kDefaultCategoryInternalName) {
-    document.location.hash = newHash;
+    document.location.hash = friendlyName;
   }
   // Need to set the gLastHash before setting categories.selectedItem since
   // the categories 'select' event will re-enter the gotoPref codepath.
@@ -163,13 +193,27 @@ function gotoPref(aCategory) {
   search(category, "data-category");
   let mainContent = document.querySelector(".main-content");
   mainContent.scrollTop = 0;
+
+  Services.telemetry
+          .getHistogramById("FX_PREFERENCES_CATEGORY_OPENED")
+          .add(telemetryBucketForCategory(friendlyName));
 }
 
 function search(aQuery, aAttribute) {
-  let elements = document.getElementById("mainPrefPane").children;
+  let mainPrefPane = document.getElementById("mainPrefPane");
+  let elements = mainPrefPane.children;
   for (let element of elements) {
     let attributeValue = element.getAttribute(aAttribute);
     element.hidden = (attributeValue != aQuery);
+  }
+
+  let keysets = mainPrefPane.getElementsByTagName("keyset");
+  for (let element of keysets) {
+    let attributeValue = element.getAttribute(aAttribute);
+    if (attributeValue == aQuery)
+      element.removeAttribute("disabled");
+    else
+      element.setAttribute("disabled", true);
   }
 }
 

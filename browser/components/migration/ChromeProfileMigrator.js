@@ -64,8 +64,7 @@ function getDataFolder(subfoldersWin, subfoldersOSX, subfoldersUnix) {
  * @note    Google Chrome uses FILETIME / 10 as time.
  *          FILETIME is based on same structure of Windows.
  */
-function chromeTimeToDate(aTime)
-{
+function chromeTimeToDate(aTime) {
   return new Date((aTime * S100NS_PER_MS - S100NS_FROM1601TO1970) / 10000);
 }
 
@@ -221,8 +220,7 @@ Object.defineProperty(ChromeProfileMigrator.prototype, "sourceHomePageURL", {
           NetUtil.readInputStreamToString(fstream, fstream.available(),
                                           { charset: "UTF-8" })
             ).homepage;
-      }
-      catch (e) {
+      } catch (e) {
         Cu.reportError("Error parsing Chrome's preferences file: " + e);
       }
     }
@@ -246,7 +244,7 @@ function GetBookmarksResource(aProfileFolder) {
   return {
     type: MigrationUtils.resourceTypes.BOOKMARKS,
 
-    migrate: function(aCallback) {
+    migrate(aCallback) {
       return Task.spawn(function* () {
         let gotErrors = false;
         let errorGatherer = function() { gotErrors = true };
@@ -295,8 +293,8 @@ function GetBookmarksResource(aProfileFolder) {
         if (gotErrors) {
           throw new Error("The migration included errors.");
         }
-      }.bind(this)).then(() => aCallback(true),
-                         () => aCallback(false));
+      }).then(() => aCallback(true),
+              () => aCallback(false));
     }
   };
 }
@@ -341,12 +339,12 @@ function GetHistoryResource(aProfileFolder) {
           yield new Promise((resolve, reject) => {
             MigrationUtils.insertVisitsWrapper(places, {
               _success: false,
-              handleResult: function() {
+              handleResult() {
                 // Importing any entry is considered a successful import.
                 this._success = true;
               },
-              handleError: function() {},
-              handleCompletion: function() {
+              handleError() {},
+              handleCompletion() {
                 if (this._success) {
                   resolve();
                 } else {
@@ -442,24 +440,35 @@ function GetWindowsPasswordsResource(aProfileFolder) {
       let crypto = new OSCrypto();
 
       for (let row of rows) {
-        let loginInfo = {
-          username: row.getResultByName("username_value"),
-          password: crypto.
-                    decryptData(crypto.arrayToString(row.getResultByName("password_value")),
-                                                     null),
-          hostname: NetUtil.newURI(row.getResultByName("origin_url")).prePath,
-          submitURL: null,
-          httpRealm: null,
-          usernameElement: row.getResultByName("username_element"),
-          passwordElement: row.getResultByName("password_element"),
-          timeCreated: chromeTimeToDate(row.getResultByName("date_created") + 0).getTime(),
-          timesUsed: row.getResultByName("times_used") + 0,
-        };
-
         try {
+          let origin_url = NetUtil.newURI(row.getResultByName("origin_url"));
+          // Ignore entries for non-http(s)/ftp URLs because we likely can't
+          // use them anyway.
+          const kValidSchemes = new Set(["https", "http", "ftp"]);
+          if (!kValidSchemes.has(origin_url.scheme)) {
+            continue;
+          }
+          let loginInfo = {
+            username: row.getResultByName("username_value"),
+            password: crypto.
+                      decryptData(crypto.arrayToString(row.getResultByName("password_value")),
+                                                       null),
+            hostname: origin_url.prePath,
+            formSubmitURL: null,
+            httpRealm: null,
+            usernameElement: row.getResultByName("username_element"),
+            passwordElement: row.getResultByName("password_element"),
+            timeCreated: chromeTimeToDate(row.getResultByName("date_created") + 0).getTime(),
+            timesUsed: row.getResultByName("times_used") + 0,
+          };
+
           switch (row.getResultByName("scheme")) {
             case AUTH_TYPE.SCHEME_HTML:
-              loginInfo.submitURL = NetUtil.newURI(row.getResultByName("action_url")).prePath;
+              let action_url = NetUtil.newURI(row.getResultByName("action_url"));
+              if (!kValidSchemes.has(action_url.scheme)) {
+                continue; // This continues the outer for loop.
+              }
+              loginInfo.formSubmitURL = action_url.prePath;
               break;
             case AUTH_TYPE.SCHEME_BASIC:
             case AUTH_TYPE.SCHEME_DIGEST:

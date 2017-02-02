@@ -28,6 +28,11 @@
     _(AtomicsXor)                   \
     _(AtomicsIsLockFree)            \
                                     \
+    _(IntlIsCollator)               \
+    _(IntlIsDateTimeFormat)         \
+    _(IntlIsNumberFormat)           \
+    _(IntlIsPluralRules)            \
+                                    \
     _(MathAbs)                      \
     _(MathFloor)                    \
     _(MathCeil)                     \
@@ -121,7 +126,6 @@
     _(IntrinsicIsMapIterator)       \
     _(IntrinsicIsSetIterator)       \
     _(IntrinsicIsStringIterator)    \
-    _(IntrinsicIsListIterator)      \
                                     \
     _(IntrinsicGetNextMapEntryForIterator) \
                                     \

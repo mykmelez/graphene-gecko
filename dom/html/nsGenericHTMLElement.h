@@ -1074,7 +1074,7 @@ protected:
   /**
    * Get the frame's offset information for offsetTop/Left/Width/Height.
    * Returns the parent the offset is relative to.
-   * @note This method flushes pending notifications (Flush_Layout).
+   * @note This method flushes pending notifications (FlushType::Layout).
    * @param aRect the offset information [OUT]
    */
   mozilla::dom::Element* GetOffsetRect(mozilla::CSSIntRect& aRect);
@@ -1658,6 +1658,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(Mod)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Data)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(DataList)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Details)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Dialog)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Div)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(FieldSet)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Font)

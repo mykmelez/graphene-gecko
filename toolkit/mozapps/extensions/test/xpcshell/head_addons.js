@@ -69,10 +69,7 @@ const {
   getFileForAddon,
   manuallyInstall,
   manuallyUninstall,
-  promiseAddonByID,
   promiseAddonEvent,
-  promiseAddonsByIDs,
-  promiseAddonsWithOperationsByTypes,
   promiseCompleteAllInstalls,
   promiseCompleteInstall,
   promiseConsoleOutput,
@@ -147,6 +144,10 @@ Object.defineProperty(this, "TEST_UNPACKED", {
 var AMscope = Components.utils.import("resource://gre/modules/AddonManager.jsm", {});
 var { AddonManager, AddonManagerInternal, AddonManagerPrivate } = AMscope;
 
+const promiseAddonByID = AddonManager.getAddonByID;
+const promiseAddonsByIDs = AddonManager.getAddonsByIDs;
+const promiseAddonsWithOperationsByTypes = AddonManager.getAddonsWithOperationsByTypes;
+
 var gPort = null;
 var gUrlToFileMap = {};
 
@@ -166,11 +167,9 @@ function isManifestRegistered(file) {
     // We want the location of the XPI or directory itself.
     if (manifest instanceof AM_Ci.nsIJARURI) {
       manifest = manifest.JARFile.QueryInterface(AM_Ci.nsIFileURL).file;
-    }
-    else if (manifest instanceof AM_Ci.nsIFileURL) {
+    } else if (manifest instanceof AM_Ci.nsIFileURL) {
       manifest = manifest.file.parent;
-    }
-    else {
+    } else {
       continue;
     }
 
@@ -288,8 +287,7 @@ this.BootstrapMonitor = {
       for (let resolve of this.installPromises)
         resolve();
       this.installPromises = [];
-    }
-    else {
+    } else {
       this.checkMatches(this.installed.get(id), info);
     }
 
@@ -309,8 +307,7 @@ this.BootstrapMonitor = {
       // consistent.
       if (info.reason == 2 /* APP_SHUTDOWN */)
         Components.manager.removeBootstrappedManifestLocation(installPath);
-    }
-    else {
+    } else {
       this.checkAddonNotStarted(id);
     }
 
@@ -321,8 +318,7 @@ this.BootstrapMonitor = {
 
       this.installed.delete(id);
       this.uninstalled.set(id, info)
-    }
-    else if (info.event == "startup") {
+    } else if (info.event == "startup") {
       this.started.set(id, info);
 
       // Chrome should be registered at this point
@@ -342,8 +338,7 @@ function isNightlyChannel() {
   var channel = "default";
   try {
     channel = Services.prefs.getCharPref("app.update.channel");
-  }
-  catch (e) { }
+  } catch (e) { }
 
   return channel != "aurora" && channel != "beta" && channel != "release" && channel != "esr";
 }
@@ -497,8 +492,7 @@ function do_check_addon(aActualAddon, aExpectedAddon, aProperties) {
       }
 
       return;
-    }
-    else if (expectedValue && !actualValue) {
+    } else if (expectedValue && !actualValue) {
       do_throw("Missing property for add-on " + aExpectedAddon.id +
         ": expected addon[" + aProperty + "] = " + expectedValue);
       return;
@@ -806,7 +800,7 @@ function getExpectedInstall(aAddon) {
 }
 
 const AddonListener = {
-  onPropertyChanged: function(aAddon, aProperties) {
+  onPropertyChanged(aAddon, aProperties) {
     do_print(`Got onPropertyChanged event for ${aAddon.id}`);
     let [event, properties] = getExpectedEvent(aAddon.id);
     do_check_eq("onPropertyChanged", event);
@@ -820,7 +814,7 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onEnabling: function(aAddon, aRequiresRestart) {
+  onEnabling(aAddon, aRequiresRestart) {
     do_print(`Got onEnabling event for ${aAddon.id}`);
     let [event, expectedRestart] = getExpectedEvent(aAddon.id);
     do_check_eq("onEnabling", event);
@@ -831,7 +825,7 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onEnabled: function(aAddon) {
+  onEnabled(aAddon) {
     do_print(`Got onEnabled event for ${aAddon.id}`);
     let [event] = getExpectedEvent(aAddon.id);
     do_check_eq("onEnabled", event);
@@ -839,7 +833,7 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onDisabling: function(aAddon, aRequiresRestart) {
+  onDisabling(aAddon, aRequiresRestart) {
     do_print(`Got onDisabling event for ${aAddon.id}`);
     let [event, expectedRestart] = getExpectedEvent(aAddon.id);
     do_check_eq("onDisabling", event);
@@ -850,7 +844,7 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onDisabled: function(aAddon) {
+  onDisabled(aAddon) {
     do_print(`Got onDisabled event for ${aAddon.id}`);
     let [event] = getExpectedEvent(aAddon.id);
     do_check_eq("onDisabled", event);
@@ -858,7 +852,7 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onInstalling: function(aAddon, aRequiresRestart) {
+  onInstalling(aAddon, aRequiresRestart) {
     do_print(`Got onInstalling event for ${aAddon.id}`);
     let [event, expectedRestart] = getExpectedEvent(aAddon.id);
     do_check_eq("onInstalling", event);
@@ -868,14 +862,14 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onInstalled: function(aAddon) {
+  onInstalled(aAddon) {
     do_print(`Got onInstalled event for ${aAddon.id}`);
     let [event] = getExpectedEvent(aAddon.id);
     do_check_eq("onInstalled", event);
     return check_test_completed(arguments);
   },
 
-  onUninstalling: function(aAddon, aRequiresRestart) {
+  onUninstalling(aAddon, aRequiresRestart) {
     do_print(`Got onUninstalling event for ${aAddon.id}`);
     let [event, expectedRestart] = getExpectedEvent(aAddon.id);
     do_check_eq("onUninstalling", event);
@@ -885,14 +879,14 @@ const AddonListener = {
     return check_test_completed(arguments);
   },
 
-  onUninstalled: function(aAddon) {
+  onUninstalled(aAddon) {
     do_print(`Got onUninstalled event for ${aAddon.id}`);
     let [event] = getExpectedEvent(aAddon.id);
     do_check_eq("onUninstalled", event);
     return check_test_completed(arguments);
   },
 
-  onOperationCancelled: function(aAddon) {
+  onOperationCancelled(aAddon) {
     do_print(`Got onOperationCancelled event for ${aAddon.id}`);
     let [event] = getExpectedEvent(aAddon.id);
     do_check_eq("onOperationCancelled", event);
@@ -901,7 +895,7 @@ const AddonListener = {
 };
 
 const InstallListener = {
-  onNewInstall: function(install) {
+  onNewInstall(install) {
     if (install.state != AddonManager.STATE_DOWNLOADED &&
         install.state != AddonManager.STATE_DOWNLOAD_FAILED &&
         install.state != AddonManager.STATE_AVAILABLE)
@@ -914,54 +908,54 @@ const InstallListener = {
     return check_test_completed(arguments);
   },
 
-  onDownloadStarted: function(install) {
+  onDownloadStarted(install) {
     do_check_eq(install.state, AddonManager.STATE_DOWNLOADING);
     do_check_eq(install.error, 0);
     do_check_eq("onDownloadStarted", getExpectedInstall());
     return check_test_completed(arguments);
   },
 
-  onDownloadEnded: function(install) {
+  onDownloadEnded(install) {
     do_check_eq(install.state, AddonManager.STATE_DOWNLOADED);
     do_check_eq(install.error, 0);
     do_check_eq("onDownloadEnded", getExpectedInstall());
     return check_test_completed(arguments);
   },
 
-  onDownloadFailed: function(install) {
+  onDownloadFailed(install) {
     do_check_eq(install.state, AddonManager.STATE_DOWNLOAD_FAILED);
     do_check_eq("onDownloadFailed", getExpectedInstall());
     return check_test_completed(arguments);
   },
 
-  onDownloadCancelled: function(install) {
+  onDownloadCancelled(install) {
     do_check_eq(install.state, AddonManager.STATE_CANCELLED);
     do_check_eq(install.error, 0);
     do_check_eq("onDownloadCancelled", getExpectedInstall());
     return check_test_completed(arguments);
   },
 
-  onInstallStarted: function(install) {
+  onInstallStarted(install) {
     do_check_eq(install.state, AddonManager.STATE_INSTALLING);
     do_check_eq(install.error, 0);
     do_check_eq("onInstallStarted", getExpectedInstall(install.addon));
     return check_test_completed(arguments);
   },
 
-  onInstallEnded: function(install, newAddon) {
+  onInstallEnded(install, newAddon) {
     do_check_eq(install.state, AddonManager.STATE_INSTALLED);
     do_check_eq(install.error, 0);
     do_check_eq("onInstallEnded", getExpectedInstall(install.addon));
     return check_test_completed(arguments);
   },
 
-  onInstallFailed: function(install) {
+  onInstallFailed(install) {
     do_check_eq(install.state, AddonManager.STATE_INSTALL_FAILED);
     do_check_eq("onInstallFailed", getExpectedInstall(install.addon));
     return check_test_completed(arguments);
   },
 
-  onInstallCancelled: function(install) {
+  onInstallCancelled(install) {
     // If the install was cancelled by a listener returning false from
     // onInstallStarted, then the state will revert to STATE_DOWNLOADED.
     let possibleStates = [AddonManager.STATE_CANCELLED,
@@ -972,7 +966,7 @@ const InstallListener = {
     return check_test_completed(arguments);
   },
 
-  onExternalInstall: function(aAddon, existingAddon, aRequiresRestart) {
+  onExternalInstall(aAddon, existingAddon, aRequiresRestart) {
     do_check_eq("onExternalInstall", getExpectedInstall(aAddon));
     do_check_false(aRequiresRestart);
     return check_test_completed(arguments);
@@ -1199,8 +1193,7 @@ function do_exception_wrap(func) {
   return function() {
     try {
       func.apply(null, arguments);
-    }
-    catch (e) {
+    } catch (e) {
       do_report_unexpected_exception(e);
     }
   };
@@ -1291,8 +1284,7 @@ function* serveSystemUpdate(xml, perform_update, testserver) {
 
   try {
     yield perform_update();
-  }
-  finally {
+  } finally {
     testserver.registerPathHandler("/data/update.xml", null);
   }
 }

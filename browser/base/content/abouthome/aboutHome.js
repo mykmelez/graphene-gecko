@@ -104,8 +104,7 @@ var gSnippetsMapCallbacks = [];
  * @note Snippets should never directly manage the underlying storage, since
  *       it may change inadvertently.
  */
-function ensureSnippetsMapThen(aCallback)
-{
+function ensureSnippetsMapThen(aCallback) {
   if (gSnippetsMap) {
     aCallback(gSnippetsMap);
     return;
@@ -186,18 +185,18 @@ function ensureSnippetsMapThen(aCallback)
       // The cache has been filled up, create the snippets map.
       gSnippetsMap = Object.freeze({
         get: (aKey) => cache.get(aKey),
-        set: function(aKey, aValue) {
+        set(aKey, aValue) {
           db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
             .objectStore(SNIPPETS_OBJECTSTORE_NAME).put(aValue, aKey);
           return cache.set(aKey, aValue);
         },
         has: (aKey) => cache.has(aKey),
-        delete: function(aKey) {
+        delete(aKey) {
           db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
             .objectStore(SNIPPETS_OBJECTSTORE_NAME).delete(aKey);
           return cache.delete(aKey);
         },
-        clear: function() {
+        clear() {
           db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
             .objectStore(SNIPPETS_OBJECTSTORE_NAME).clear();
           return cache.clear();
@@ -210,16 +209,14 @@ function ensureSnippetsMapThen(aCallback)
   }
 }
 
-function onSearchSubmit(aEvent)
-{
+function onSearchSubmit(aEvent) {
   gContentSearchController.search(aEvent);
 }
 
 
 var gContentSearchController;
 
-function setupSearch()
-{
+function setupSearch() {
   // Set submit button label for when CSS background are disabled (e.g.
   // high contrast mode).
   document.getElementById("searchSubmit").value =
@@ -229,10 +226,9 @@ function setupSearch()
   // immediately when the element is first drawn, so the
   // attribute is also used for styling when the page first loads.
   searchText = document.getElementById("searchText");
-  searchText.addEventListener("blur", function searchText_onBlur() {
-    searchText.removeEventListener("blur", searchText_onBlur);
+  searchText.addEventListener("blur", function() {
     searchText.removeAttribute("autofocus");
-  });
+  }, {once: true});
 
   if (!gContentSearchController) {
     gContentSearchController =
@@ -244,8 +240,7 @@ function setupSearch()
 /**
  * Inform the test harness that we're done loading the page.
  */
-function loadCompleted()
-{
+function loadCompleted() {
   var event = new CustomEvent("AboutHomeLoadSnippetsCompleted", {bubbles:true});
   document.dispatchEvent(event);
 }
@@ -254,8 +249,7 @@ function loadCompleted()
  * Update the local snippets from the remote storage, then show them through
  * showSnippets.
  */
-function loadSnippets()
-{
+function loadSnippets() {
   if (!gSnippetsMap)
     throw new Error("Snippets map has not properly been initialized");
 
@@ -297,7 +291,6 @@ function loadSnippets()
     } catch (ex) {
       showSnippets();
       loadCompleted();
-      return;
     }
   } else {
     showSnippets();
@@ -312,8 +305,7 @@ function loadSnippets()
  *        a "too much recursion" exception.
  */
 var _snippetsShown = false;
-function showSnippets()
-{
+function showSnippets() {
   let snippetsElt = document.getElementById("snippets");
 
   // Show about:rights notification, if needed.
@@ -363,8 +355,7 @@ function showSnippets()
 /**
  * Clear snippets element contents and show default snippets.
  */
-function showDefaultSnippets()
-{
+function showDefaultSnippets() {
   // Clear eventual contents...
   let snippetsElt = document.getElementById("snippets");
   snippetsElt.innerHTML = "";

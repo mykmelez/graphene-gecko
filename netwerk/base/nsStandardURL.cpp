@@ -140,8 +140,6 @@ static NS_DEFINE_CID(kStandardURLCID, NS_STANDARDURL_CID);
 
 nsIIDNService *nsStandardURL::gIDN = nullptr;
 bool nsStandardURL::gInitialized = false;
-bool nsStandardURL::gEscapeUTF8 = true;
-bool nsStandardURL::gAlwaysEncodeInUTF8 = true;
 char nsStandardURL::gHostLimitDigits[] = { '/', '\\', '?', '#', 0 };
 
 //----------------------------------------------------------------------------
@@ -155,57 +153,9 @@ char nsStandardURL::gHostLimitDigits[] = { '/', '\\', '?', '#', 0 };
   PR_END_MACRO
 
 //----------------------------------------------------------------------------
-
-static nsresult
-EncodeString(nsIUnicodeEncoder *encoder, const nsAFlatString &str, nsACString &result)
-{
-    nsresult rv;
-    int32_t len = str.Length();
-    int32_t maxlen;
-
-    rv = encoder->GetMaxLength(str.get(), len, &maxlen);
-    if (NS_FAILED(rv))
-        return rv;
-
-    char buf[256], *p = buf;
-    if (uint32_t(maxlen) > sizeof(buf) - 1) {
-        p = (char *) malloc(maxlen + 1);
-        if (!p)
-            return NS_ERROR_OUT_OF_MEMORY;
-    }
-
-    rv = encoder->Convert(str.get(), &len, p, &maxlen);
-    if (NS_FAILED(rv))
-        goto end;
-    if (rv == NS_ERROR_UENC_NOMAPPING) {
-        NS_WARNING("unicode conversion failed");
-        rv = NS_ERROR_UNEXPECTED;
-        goto end;
-    }
-    p[maxlen] = 0;
-    result.Assign(p);
-
-    len = sizeof(buf) - 1;
-    rv = encoder->Finish(buf, &len);
-    if (NS_FAILED(rv))
-        goto end;
-    buf[len] = 0;
-    result.Append(buf);
-
-end:
-    encoder->Reset();
-
-    if (p != buf)
-        free(p);
-    return rv;
-}
-
-//----------------------------------------------------------------------------
 // nsStandardURL::nsPrefObserver
 //----------------------------------------------------------------------------
 
-#define NS_NET_PREF_ESCAPEUTF8         "network.standard-url.escape-utf8"
-#define NS_NET_PREF_ALWAYSENCODEINUTF8 "network.standard-url.encode-utf8"
 #define NS_NET_PREF_ENABLE_RUST        "network.standard-url.enable-rust"
 
 NS_IMPL_ISUPPORTS(nsStandardURL::nsPrefObserver, nsIObserver)
@@ -262,7 +212,7 @@ nsSegmentEncoder::EncodeSegmentCount(const char *str,
             // we have to encode this segment
             if (mEncoder || InitUnicodeEncoder()) {
                 NS_ConvertUTF8toUTF16 ucsBuf(Substring(str + pos, str + pos + len));
-                if (NS_SUCCEEDED(EncodeString(mEncoder, ucsBuf, encBuf))) {
+                if (mEncoder->Encode(ucsBuf, encBuf)) {
                     str = encBuf.get();
                     pos = 0;
                     len = encBuf.Length();
@@ -271,13 +221,10 @@ nsSegmentEncoder::EncodeSegmentCount(const char *str,
             }
         }
 
-        // escape per RFC2396 unless UTF-8 and allowed by preferences
-        int16_t escapeFlags = (gEscapeUTF8 || mEncoder) ? 0 : esc_OnlyASCII;
-
         uint32_t initLen = result.Length();
 
         // now perform any required escaping
-        if (NS_EscapeURL(str + pos, len, mask | escapeFlags, result)) {
+        if (NS_EscapeURL(str + pos, len, mask, result)) {
             len = result.Length() - initLen;
             appended = true;
         }
@@ -311,14 +258,14 @@ nsSegmentEncoder::InitUnicodeEncoder()
     // "replacement" won't survive another label resolution
     nsDependentCString label(mCharset);
     if (label.EqualsLiteral("replacement")) {
-      mEncoder = EncodingUtils::EncoderForEncoding(label);
-      return true;
+      // Returning false here causes the caller to use UTF-8.
+      return false;
     }
     nsAutoCString encoding;
     if (!EncodingUtils::FindEncodingForLabelNoReplacement(label, encoding)) {
       return false;
     }
-    mEncoder = EncodingUtils::EncoderForEncoding(encoding);
+    mEncoder = MakeUnique<nsNCRFallbackEncoderWrapper>(encoding);
     return true;
 }
 
@@ -326,7 +273,7 @@ nsSegmentEncoder::InitUnicodeEncoder()
     nsSegmentEncoder name(useUTF8 ? nullptr : mOriginCharset.get())
 
 #define GET_SEGMENT_ENCODER(name) \
-    GET_SEGMENT_ENCODER_INTERNAL(name, gAlwaysEncodeInUTF8)
+    GET_SEGMENT_ENCODER_INTERNAL(name, true)
 
 #define GET_QUERY_ENCODER(name) \
     GET_SEGMENT_ENCODER_INTERNAL(name, false)
@@ -418,8 +365,6 @@ nsStandardURL::InitGlobalObjects()
     nsCOMPtr<nsIPrefBranch> prefBranch( do_GetService(NS_PREFSERVICE_CONTRACTID) );
     if (prefBranch) {
         nsCOMPtr<nsIObserver> obs( new nsPrefObserver() );
-        prefBranch->AddObserver(NS_NET_PREF_ESCAPEUTF8, obs.get(), false);
-        prefBranch->AddObserver(NS_NET_PREF_ALWAYSENCODEINUTF8, obs.get(), false);
 #ifdef MOZ_RUST_URLPARSE
         prefBranch->AddObserver(NS_NET_PREF_ENABLE_RUST, obs.get(), false);
 #endif
@@ -980,6 +925,17 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
 
     buf[i] = '\0';
 
+    // https://url.spec.whatwg.org/#path-state (1.4.1.2)
+    // https://url.spec.whatwg.org/#windows-drive-letter
+    if (SegmentIs(buf, mScheme, "file")) {
+        char* path = &buf[mPath.mPos];
+        if (mPath.mLen >= 3 && path[0] == '/'
+            && nsCRT::IsAsciiAlpha(path[1])
+            && path[2] == '|') {
+            buf[mPath.mPos + 2] = ':';
+        }
+    }
+
     if (mDirectory.mLen > 1) {
         netCoalesceFlags coalesceFlag = NET_COALESCE_NORMAL;
         if (SegmentIs(buf,mScheme,"ftp")) {
@@ -1213,26 +1169,13 @@ nsStandardURL::WriteSegment(nsIBinaryOutputStream *stream, const URLSegment &seg
 /* static */ void
 nsStandardURL::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
 {
-    bool val;
-
     LOG(("nsStandardURL::PrefsChanged [pref=%s]\n", pref));
 
 #define PREF_CHANGED(p) ((pref == nullptr) || !strcmp(pref, p))
 #define GOT_PREF(p, b) (NS_SUCCEEDED(prefs->GetBoolPref(p, &b)))
 
-    if (PREF_CHANGED(NS_NET_PREF_ESCAPEUTF8)) {
-        if (GOT_PREF(NS_NET_PREF_ESCAPEUTF8, val))
-            gEscapeUTF8 = val;
-        LOG(("escape UTF-8 %s\n", gEscapeUTF8 ? "enabled" : "disabled"));
-    }
-
-    if (PREF_CHANGED(NS_NET_PREF_ALWAYSENCODEINUTF8)) {
-        if (GOT_PREF(NS_NET_PREF_ALWAYSENCODEINUTF8, val))
-            gAlwaysEncodeInUTF8 = val;
-        LOG(("encode in UTF-8 %s\n", gAlwaysEncodeInUTF8 ? "enabled" : "disabled"));
-    }
-
 #ifdef MOZ_RUST_URLPARSE
+    bool val;
     if (PREF_CHANGED(NS_NET_PREF_ENABLE_RUST)) {
         if (GOT_PREF(NS_NET_PREF_ENABLE_RUST, val)) {
             gRustEnabled = val;
@@ -1288,7 +1231,6 @@ NS_IMPL_RELEASE(nsStandardURL)
 NS_INTERFACE_MAP_BEGIN(nsStandardURL)
     NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIStandardURL)
     NS_INTERFACE_MAP_ENTRY(nsIURI)
-    NS_INTERFACE_MAP_ENTRY(nsIURIWithQuery)
     NS_INTERFACE_MAP_ENTRY(nsIURL)
     NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIFileURL, mSupportsFileURL)
     NS_INTERFACE_MAP_ENTRY(nsIStandardURL)
@@ -1449,6 +1391,8 @@ nsStandardURL::GetAsciiSpec(nsACString &result)
 
     result = Substring(mSpec, 0, mScheme.mLen + 3);
 
+    // This is left fallible as this entire function is expected to be
+    // infallible.
     NS_EscapeURL(Userpass(true), esc_OnlyNonASCII | esc_AlwaysCopy, result);
 
     // get the hostport
@@ -1456,6 +1400,8 @@ nsStandardURL::GetAsciiSpec(nsACString &result)
     MOZ_ALWAYS_SUCCEEDS(GetAsciiHostPort(hostport));
     result += hostport;
 
+    // This is left fallible as this entire function is expected to be
+    // infallible.
     NS_EscapeURL(Path(), esc_OnlyNonASCII | esc_AlwaysCopy, result);
     CALL_RUST_GETTER_STR(result, GetAsciiSpec, result);
     return NS_OK;

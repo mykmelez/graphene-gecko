@@ -7,7 +7,7 @@
 #ifndef SHARED_LIBRARIES_H_
 #define SHARED_LIBRARIES_H_
 
-#ifndef MOZ_ENABLE_PROFILER_SPS
+#ifndef MOZ_GECKO_PROFILER
 #error This header does not have a useful implementation on your platform!
 #endif
 
@@ -16,9 +16,7 @@
 #include <string>
 #include <stdlib.h>
 #include <stdint.h>
-#ifndef SPS_STANDALONE
 #include <nsID.h>
-#endif
 
 class SharedLibrary {
 public:

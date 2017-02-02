@@ -1440,12 +1440,6 @@ private:
                                nsFrameItems& aFrameItems);
   static bool AtLineBoundary(FCItemIterator& aIter);
 
-  nsresult CreateAnonymousFrames(nsFrameConstructorState& aState,
-                                 nsIContent*              aParent,
-                                 nsContainerFrame*        aParentFrame,
-                                 PendingBinding*          aPendingBinding,
-                                 nsFrameItems&            aChildItems);
-
   nsresult GetAnonymousContent(nsIContent* aParent,
                                nsIFrame* aParentFrame,
                                nsTArray<nsIAnonymousContentCreator::ContentInfo>& aAnonContent);
@@ -2114,7 +2108,6 @@ private:
   // This is the containing block that contains the root element ---
   // the real "initial containing block" according to CSS 2.1.
   nsContainerFrame*   mDocElementContainingBlock;
-  nsIFrame*           mGfxScrollFrame;
   nsIFrame*           mPageSequenceFrame;
   nsQuoteList         mQuoteList;
   nsCounterManager    mCounterManager;

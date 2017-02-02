@@ -80,7 +80,7 @@ void
 NotificationController::Shutdown()
 {
   if (mObservingState != eNotObservingRefresh &&
-      mPresShell->RemoveRefreshObserver(this, Flush_Display)) {
+      mPresShell->RemoveRefreshObserver(this, FlushType::Display)) {
     mObservingState = eNotObservingRefresh;
   }
 
@@ -217,9 +217,10 @@ NotificationController::QueueMutationEvent(AccTreeMutationEvent* aEvent)
       mutEvent->IsHide()) {
     AccHideEvent* prevHide = downcast_accEvent(prevEvent);
     AccTextChangeEvent* prevTextChange = prevHide->mTextChangeEvent;
-    if (prevTextChange) {
+    if (prevTextChange && prevHide->Parent() == mutEvent->Parent()) {
       if (prevHide->mNextSibling == target) {
         target->AppendTextTo(prevTextChange->mModifiedText);
+        prevHide->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
       } else if (prevHide->mPrevSibling == target) {
         nsString temp;
         target->AppendTextTo(temp);
@@ -228,28 +229,27 @@ NotificationController::QueueMutationEvent(AccTreeMutationEvent* aEvent)
         temp += prevTextChange->mModifiedText;;
         prevTextChange->mModifiedText = temp;
         prevTextChange->mStart -= extraLen;
+        prevHide->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
       }
-
-      prevHide->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
     }
   } else if (prevEvent && mutEvent->IsShow() &&
              prevEvent->GetEventType() == nsIAccessibleEvent::EVENT_SHOW) {
     AccShowEvent* prevShow = downcast_accEvent(prevEvent);
     AccTextChangeEvent* prevTextChange = prevShow->mTextChangeEvent;
-    if (prevTextChange) {
+    if (prevTextChange && prevShow->Parent() == target->Parent()) {
       int32_t index = target->IndexInParent();
       int32_t prevIndex = prevShow->GetAccessible()->IndexInParent();
       if (prevIndex + 1 == index) {
         target->AppendTextTo(prevTextChange->mModifiedText);
+        prevShow->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
       } else if (index + 1 == prevIndex) {
         nsString temp;
         target->AppendTextTo(temp);
         prevTextChange->mStart -= temp.Length();
         temp += prevTextChange->mModifiedText;
         prevTextChange->mModifiedText = temp;
+        prevShow->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
       }
-
-      prevShow->mTextChangeEvent.swap(mutEvent->mTextChangeEvent);
     }
   }
 
@@ -437,7 +437,7 @@ NotificationController::ScheduleProcessing()
   // If notification flush isn't planed yet start notification flush
   // asynchronously (after style and layout).
   if (mObservingState == eNotObservingRefresh) {
-    if (mPresShell->AddRefreshObserver(this, Flush_Display))
+    if (mPresShell->AddRefreshObserver(this, FlushType::Display))
       mObservingState = eRefreshObserving;
   }
 }
@@ -842,10 +842,15 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
     size_t newDocCount = newChildDocs.Length();
     for (size_t i = 0; i < newDocCount; i++) {
       DocAccessible* childDoc = newChildDocs[i];
+      if (childDoc->IsDefunct()) {
+        continue;
+      }
+
       Accessible* parent = childDoc->Parent();
       DocAccessibleChild* parentIPCDoc = mDocument->IPCDoc();
+      MOZ_DIAGNOSTIC_ASSERT(parentIPCDoc);
       uint64_t id = reinterpret_cast<uintptr_t>(parent->UniqueID());
-      MOZ_ASSERT(id);
+      MOZ_DIAGNOSTIC_ASSERT(id);
       DocAccessibleChild* ipcDoc = childDoc->IPCDoc();
       if (ipcDoc) {
         parentIPCDoc->SendBindChildDoc(ipcDoc, id);
@@ -856,14 +861,12 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
       childDoc->SetIPCDoc(ipcDoc);
 
 #if defined(XP_WIN)
-      MOZ_ASSERT(parentIPCDoc);
       parentIPCDoc->ConstructChildDocInParentProcess(ipcDoc, id,
                                                      AccessibleWrap::GetChildIDFor(childDoc));
 #else
       nsCOMPtr<nsITabChild> tabChild =
         do_GetInterface(mDocument->DocumentNode()->GetDocShell());
       if (tabChild) {
-        MOZ_ASSERT(parentIPCDoc);
         static_cast<TabChild*>(tabChild.get())->
           SendPDocAccessibleConstructor(ipcDoc, parentIPCDoc, id, 0, 0);
       }
@@ -881,7 +884,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
       mEvents.IsEmpty() && mTextHash.Count() == 0 &&
       mHangingChildDocuments.IsEmpty() &&
       mDocument->HasLoadState(DocAccessible::eCompletelyLoaded) &&
-      mPresShell->RemoveRefreshObserver(this, Flush_Display)) {
+      mPresShell->RemoveRefreshObserver(this, FlushType::Display)) {
     mObservingState = eNotObservingRefresh;
   }
 }

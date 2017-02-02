@@ -12,12 +12,15 @@ var telemetry;
 try {
   const Telemetry = require("devtools/client/shared/telemetry");
   telemetry = new Telemetry();
-} catch(e) {
+} catch (e) {
   // DevTools Telemetry module only available in Firefox
 }
 
 const EventEmitter = require("devtools/shared/event-emitter");
 const eventEmitter = new EventEmitter();
+
+// exports the event emitter to help test know when this command is toggled
+exports.eventEmitter = eventEmitter;
 
 const gcli = require("gcli/index");
 const l10n = require("gcli/l10n");
@@ -115,7 +118,7 @@ exports.items = [
         }
       ]
     }],
-    exec: function*(args, context) {
+    exec: function* (args, context) {
       if (!args.chrome) {
         const output = yield context.updateExec("paintflashing_server --state on");
 
@@ -144,7 +147,7 @@ exports.items = [
         }
       ]
     }],
-    exec: function*(args, context) {
+    exec: function* (args, context) {
       if (!args.chrome) {
         const output = yield context.updateExec("paintflashing_server --state off");
 
@@ -169,7 +172,7 @@ exports.items = [
     tooltipText: l10n.lookup("paintflashingTooltip"),
     description: l10n.lookup("paintflashingToggleDesc"),
     manual: l10n.lookup("paintflashingManual"),
-    exec: function*(args, context) {
+    exec: function* (args, context) {
       const output = yield context.updateExec("paintflashing_server --state toggle");
 
       onPaintFlashingChanged(context.environment.target, output.data);
@@ -190,7 +193,7 @@ exports.items = [
       },
     ],
     returnType: "paintFlashingState",
-    exec: function(args, context) {
+    exec: function (args, context) {
       let { window } = context.environment;
       let id = getOuterId(window);
       let flashing = setPaintFlashing(window, args.state);

@@ -23,6 +23,7 @@
 #include "mozilla/Unused.h"
 
 #include "mozilla/css/Declaration.h"
+#include "mozilla/TypeTraits.h"
 
 #include "nsAlgorithm.h" // for clamped()
 #include "nsRuleNode.h"
@@ -232,6 +233,7 @@ nsRuleNode::EnsureBlockDisplay(StyleDisplay& display,
   case StyleDisplay::Flex:
   case StyleDisplay::WebkitBox:
   case StyleDisplay::Grid:
+  case StyleDisplay::FlowRoot:
     // do not muck with these at all - already blocks
     // This is equivalent to nsStyleDisplay::IsBlockOutside.  (XXX Maybe we
     // should just call that?)
@@ -275,6 +277,7 @@ nsRuleNode::EnsureInlineDisplay(StyleDisplay& display)
   // see if the display value is already inline
   switch (display) {
     case StyleDisplay::Block:
+    case StyleDisplay::FlowRoot:
       display = StyleDisplay::InlineBlock;
       break;
     case StyleDisplay::Table:
@@ -1041,10 +1044,11 @@ static bool SetColor(const nsCSSValue& aValue, const nscolor aParentColor,
       LookAndFeel::ColorID colorID = (LookAndFeel::ColorID) intValue;
       bool useStandinsForNativeColors = aPresContext &&
                                         !aPresContext->IsChrome();
-      if (NS_SUCCEEDED(LookAndFeel::GetColor(colorID,
-                                    useStandinsForNativeColors, &aResult))) {
-        result = true;
-      }
+      DebugOnly<nsresult> rv =
+        LookAndFeel::GetColor(colorID, useStandinsForNativeColors, &aResult);
+      MOZ_ASSERT(NS_SUCCEEDED(rv),
+                 "Unknown enum colors should have been rejected by parser");
+      result = true;
     }
     else {
       aResult = NS_RGB(0, 0, 0);
@@ -1139,13 +1143,16 @@ SetComplexColor(const nsCSSValue& aValue,
     aResult = StyleComplexColor::CurrentColor();
   } else if (unit == eCSSUnit_ComplexColor) {
     aResult = aValue.GetStyleComplexColorValue();
+  } else if (unit == eCSSUnit_Auto) {
+    aResult = StyleComplexColor::Auto();
   } else {
+    nscolor resultColor;
     if (!SetColor(aValue, aParentColor.mColor, aPresContext,
-                  nullptr, aResult.mColor, aConditions)) {
+                  nullptr, resultColor, aConditions)) {
       MOZ_ASSERT_UNREACHABLE("Unknown color value");
       return;
     }
-    aResult.mForegroundRatio = 0;
+    aResult = StyleComplexColor::FromColor(resultColor);
   }
 }
 
@@ -1441,6 +1448,7 @@ struct SetEnumValueHelper
   DEFINE_ENUM_CLASS_SETTER(StyleFillRule, Nonzero, Evenodd)
   DEFINE_ENUM_CLASS_SETTER(StyleFloat, None, InlineEnd)
   DEFINE_ENUM_CLASS_SETTER(StyleFloatEdge, ContentBox, MarginBox)
+  DEFINE_ENUM_CLASS_SETTER(StyleHyphens, None, Auto)
   DEFINE_ENUM_CLASS_SETTER(StyleUserFocus, None, SelectMenu)
   DEFINE_ENUM_CLASS_SETTER(StyleUserSelect, None, MozText)
   DEFINE_ENUM_CLASS_SETTER(StyleUserInput, None, Auto)
@@ -4925,7 +4933,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
   SetValue(*aRuleData->ValueForHyphens(), text->mHyphens, conditions,
            SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
            parentText->mHyphens,
-           NS_STYLE_HYPHENS_MANUAL);
+           StyleHyphens::Manual);
 
   // ruby-align: enum, inherit, initial
   SetValue(*aRuleData->ValueForRubyAlign(),
@@ -5289,6 +5297,14 @@ nsRuleNode::ComputeUserInterfaceData(void* aStartStruct,
            SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
            parentUI->mPointerEvents,
            NS_STYLE_POINTER_EVENTS_AUTO);
+
+  // caret-color: auto, color, inherit
+  const nsCSSValue* caretColorValue = aRuleData->ValueForCaretColor();
+  SetComplexColor<eUnsetInherit>(*caretColorValue,
+                                 parentUI->mCaretColor,
+                                 StyleComplexColor::Auto(),
+                                 mPresContext,
+                                 ui->mCaretColor, conditions);
 
   COMPUTE_END_INHERITED(UserInterface, ui)
 }
@@ -6884,6 +6900,21 @@ struct BackgroundItemComputer<nsCSSValueList, RefPtr<css::URLValueData>>
   }
 };
 
+template <typename T>
+struct BackgroundItemComputer<nsCSSValueList, T>
+{
+  typedef typename EnableIf<IsEnum<T>::value, T>::Type ComputedType;
+
+  static void ComputeValue(nsStyleContext* aStyleContext,
+                           const nsCSSValueList* aSpecifiedValue,
+                           ComputedType& aComputedValue,
+                           RuleNodeCacheConditions& aConditions)
+  {
+    aComputedValue =
+      static_cast<T>(aSpecifiedValue->mValue.GetIntValue());
+  }
+};
+
 /* Helper function for ComputePositionValue.
  * This function computes a single PositionCoord from two nsCSSValue objects,
  * which represent an edge and an offset from that edge.
@@ -7387,17 +7418,13 @@ nsRuleNode::ComputeBackgroundData(void* aStartStruct,
 {
   COMPUTE_START_RESET(Background, bg, parentBG)
 
-  // background-color: color, string, inherit
-  const nsCSSValue* backColorValue = aRuleData->ValueForBackgroundColor();
-  if (eCSSUnit_Initial == backColorValue->GetUnit() ||
-      eCSSUnit_Unset == backColorValue->GetUnit()) {
-    bg->mBackgroundColor = NS_RGBA(0, 0, 0, 0);
-  } else if (!SetColor(*backColorValue, parentBG->mBackgroundColor,
-                       mPresContext, aContext, bg->mBackgroundColor,
-                       conditions)) {
-    NS_ASSERTION(eCSSUnit_Null == backColorValue->GetUnit(),
-                 "unexpected color unit");
-  }
+  // background-color: color, inherit
+  SetComplexColor<eUnsetInitial>(*aRuleData->ValueForBackgroundColor(),
+                                 parentBG->mBackgroundColor,
+                                 StyleComplexColor::FromColor(
+                                     NS_RGBA(0, 0, 0, 0)),
+                                 mPresContext,
+                                 bg->mBackgroundColor, conditions);
 
   uint32_t maxItemCount = 1;
   bool rebuild = false;
@@ -7437,7 +7464,7 @@ nsRuleNode::ComputeBackgroundData(void* aStartStruct,
                     bg->mImage.mLayers,
                     parentBG->mImage.mLayers,
                     &nsStyleImageLayers::Layer::mClip,
-                    uint8_t(NS_STYLE_IMAGELAYER_CLIP_BORDER),
+                    StyleGeometryBox::Border,
                     parentBG->mImage.mClipCount,
                     bg->mImage.mClipCount, maxItemCount, rebuild, conditions);
 
@@ -7456,7 +7483,7 @@ nsRuleNode::ComputeBackgroundData(void* aStartStruct,
                     bg->mImage.mLayers,
                     parentBG->mImage.mLayers,
                     &nsStyleImageLayers::Layer::mOrigin,
-                    uint8_t(NS_STYLE_IMAGELAYER_ORIGIN_PADDING),
+                    StyleGeometryBox::Padding,
                     parentBG->mImage.mOriginCount,
                     bg->mImage.mOriginCount, maxItemCount, rebuild,
                     conditions);
@@ -7678,10 +7705,10 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
   nscolor unused = NS_RGB(0,0,0);
 
   static const nsCSSPropertyID borderColorsProps[] = {
-    eCSSProperty_border_top_colors,
-    eCSSProperty_border_right_colors,
-    eCSSProperty_border_bottom_colors,
-    eCSSProperty_border_left_colors
+    eCSSProperty__moz_border_top_colors,
+    eCSSProperty__moz_border_right_colors,
+    eCSSProperty__moz_border_bottom_colors,
+    eCSSProperty__moz_border_left_colors
   };
 
   NS_FOR_CSS_SIDES(side) {
@@ -7752,8 +7779,8 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
     const nsCSSPropertyID* subprops =
       nsCSSProps::SubpropertyEntryFor(eCSSProperty_border_radius);
     NS_FOR_CSS_FULL_CORNERS(corner) {
-      int cx = NS_FULL_TO_HALF_CORNER(corner, false);
-      int cy = NS_FULL_TO_HALF_CORNER(corner, true);
+      int cx = FullToHalfCorner(corner, false);
+      int cy = FullToHalfCorner(corner, true);
       const nsCSSValue& radius = *aRuleData->ValueFor(subprops[corner]);
       nsStyleCoord parentX = parentBorder->mBorderRadius.Get(cx);
       nsStyleCoord parentY = parentBorder->mBorderRadius.Get(cy);
@@ -7941,8 +7968,8 @@ nsRuleNode::ComputeOutlineData(void* aStartStruct,
     const nsCSSPropertyID* subprops =
       nsCSSProps::SubpropertyEntryFor(eCSSProperty__moz_outline_radius);
     NS_FOR_CSS_FULL_CORNERS(corner) {
-      int cx = NS_FULL_TO_HALF_CORNER(corner, false);
-      int cy = NS_FULL_TO_HALF_CORNER(corner, true);
+      int cx = FullToHalfCorner(corner, false);
+      int cy = FullToHalfCorner(corner, true);
       const nsCSSValue& radius = *aRuleData->ValueFor(subprops[corner]);
       nsStyleCoord parentX = parentOutline->mOutlineRadius.Get(cx);
       nsStyleCoord parentY = parentOutline->mOutlineRadius.Get(cy);
@@ -8945,9 +8972,7 @@ nsRuleNode::ComputeContentData(void* aStartStruct,
     MOZ_ASSERT(contentValue->GetIntValue() == NS_STYLE_CONTENT_ALT_CONTENT,
                "unrecognized solitary content keyword");
     content->AllocateContents(1);
-    nsStyleContentData& data = content->ContentAt(0);
-    data.mType = eStyleContentType_AltContent;
-    data.mContent.mString = nullptr;
+    content->ContentAt(0).SetKeyword(eStyleContentType_AltContent);
     break;
   }
 
@@ -8966,44 +8991,50 @@ nsRuleNode::ComputeContentData(void* aStartStruct,
     while (contentValueList) {
       const nsCSSValue& value = contentValueList->mValue;
       nsCSSUnit unit = value.GetUnit();
-      nsStyleContentType type;
-      nsStyleContentData &data = content->ContentAt(count++);
+      nsStyleContentData& data = content->ContentAt(count++);
       switch (unit) {
-      case eCSSUnit_String:   type = eStyleContentType_String;    break;
-      case eCSSUnit_Image:    type = eStyleContentType_Image;     break;
-      case eCSSUnit_Attr:     type = eStyleContentType_Attr;      break;
-      case eCSSUnit_Counter:  type = eStyleContentType_Counter;   break;
-      case eCSSUnit_Counters: type = eStyleContentType_Counters;  break;
-      case eCSSUnit_Enumerated:
-        switch (value.GetIntValue()) {
-        case NS_STYLE_CONTENT_OPEN_QUOTE:
-          type = eStyleContentType_OpenQuote;     break;
-        case NS_STYLE_CONTENT_CLOSE_QUOTE:
-          type = eStyleContentType_CloseQuote;    break;
-        case NS_STYLE_CONTENT_NO_OPEN_QUOTE:
-          type = eStyleContentType_NoOpenQuote;   break;
-        case NS_STYLE_CONTENT_NO_CLOSE_QUOTE:
-          type = eStyleContentType_NoCloseQuote;  break;
-        default:
-          NS_ERROR("bad content value");
-          type = eStyleContentType_Uninitialized;
+        case eCSSUnit_Image:
+          data.SetImageRequest(CreateStyleImageRequest(mPresContext, value));
+          break;
+        case eCSSUnit_String:
+        case eCSSUnit_Attr: {
+          nsStyleContentType type =
+            unit == eCSSUnit_String ? eStyleContentType_String
+                                    : eStyleContentType_Attr;
+          value.GetStringValue(buffer);
+          data.SetString(type, buffer.get());
+          break;
         }
-        break;
-      default:
-        NS_ERROR("bad content type");
-        type = eStyleContentType_Uninitialized;
-      }
-      data.mType = type;
-      if (type == eStyleContentType_Image) {
-        data.SetImage(CreateImageRequest(mPresContext, value));
-      } else if (type <= eStyleContentType_Attr) {
-        value.GetStringValue(buffer);
-        data.mContent.mString = NS_strdup(buffer.get());
-      } else if (type <= eStyleContentType_Counters) {
-        data.mContent.mCounters = value.GetArrayValue();
-        data.mContent.mCounters->AddRef();
-      } else {
-        data.mContent.mString = nullptr;
+        case eCSSUnit_Counter:
+        case eCSSUnit_Counters: {
+          nsStyleContentType type =
+            unit == eCSSUnit_Counter ? eStyleContentType_Counter
+                                     : eStyleContentType_Counters;
+          data.SetCounters(type, value.GetArrayValue());
+          break;
+        }
+        case eCSSUnit_Enumerated:
+          switch (value.GetIntValue()) {
+            case NS_STYLE_CONTENT_OPEN_QUOTE:
+              data.SetKeyword(eStyleContentType_OpenQuote);
+              break;
+            case NS_STYLE_CONTENT_CLOSE_QUOTE:
+              data.SetKeyword(eStyleContentType_CloseQuote);
+              break;
+            case NS_STYLE_CONTENT_NO_OPEN_QUOTE:
+              data.SetKeyword(eStyleContentType_NoOpenQuote);
+              break;
+            case NS_STYLE_CONTENT_NO_CLOSE_QUOTE:
+              data.SetKeyword(eStyleContentType_NoCloseQuote);
+              break;
+            default:
+              NS_ERROR("bad content value");
+              break;
+          }
+          break;
+        default:
+          NS_ERROR("bad content type");
+          break;
       }
       contentValueList = contentValueList->mNext;
     }
@@ -9110,15 +9141,6 @@ nsRuleNode::ComputeContentData(void* aStartStruct,
 
   default:
     MOZ_ASSERT(false, "unexpected value unit");
-  }
-
-  // If we ended up with an image, track it.
-  for (uint32_t i = 0; i < content->ContentCount(); ++i) {
-    if ((content->ContentAt(i).mType == eStyleContentType_Image) &&
-        content->ContentAt(i).mContent.mImage) {
-      content->ContentAt(i).TrackImage(
-          aContext->PresContext()->Document()->ImageTracker());
-    }
   }
 
   COMPUTE_END_RESET(Content, content)
@@ -9755,7 +9777,7 @@ GetStyleBasicShapeFromCSSValue(const nsCSSValue& aValue,
                                                 aConditions);
         MOZ_ASSERT(didSetRadius, "unexpected radius unit");
       } else {
-        radius.SetIntValue(NS_RADIUS_CLOSEST_SIDE, eStyleUnit_Enumerated);
+        radius.SetEnumValue(StyleShapeRadius::ClosestSide);
       }
       basicShape->Coordinates().AppendElement(radius);
     }
@@ -9803,8 +9825,8 @@ GetStyleBasicShapeFromCSSValue(const nsCSSValue& aValue,
     if (shapeFunction->Item(5).GetUnit() == eCSSUnit_Array) {
       nsCSSValue::Array* radiiArray = shapeFunction->Item(5).GetArrayValue();
       NS_FOR_CSS_FULL_CORNERS(corner) {
-        int cx = NS_FULL_TO_HALF_CORNER(corner, false);
-        int cy = NS_FULL_TO_HALF_CORNER(corner, true);
+        int cx = FullToHalfCorner(corner, false);
+        int cy = FullToHalfCorner(corner, true);
         const nsCSSValue& radius = radiiArray->Item(corner);
         nsStyleCoord coordX, coordY;
         DebugOnly<bool> didSetRadii = SetPairCoords(radius, coordX, coordY,
@@ -10076,7 +10098,7 @@ nsRuleNode::ComputeSVGResetData(void* aStartStruct,
                     svgReset->mMask.mLayers,
                     parentSVGReset->mMask.mLayers,
                     &nsStyleImageLayers::Layer::mClip,
-                    uint8_t(NS_STYLE_IMAGELAYER_CLIP_BORDER),
+                    StyleGeometryBox::Border,
                     parentSVGReset->mMask.mClipCount,
                     svgReset->mMask.mClipCount, maxItemCount, rebuild,
                     conditions);
@@ -10086,7 +10108,7 @@ nsRuleNode::ComputeSVGResetData(void* aStartStruct,
                     svgReset->mMask.mLayers,
                     parentSVGReset->mMask.mLayers,
                     &nsStyleImageLayers::Layer::mOrigin,
-                    uint8_t(NS_STYLE_IMAGELAYER_ORIGIN_BORDER),
+                    StyleGeometryBox::Border,
                     parentSVGReset->mMask.mOriginCount,
                     svgReset->mMask.mOriginCount, maxItemCount, rebuild,
                     conditions);

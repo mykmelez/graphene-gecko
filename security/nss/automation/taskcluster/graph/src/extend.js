@@ -6,6 +6,7 @@ import merge from "./merge";
 import * as queue from "./queue";
 
 const LINUX_IMAGE = {name: "linux", path: "automation/taskcluster/docker"};
+const FUZZ_IMAGE = {name: "fuzz", path: "automation/taskcluster/docker-fuzz"};
 
 const WINDOWS_CHECKOUT_CMD =
   "bash -c \"hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss || " +
@@ -29,16 +30,21 @@ queue.filter(task => {
     }
   }
 
-  if (task.tests == "bogo") {
-    // No BoGo tests on Windows.
+  if (task.tests == "bogo" || task.tests == "interop") {
+    // No windows
     if (task.platform == "windows2012-64") {
       return false;
     }
 
-    // No BoGo tests on ARM.
+    // No ARM
     if (task.collection == "arm-debug") {
       return false;
     }
+  }
+
+  // Temporarily disable SSL tests on ARM.
+  if (task.tests == "ssl" && task.collection == "arm-debug") {
+    return false;
   }
 
   // GYP builds with -Ddisable_libpkix=1 by default.
@@ -119,7 +125,6 @@ export default async function main() {
       "bin/checkout.sh && nss/automation/taskcluster/scripts/build_gyp.sh -g -v --ubsan --asan"
     ],
     env: {
-      ASAN_OPTIONS: "detect_odr_violation=0", // bug 1316276
       UBSAN_OPTIONS: "print_stacktrace=1",
       NSS_DISABLE_ARENA_FREE_LIST: "1",
       NSS_DISABLE_UNLOAD: "1",
@@ -252,6 +257,12 @@ async function scheduleLinux(name, base) {
     symbol: "noLibpkix"
   }));
 
+  queue.scheduleTask(merge(extra_base, {
+    name: `${name} w/ modular builds`,
+    env: {NSS_BUILD_MODULAR: "1"},
+    symbol: "modular"
+  }));
+
   return queue.submit();
 }
 
@@ -260,8 +271,7 @@ async function scheduleLinux(name, base) {
 async function scheduleFuzzing() {
   let base = {
     env: {
-       // bug 1316276
-      ASAN_OPTIONS: "allocator_may_return_null=1:detect_odr_violation=0",
+      ASAN_OPTIONS: "allocator_may_return_null=1",
       UBSAN_OPTIONS: "print_stacktrace=1",
       NSS_DISABLE_ARENA_FREE_LIST: "1",
       NSS_DISABLE_UNLOAD: "1",
@@ -270,7 +280,7 @@ async function scheduleFuzzing() {
     },
     platform: "linux64",
     collection: "fuzz",
-    image: LINUX_IMAGE
+    image: FUZZ_IMAGE
   };
 
   // Build base definition.
@@ -279,7 +289,7 @@ async function scheduleFuzzing() {
       "/bin/bash",
       "-c",
       "bin/checkout.sh && " +
-      "nss/automation/taskcluster/scripts/build_gyp.sh -g -v --fuzz --ubsan"
+      "nss/automation/taskcluster/scripts/build_gyp.sh -g -v --fuzz=tls"
     ],
     artifacts: {
       public: {
@@ -315,31 +325,69 @@ async function scheduleFuzzing() {
 
   queue.scheduleTask(merge(base, {
     parent: task_build,
-    name: "Cert",
+    name: "Hash",
     command: [
       "/bin/bash",
       "-c",
       "bin/checkout.sh && nss/automation/taskcluster/scripts/fuzz.sh " +
-        "cert nss/fuzz/corpus/cert -max_total_time=300"
+        "hash nss/fuzz/corpus/hash -max_total_time=300 -max_len=4096"
     ],
-    // Need a privileged docker container to remove this.
-    env: {ASAN_OPTIONS: "detect_leaks=0"},
-    symbol: "SCert",
+    // Need a privileged docker container to remove detect_leaks=0.
+    env: {
+      ASAN_OPTIONS: "allocator_may_return_null=1:detect_leaks=0",
+    },
+    symbol: "Hash",
     kind: "test"
   }));
 
   queue.scheduleTask(merge(base, {
     parent: task_build,
-    name: "SPKI",
+    name: "QuickDER",
     command: [
       "/bin/bash",
       "-c",
       "bin/checkout.sh && nss/automation/taskcluster/scripts/fuzz.sh " +
-        "spki nss/fuzz/corpus/spki -max_total_time=300"
+        "quickder nss/fuzz/corpus/quickder -max_total_time=300 -max_len=10000"
     ],
-    // Need a privileged docker container to remove this.
-    env: {ASAN_OPTIONS: "detect_leaks=0"},
-    symbol: "SPKI",
+    // Need a privileged docker container to remove detect_leaks=0.
+    env: {
+      ASAN_OPTIONS: "allocator_may_return_null=1:detect_leaks=0",
+    },
+    symbol: "QuickDER",
+    kind: "test"
+  }));
+
+  queue.scheduleTask(merge(base, {
+    parent: task_build,
+    name: "MPI",
+    command: [
+      "/bin/bash",
+      "-c",
+      "bin/checkout.sh && nss/automation/taskcluster/scripts/fuzz.sh " +
+        "mpi nss/fuzz/corpus/mpi -max_total_time=300 -max_len=2048"
+    ],
+    // Need a privileged docker container to remove detect_leaks=0.
+    env: {
+      ASAN_OPTIONS: "allocator_may_return_null=1:detect_leaks=0",
+    },
+    symbol: "MPI",
+    kind: "test"
+  }));
+
+  queue.scheduleTask(merge(base, {
+    parent: task_build,
+    name: "CertDN",
+    command: [
+      "/bin/bash",
+      "-c",
+      "bin/checkout.sh && nss/automation/taskcluster/scripts/fuzz.sh " +
+        "certDN nss/fuzz/corpus/certDN -max_total_time=300 -max_len=4096"
+    ],
+    // Need a privileged docker container to remove detect_leaks=0.
+    env: {
+      ASAN_OPTIONS: "allocator_may_return_null=1:detect_leaks=0",
+    },
+    symbol: "CertDN",
     kind: "test"
   }));
 
@@ -362,7 +410,7 @@ async function scheduleTestBuilds() {
       "/bin/bash",
       "-c",
       "bin/checkout.sh && " +
-      "nss/automation/taskcluster/scripts/build_gyp.sh -g -v --test"
+      "nss/automation/taskcluster/scripts/build_gyp.sh -g -v --test --ct-verif"
     ],
     artifacts: {
       public: {
@@ -469,6 +517,9 @@ function scheduleTests(task_build, task_cert, test_base) {
   }));
   queue.scheduleTask(merge(no_cert_base, {
     name: "Bogo tests", symbol: "Bogo", tests: "bogo", cycle: "standard"
+  }));
+  queue.scheduleTask(merge(no_cert_base, {
+    name: "Interop tests", symbol: "Interop", tests: "interop", cycle: "standard"
   }));
   queue.scheduleTask(merge(no_cert_base, {
     name: "Chains tests", symbol: "Chains", tests: "chains"

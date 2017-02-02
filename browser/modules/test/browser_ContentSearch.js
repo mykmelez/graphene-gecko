@@ -6,11 +6,25 @@ const TEST_MSG = "ContentSearchTest";
 const CONTENT_SEARCH_MSG = "ContentSearch";
 const TEST_CONTENT_SCRIPT_BASENAME = "contentSearch.js";
 
-// This timeout is absurdly high to avoid random failures like bug 1087120.
-// That bug was reported when the timeout was 5 seconds, so let's try 10.
-const SUGGESTIONS_TIMEOUT = 10000;
-
 var gMsgMan;
+/* eslint no-undef:"error" */
+/* import-globals-from ../../components/search/test/head.js */
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/browser/components/search/test/head.js",
+  this);
+
+let originalEngine = Services.search.currentEngine;
+
+add_task(function* setup() {
+  yield promiseNewEngine("testEngine.xml", {
+    setAsCurrent: true,
+    testPath: "chrome://mochitests/content/browser/browser/components/search/test/",
+  });
+
+  registerCleanupFunction(() => {
+    Services.search.currentEngine = originalEngine;
+  });
+});
 
 add_task(function* GetState() {
   yield addTab();
@@ -101,7 +115,7 @@ add_task(function* search() {
     engine.getSubmission(data.searchString, "", data.whence).uri.spec;
   gMsgMan.sendAsyncMessage(TEST_MSG, {
     type: "Search",
-    data: data,
+    data,
     expectedURL: submissionURL,
   });
   let msg = yield waitForTestMsg("loadStopped");
@@ -125,7 +139,7 @@ add_task(function* searchInBackgroundTab() {
     engine.getSubmission(data.searchString, "", data.whence).uri.spec;
   gMsgMan.sendAsyncMessage(TEST_MSG, {
     type: "Search",
-    data: data,
+    data,
     expectedURL: submissionURL,
   });
 
@@ -192,7 +206,6 @@ add_task(function* GetSuggestions_AddFormHistoryEntry_RemoveFormHistoryEntry() {
     data: {
       engineName: engine.name,
       searchString: searchStr,
-      remoteTimeout: SUGGESTIONS_TIMEOUT,
     },
   });
 
@@ -228,7 +241,6 @@ add_task(function* GetSuggestions_AddFormHistoryEntry_RemoveFormHistoryEntry() {
     data: {
       engineName: engine.name,
       searchString: searchStr,
-      remoteTimeout: SUGGESTIONS_TIMEOUT,
     },
   });
 
@@ -321,11 +333,11 @@ function waitForNewEngine(basename, numImages) {
   let addDeferred = Promise.defer();
   let url = getRootDirectory(gTestPath) + basename;
   Services.search.addEngine(url, null, "", false, {
-    onSuccess: function(engine) {
+    onSuccess(engine) {
       info("Search engine added: " + basename);
       addDeferred.resolve(engine);
     },
-    onError: function(errCode) {
+    onError(errCode) {
       ok(false, "addEngine failed with error code " + errCode);
       addDeferred.reject();
     },
@@ -338,8 +350,7 @@ function addTab() {
   let deferred = Promise.defer();
   let tab = gBrowser.addTab();
   gBrowser.selectedTab = tab;
-  tab.linkedBrowser.addEventListener("load", function load() {
-    tab.linkedBrowser.removeEventListener("load", load, true);
+  tab.linkedBrowser.addEventListener("load", function() {
     let url = getRootDirectory(gTestPath) + TEST_CONTENT_SCRIPT_BASENAME;
     gMsgMan = tab.linkedBrowser.messageManager;
     gMsgMan.sendAsyncMessage(CONTENT_SEARCH_MSG, {
@@ -350,7 +361,7 @@ function addTab() {
       gMsgMan.loadFrameScript(url, false);
       deferred.resolve();
     });
-  }, true);
+  }, {capture: true, once: true});
   registerCleanupFunction(() => gBrowser.removeTab(tab));
   return deferred.promise;
 }
@@ -399,8 +410,7 @@ function arrayBufferFromDataURI(uri) {
   };
   try {
     xhr.send();
-  }
-  catch (err) {
+  } catch (err) {
     return Promise.resolve(null);
   }
   return deferred.promise;

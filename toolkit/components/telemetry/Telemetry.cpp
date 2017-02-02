@@ -43,6 +43,7 @@
 #include "Telemetry.h"
 #include "TelemetryCommon.h"
 #include "TelemetryHistogram.h"
+#include "TelemetryIPCAccumulator.h"
 #include "TelemetryScalar.h"
 #include "TelemetryEvent.h"
 #include "WebrtcTelemetry.h"
@@ -74,14 +75,12 @@
 #include "mozilla/StartupTimeline.h"
 #include "mozilla/HangMonitor.h"
 
-#if defined(MOZ_ENABLE_PROFILER_SPS)
+#if defined(MOZ_GECKO_PROFILER)
 #include "shared-libraries.h"
-#if defined(MOZ_STACKWALKING)
 #define ENABLE_STACK_CAPTURE
 #include "mozilla/StackWalk.h"
 #include "nsPrintfCString.h"
-#endif // MOZ_STACKWALKING
-#endif // MOZ_ENABLE_PROFILER_SPS
+#endif // MOZ_GECKO_PROFILER
 
 namespace {
 
@@ -881,7 +880,7 @@ public:
   static void ShutdownTelemetry();
   static void RecordSlowStatement(const nsACString &sql, const nsACString &dbName,
                                   uint32_t delay);
-#if defined(MOZ_ENABLE_PROFILER_SPS)
+#if defined(MOZ_GECKO_PROFILER)
   static void RecordChromeHang(uint32_t aDuration,
                                Telemetry::ProcessedStack &aStack,
                                int32_t aSystemUptime,
@@ -2133,9 +2132,7 @@ TelemetryImpl::CreateTelemetryInstance()
 
   // First, initialize the TelemetryHistogram and TelemetryScalar global states.
   TelemetryHistogram::InitializeGlobalState(useTelemetry, useTelemetry);
-
-  // Only record scalars from the parent process.
-  TelemetryScalar::InitializeGlobalState(XRE_IsParentProcess(), XRE_IsParentProcess());
+  TelemetryScalar::InitializeGlobalState(useTelemetry, useTelemetry);
 
   // Only record events from the parent process.
   TelemetryEvent::InitializeGlobalState(XRE_IsParentProcess(), XRE_IsParentProcess());
@@ -2166,6 +2163,7 @@ TelemetryImpl::ShutdownTelemetry()
   TelemetryHistogram::DeInitializeGlobalState();
   TelemetryScalar::DeInitializeGlobalState();
   TelemetryEvent::DeInitializeGlobalState();
+  TelemetryIPCAccumulator::DeInitializeGlobalState();
 }
 
 void
@@ -2443,7 +2441,7 @@ TelemetryImpl::RecordIceCandidates(const uint32_t iceCandidateBitmask,
   sTelemetry->mWebrtcTelemetry.RecordIceCandidateMask(iceCandidateBitmask, success);
 }
 
-#if defined(MOZ_ENABLE_PROFILER_SPS)
+#if defined(MOZ_GECKO_PROFILER)
 void
 TelemetryImpl::RecordChromeHang(uint32_t aDuration,
                                 Telemetry::ProcessedStack &aStack,
@@ -2637,11 +2635,17 @@ TelemetryImpl::ClearEvents()
   return NS_OK;
 }
 
+NS_IMETHODIMP
+TelemetryImpl::SetEventRecordingEnabled(const nsACString& aCategory, bool aEnabled)
+{
+  TelemetryEvent::SetEventRecordingEnabled(aCategory, aEnabled);
+  return NS_OK;
+}
 
 NS_IMETHODIMP
 TelemetryImpl::FlushBatchedChildTelemetry()
 {
-  TelemetryHistogram::IPCTimerFired(nullptr, nullptr);
+  TelemetryIPCAccumulator::IPCTimerFired(nullptr, nullptr);
   return NS_OK;
 }
 
@@ -2688,7 +2692,7 @@ struct StackFrame
   uint16_t mModIndex; // The index of module that has this program counter.
 };
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 static bool CompareByPC(const StackFrame &a, const StackFrame &b)
 {
   return a.mPC < b.mPC;
@@ -2863,7 +2867,7 @@ GetStackAndModules(const std::vector<uintptr_t>& aPCs)
     rawStack.push_back(Frame);
   }
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
   // Remove all modules not referenced by a PC on the stack
   std::sort(rawStack.begin(), rawStack.end(), CompareByPC);
 
@@ -2924,13 +2928,13 @@ GetStackAndModules(const std::vector<uintptr_t>& aPCs)
     Ret.AddFrame(frame);
   }
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
   for (unsigned i = 0, n = rawModules.GetSize(); i != n; ++i) {
     const SharedLibrary &info = rawModules.GetEntry(i);
     const std::string &name = info.GetName();
     std::string basename = name;
-#ifdef XP_MACOSX
-    // FIXME: We want to use just the basename as the libname, but the
+#if defined(XP_MACOSX) || defined(XP_LINUX)
+    // We want to use just the basename as the libname, but the
     // current profiler addon needs the full path name, so we compute the
     // basename in here.
     size_t pos = name.rfind('/');
@@ -3101,6 +3105,20 @@ AccumulateChildKeyed(GeckoProcessType aProcessType,
   TelemetryHistogram::AccumulateChildKeyed(aProcessType, aAccumulations);
 }
 
+void
+UpdateChildScalars(GeckoProcessType aProcessType,
+                   const nsTArray<ScalarAction>& aScalarActions)
+{
+  TelemetryScalar::UpdateChildData(aProcessType, aScalarActions);
+}
+
+void
+UpdateChildKeyedScalars(GeckoProcessType aProcessType,
+                        const nsTArray<KeyedScalarAction>& aScalarActions)
+{
+  TelemetryScalar::UpdateChildKeyedData(aProcessType, aScalarActions);
+}
+
 const char*
 GetHistogramName(ID id)
 {
@@ -3142,7 +3160,7 @@ void Init()
   MOZ_ASSERT(telemetryService);
 }
 
-#if defined(MOZ_ENABLE_PROFILER_SPS)
+#if defined(MOZ_GECKO_PROFILER)
 void RecordChromeHang(uint32_t duration,
                       ProcessedStack &aStack,
                       int32_t aSystemUptime,

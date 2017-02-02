@@ -49,6 +49,7 @@ pref("extensions.getAddons.search.url", "https://services.addons.mozilla.org/%LO
 pref("extensions.webservice.discoverURL", "https://discovery.addons.mozilla.org/%LOCALE%/firefox/discovery/pane/%VERSION%/%OS%/%COMPATIBILITY_MODE%");
 pref("extensions.getAddons.recommended.url", "https://services.addons.mozilla.org/%LOCALE%/%APP%/api/%API_VERSION%/list/recommended/all/%MAX_RESULTS%/%OS%/%VERSION%?src=firefox");
 pref("extensions.getAddons.link.url", "https://addons.mozilla.org/%LOCALE%/firefox/");
+pref("extensions.getAddons.themes.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes/?src=firefox");
 
 pref("extensions.update.autoUpdateDefault", true);
 
@@ -63,6 +64,9 @@ pref("extensions.systemAddon.update.url", "https://aus5.mozilla.org/update/3/Sys
 // Disable add-ons that are not installed by the user in all scopes by default.
 // See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
+
+// Whether or not webextension themes are supported.
+pref("extensions.webextensions.themes.enabled", false);
 
 // Add-on content security policies.
 pref("extensions.webextensions.base-content-security-policy", "script-src 'self' https://* moz-extension: blob: filesystem: 'unsafe-eval' 'unsafe-inline'; object-src 'self' https://* moz-extension: blob: filesystem:;");
@@ -170,9 +174,9 @@ pref("extensions.{972ce4c6-7e08-4474-a285-3208198ce6fd}.description", "chrome://
 
 pref("lightweightThemes.update.enabled", true);
 pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes");
-pref("lightweightThemes.recommendedThemes", "[{\"id\":\"recommended-1\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/a-web-browser-renaissance/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.footer.jpg\",\"textcolor\":\"#000000\",\"accentcolor\":\"#f2d9b1\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.preview.jpg\",\"author\":\"Sean.Martell\",\"version\":\"0\"},{\"id\":\"recommended-2\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/space-fantasy/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.footer.jpg\",\"textcolor\":\"#ffffff\",\"accentcolor\":\"#d9d9d9\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.preview.jpg\",\"author\":\"fx5800p\",\"version\":\"1.0\"},{\"id\":\"recommended-3\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/linen-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.footer.png\",\"accentcolor\":\"#ada8a8\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.preview.png\",\"author\":\"DVemer\",\"version\":\"1.0\"},{\"id\":\"recommended-4\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/pastel-gradient/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.footer.png\",\"textcolor\":\"#000000\",\"accentcolor\":\"#000000\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.preview.png\",\"author\":\"darrinhenein\",\"version\":\"1.0\"},{\"id\":\"recommended-5\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/carbon-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.footer.png\",\"textcolor\":\"#3b3b3b\",\"accentcolor\":\"#2e2e2e\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.preview.jpg\",\"author\":\"Jaxivo\",\"version\":\"1.0\"}]");
+pref("lightweightThemes.recommendedThemes", "[{\"id\":\"recommended-1\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/a-web-browser-renaissance/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.footer.jpg\",\"textcolor\":\"#000000\",\"accentcolor\":\"#f2d9b1\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.preview.jpg\",\"author\":\"Sean.Martell\",\"version\":\"0\"},{\"id\":\"recommended-2\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/space-fantasy/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.footer.jpg\",\"textcolor\":\"#ffffff\",\"accentcolor\":\"#d9d9d9\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.preview.jpg\",\"author\":\"fx5800p\",\"version\":\"1.0\"},{\"id\":\"recommended-4\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/pastel-gradient/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.footer.png\",\"textcolor\":\"#000000\",\"accentcolor\":\"#000000\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.preview.png\",\"author\":\"darrinhenein\",\"version\":\"1.0\"}]");
 
-#if defined(MOZ_ADOBE_EME) || defined(MOZ_WIDEVINE_EME)
+#if defined(MOZ_WIDEVINE_EME)
 pref("browser.eme.ui.enabled", true);
 #else
 pref("browser.eme.ui.enabled", false);
@@ -209,8 +213,14 @@ pref("general.autoScroll", true);
 pref("browser.shell.checkDefaultBrowser", true);
 pref("browser.shell.shortcutFavicons",true);
 pref("browser.shell.mostRecentDateSetAsDefault", "");
+#ifdef RELEASE_OR_BETA
+pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", false);
+#else
+pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", true);
+#endif
 pref("browser.shell.skipDefaultBrowserCheck", true);
 pref("browser.shell.defaultBrowserCheckCount", 0);
+pref("browser.defaultbrowser.notificationbar", false);
 
 // 0 = blank, 1 = home (browser.startup.homepage), 2 = last visited page, 3 = resume previous browser session
 // The behavior of option 3 is detailed at: http://wiki.mozilla.org/Session_Restore
@@ -311,6 +321,10 @@ pref("browser.urlbar.oneOffSearches", true);
 pref("browser.urlbar.oneOffSearches", false);
 #endif
 
+// If changed to true, copying the entire URL from the location bar will put the
+// human readable (percent-decoded) URL on the clipboard.
+pref("browser.urlbar.decodeURLsOnCopy", false);
+
 pref("browser.altClickSave", false);
 
 // Enable logging downloads operations to the Console.
@@ -376,7 +390,9 @@ pref("browser.search.context.loadInBackground", false);
 // comma seperated list of of engines to hide in the search panel.
 pref("browser.search.hiddenOneOffs", "");
 
+#ifndef RELEASE_OR_BETA
 pref("browser.search.reset.enabled", true);
+#endif
 
 pref("browser.sessionhistory.max_entries", 50);
 
@@ -501,6 +517,8 @@ pref("privacy.cpd.offlineApps",             false);
 pref("privacy.cpd.siteSettings",            false);
 pref("privacy.cpd.openWindows",             false);
 
+pref("privacy.history.custom",              false);
+
 // What default should we use for the time span in the sanitizer:
 // 0 - Clear everything
 // 1 - Last Hour
@@ -517,6 +535,9 @@ pref("privacy.sanitize.migrateFx3Prefs",    false);
 pref("privacy.panicButton.enabled",         true);
 
 pref("privacy.firstparty.isolate",          false);
+
+// Time until temporary permissions expire, in ms
+pref("privacy.temporary_permission_expire_time_ms",  3600000);
 
 pref("network.proxy.share_proxy_settings",  false); // use the same proxy settings for all protocols
 
@@ -645,12 +666,6 @@ pref("plugin.defaultXpi.state", 2);
 pref("plugin.state.flash", 2);
 pref("plugin.state.java", 1);
 
-#ifdef XP_MACOSX
-pref("browser.preferences.animateFadeIn", true);
-#else
-pref("browser.preferences.animateFadeIn", false);
-#endif
-
 #ifdef XP_WIN
 pref("browser.preferences.instantApply", false);
 #else
@@ -754,9 +769,6 @@ pref("gecko.handlerService.schemes.ircs.2.uriTemplate", "chrome://browser-region
 pref("gecko.handlerService.schemes.ircs.3.name", "chrome://browser-region/locale/region.properties");
 pref("gecko.handlerService.schemes.ircs.3.uriTemplate", "chrome://browser-region/locale/region.properties");
 
-// By default, we don't want protocol/content handlers to be registered from a different host, see bug 402287
-pref("gecko.handlerService.allowRegisterFromDifferentHost", false);
-
 pref("browser.geolocation.warning.infoURL", "https://www.mozilla.org/%LOCALE%/firefox/geolocation/");
 
 pref("browser.EULA.version", 3);
@@ -843,10 +855,18 @@ pref("places.frecency.embedVisitBonus", 0);
 pref("places.frecency.framedLinkVisitBonus", 0);
 pref("places.frecency.linkVisitBonus", 100);
 pref("places.frecency.typedVisitBonus", 2000);
+// The bookmarks bonus is always added on top of any other bonus, including
+// the redirect source and the typed ones.
 pref("places.frecency.bookmarkVisitBonus", 75);
+// The redirect source bonus overwrites any transition bonus.
+// 0 would hide these pages, instead we want them low ranked.  Thus we use
+// linkVisitBonus - bookmarkVisitBonus, so that a bookmarked source is in par
+// with a common link.
+pref("places.frecency.redirectSourceVisitBonus", 25);
 pref("places.frecency.downloadVisitBonus", 0);
-pref("places.frecency.permRedirectVisitBonus", 0);
-pref("places.frecency.tempRedirectVisitBonus", 0);
+// The perm/temp redirects here relate to redirect targets, not sources.
+pref("places.frecency.permRedirectVisitBonus", 50);
+pref("places.frecency.tempRedirectVisitBonus", 40);
 pref("places.frecency.reloadVisitBonus", 0);
 pref("places.frecency.defaultVisitBonus", 0);
 
@@ -919,12 +939,6 @@ pref("browser.tabs.remote.autostart", false);
 pref("browser.tabs.remote.desktopbehavior", true);
 
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
-// When this pref is true the Windows process sandbox will set up dummy
-// interceptions and log to the browser console when calls fail in the sandboxed
-// process and also if they are subsequently allowed by the broker process.
-// This will require a restart.
-pref("security.sandbox.windows.log", false);
-
 // Controls whether and how the Windows NPAPI plugin process is sandboxed.
 // To get a different setting for a particular plugin replace "default", with
 // the plugin's nice file name, see: nsPluginTag::GetNiceFileName.
@@ -955,13 +969,11 @@ pref("security.sandbox.content.level", 2);
 pref("security.sandbox.content.level", 1);
 #endif
 
-#if defined(MOZ_STACKWALKING)
 // This controls the depth of stack trace that is logged when Windows sandbox
 // logging is turned on.  This is only currently available for the content
 // process because the only other sandbox (for GMP) has too strict a policy to
 // allow stack tracing.  This does not require a restart to take effect.
 pref("security.sandbox.windows.log.stackTraceDepth", 0);
-#endif
 #endif
 #endif
 
@@ -1003,6 +1015,8 @@ pref("security.sandbox.content.level", 1);
 // This setting may not be required anymore once we decide to permanently
 // enable the content sandbox.
 pref("security.sandbox.content.level", 2);
+pref("security.sandbox.content.write_path_whitelist", "");
+pref("security.sandbox.content.syscall_whitelist", "");
 #endif
 
 #if defined(XP_MACOSX) || defined(XP_WIN)
@@ -1011,6 +1025,16 @@ pref("security.sandbox.content.level", 2);
 // sandbox-writable temporary directory to be used by content processes
 // when a temporary writable file is required in a level 1 sandbox.
 pref("security.sandbox.content.tempDirSuffix", "");
+#endif
+#endif
+
+#if defined(MOZ_SANDBOX)
+// This pref determines if messages relevant to sandbox violations are
+// logged.
+#if defined(XP_WIN)
+pref("security.sandbox.logging.enabled", false);
+#else
+pref("security.sandbox.logging.enabled", true);
 #endif
 #endif
 
@@ -1126,7 +1150,7 @@ pref("services.sync.sendTabToDevice.enabled", true);
 
 // Developer edition preferences
 #ifdef MOZ_DEV_EDITION
-sticky_pref("lightweightThemes.selectedThemeID", "firefox-devedition@mozilla.org");
+sticky_pref("lightweightThemes.selectedThemeID", "firefox-compact-dark@mozilla.org");
 #else
 sticky_pref("lightweightThemes.selectedThemeID", "");
 #endif
@@ -1151,6 +1175,12 @@ pref("browser.newtabpage.enabled", true);
 
 // Toggles the enhanced content of 'about:newtab'. Shows sponsored tiles.
 sticky_pref("browser.newtabpage.enhanced", true);
+
+// enables Activity Stream inspired layout
+pref("browser.newtabpage.compact", false);
+
+// enables showing basic placeholders for missing thumbnails
+pref("browser.newtabpage.thumbnailPlaceholder", false);
 
 // number of rows of newtab grid
 pref("browser.newtabpage.rows", 3);
@@ -1215,14 +1245,10 @@ pref("social.shareDirectory", "https://activations.cdn.mozilla.net/sharePanel.ht
 pref("security.mixed_content.block_active_content", true);
 
 // Show degraded UI for http pages with password fields.
-// Only for Nightly, Dev Edition and early beta, not for late beta or release.
-#ifdef EARLY_BETA_OR_EARLIER
 pref("security.insecure_password.ui.enabled", true);
-#else
-pref("security.insecure_password.ui.enabled", false);
-#endif
 
-pref("security.insecure_field_warning.contextual.enabled", false);
+// Show in-content login form warning UI for insecure login fields
+pref("security.insecure_field_warning.contextual.enabled", true);
 
 // 1 = allow MITM for certificate pinning checks.
 pref("security.cert_pinning.enforcement_level", 1);
@@ -1235,6 +1261,8 @@ pref("plain_text.wrap_long_lines", true);
 // before content.
 pref("dom.debug.propagate_gesture_events_through_content", false);
 
+// All the Geolocation preferences are here.
+//
 // The request URL of the GeoLocation backend.
 #ifdef RELEASE_OR_BETA
 pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
@@ -1263,6 +1291,11 @@ pref("geo.provider.use_gpsd", true);
 #endif
 #endif
 #endif
+
+// We keep allowing non-HTTPS geo requests on all the release
+// channels, for now.
+// TODO: default to false (or remove altogether) for #1072859.
+pref("geo.security.allowinsecure", true);
 
 // Necko IPC security checks only needed for app isolation for cookies/cache/etc:
 // currently irrelevant for desktop e10s
@@ -1295,6 +1328,9 @@ pref("identity.fxaccounts.contextParam", "fx_desktop_v3");
 // Note that this will always need to be in the same TLD as the
 // "identity.fxaccounts.remote.signup.uri" pref.
 pref("identity.fxaccounts.settings.uri", "https://accounts.firefox.com/settings?service=sync&context=fx_desktop_v3");
+
+// The URL of the FxA device manager page
+pref("identity.fxaccounts.settings.devices.uri", "https://accounts.firefox.com/settings/clients?service=sync&context=fx_desktop_v3");
 
 // The remote URL of the FxA Profile Server
 pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
@@ -1341,16 +1377,6 @@ pref("media.eme.enabled", true);
 #endif
 pref("media.eme.apiVisible", true);
 
-// Decode using Gecko Media Plugins in <video>, if a system decoder is not
-// availble and the preferred GMP is available.
-pref("media.gmp.decoder.enabled", false);
-
-// If decoding-via-GMP is turned on for <video>, use Adobe's GMP for decoding,
-// if it's available. Note: We won't fallback to another GMP if Adobe's is not
-// installed.
-pref("media.gmp.decoder.aac", 2);
-pref("media.gmp.decoder.h264", 2);
-
 // Whether we should run a test-pattern through EME GMPs before assuming they'll
 // decode H.264.
 pref("media.gmp.trial-create.enabled", true);
@@ -1362,15 +1388,6 @@ pref("media.gmp.trial-create.enabled", true);
 // and script requests EME. If *.visible is false, we won't show the UI
 // to enable the CDM if its disabled; it's as if the keysystem is completely
 // unsupported.
-
-#ifdef MOZ_ADOBE_EME
-pref("media.gmp-eme-adobe.visible", true);
-// When Adobe EME is enabled in the build system, we don't actually enable
-// the plugin by default, so that it doesn't download and install by default.
-// When Adobe EME is first used, Firefox will prompt the user to enable it,
-// and then download the CDM.
-pref("media.gmp-eme-adobe.enabled", false);
-#endif
 
 #ifdef MOZ_WIDEVINE_EME
 pref("media.gmp-widevinecdm.visible", true);
@@ -1416,10 +1433,16 @@ pref("privacy.trackingprotection.introURL", "https://www.mozilla.org/%LOCALE%/fi
 pref("privacy.userContext.enabled", true);
 pref("privacy.userContext.ui.enabled", true);
 pref("privacy.usercontext.about_newtab_segregation.enabled", true);
+
+// 0 disables long press, 1 when clicked, the menu is shown, 2 the menu is shown after X milliseconds.
+pref("privacy.userContext.longPressBehavior", 2);
 #else
 pref("privacy.userContext.enabled", false);
 pref("privacy.userContext.ui.enabled", false);
 pref("privacy.usercontext.about_newtab_segregation.enabled", false);
+
+// 0 disables long press, 1 when clicked, the menu is shown, 2 the menu is shown after X milliseconds.
+pref("privacy.userContext.longPressBehavior", 0);
 #endif
 
 #ifndef RELEASE_OR_BETA
@@ -1445,8 +1468,6 @@ pref("extensions.interposition.prefetching", true);
 #ifdef RELEASE_OR_BETA
 pref("extensions.e10sBlocksEnabling", true);
 #endif
-
-pref("browser.defaultbrowser.notificationbar", false);
 
 // How often to check for CPOW timeouts. CPOWs are only timed out by
 // the hang monitor.
@@ -1554,4 +1575,13 @@ pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
 // Enable the (fairly costly) client/server validation on nightly only. The other prefs
 // controlling validation are located in /services/sync/services-sync.js
 pref("services.sync.validation.enabled", true);
+#endif
+
+// Preferences for the form autofill system extension
+pref("browser.formautofill.experimental", false);
+
+// Enable safebrowsing v4 tables (suffixed by "-proto") update.
+#ifdef NIGHTLY_BUILD
+pref("urlclassifier.malwareTable", "goog-malware-shavar,goog-unwanted-shavar,goog-malware-proto,goog-unwanted-proto,test-malware-simple,test-unwanted-simple");
+pref("urlclassifier.phishTable", "goog-phish-shavar,goog-phish-proto,test-phish-simple");
 #endif

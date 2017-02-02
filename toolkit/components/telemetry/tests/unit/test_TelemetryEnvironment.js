@@ -97,7 +97,7 @@ PluginTag.prototype = {
 
   mimeTypes: [ PLUGIN_MIME_TYPE1, PLUGIN_MIME_TYPE2 ],
 
-  getMimeTypes: function(count) {
+  getMimeTypes(count) {
     count.value = this.mimeTypes.length;
     return this.mimeTypes;
   }
@@ -111,12 +111,12 @@ var gInstalledPlugins = [
 
 // A fake plugin host for testing plugin telemetry environment.
 var PluginHost = {
-  getPluginTags: function(countRef) {
+  getPluginTags(countRef) {
     countRef.value = gInstalledPlugins.length;
     return gInstalledPlugins;
   },
 
-  QueryInterface: function(iid) {
+  QueryInterface(iid) {
     if (iid.equals(Ci.nsIPluginHost)
      || iid.equals(Ci.nsISupports))
       return this;
@@ -238,12 +238,12 @@ function createMockAddonProvider(aName) {
       return aName;
     },
 
-    addAddon: function(aAddon) {
+    addAddon(aAddon) {
       this._addons.push(aAddon);
       AddonManagerPrivate.callAddonListeners("onInstalled", new MockAddonWrapper(aAddon));
     },
 
-    getAddonsByTypes: function(aTypes, aCallback) {
+    getAddonsByTypes(aTypes, aCallback) {
       aCallback(this._addons.map(a => new MockAddonWrapper(a)));
     },
 
@@ -305,11 +305,7 @@ function spoofPartnerInfo() {
 }
 
 function getAttributionFile() {
-  let file = Services.dirsvc.get("LocalAppData", Ci.nsIFile);
-  file.append("mozilla");
-  file.append(AppConstants.MOZ_APP_NAME);
-  file.append("postSigningData");
-  return file;
+  return FileUtils.getFile("LocalAppData", ["mozilla", AppConstants.MOZ_APP_NAME, "postSigningData"]);
 }
 
 function spoofAttributionData() {
@@ -319,6 +315,7 @@ function spoofAttributionData() {
                  createInstance(Ci.nsIFileOutputStream);
     stream.init(getAttributionFile(), -1, -1, 0);
     stream.write(ATTRIBUTION_CODE, ATTRIBUTION_CODE.length);
+    stream.close();
   }
 }
 
@@ -653,8 +650,7 @@ function checkSystemSection(data) {
     Assert.equal(features.gpuProcess.status, gfxData.features.gpuProcess.status);
     Assert.equal(features.opengl, gfxData.features.opengl);
     Assert.equal(features.webgl, gfxData.features.webgl);
-  }
-  catch (e) {}
+  } catch (e) {}
 }
 
 function checkActiveAddon(data) {
@@ -675,7 +671,7 @@ function checkActiveAddon(data) {
     hasBinaryComponents: "boolean",
     installDay: "number",
     updateDay: "number",
-    signedState: signedState,
+    signedState,
     isSystem: "boolean",
   };
 
@@ -1335,7 +1331,7 @@ add_task(function* test_defaultSearchEngine() {
   let resProt = Services.io.getProtocolHandler("resource")
                         .QueryInterface(Ci.nsIResProtocolHandler);
   resProt.setSubstitution("search-plugins",
-                          Services.io.newURI(url, null, null));
+                          Services.io.newURI(url));
 
   // Initialize the search service.
   yield new Promise(resolve => Services.search.init(resolve));

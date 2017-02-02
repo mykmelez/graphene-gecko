@@ -24,7 +24,23 @@ WebGLVertexArray::WebGLVertexArray(WebGLContext* webgl)
     : WebGLRefCountedObject(webgl)
     , mGLName(0)
 {
+    mAttribs.SetLength(mContext->mGLMaxVertexAttribs);
     mContext->mVertexArrays.insertBack(this);
+}
+
+WebGLVertexArray::~WebGLVertexArray()
+{
+    MOZ_ASSERT(IsDeleted());
+}
+
+void
+WebGLVertexArray::AddBufferBindCounts(int8_t addVal) const
+{
+    const GLenum target = 0; // Anything non-TF is fine.
+    WebGLBuffer::AddBindCount(target, mElementArrayBuffer.get(), addVal);
+    for (const auto& attrib : mAttribs) {
+        WebGLBuffer::AddBindCount(target, attrib.mBuf.get(), addVal);
+    }
 }
 
 WebGLVertexArray*
@@ -53,16 +69,6 @@ bool
 WebGLVertexArray::IsVertexArray() const
 {
     return IsVertexArrayImpl();
-}
-
-void
-WebGLVertexArray::EnsureAttrib(GLuint index)
-{
-    MOZ_ASSERT(index < GLuint(mContext->mGLMaxVertexAttribs));
-
-    if (index >= mAttribs.Length()) {
-        mAttribs.SetLength(index + 1);
-    }
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(WebGLVertexArray,

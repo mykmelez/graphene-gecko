@@ -24,7 +24,7 @@ static uint32_t gEntryID = 0;
 nsSHEntry::nsSHEntry()
   : mShared(new nsSHEntryShared())
   , mLoadReplace(false)
-  , mReferrerPolicy(mozilla::net::RP_Default)
+  , mReferrerPolicy(mozilla::net::RP_Unset)
   , mLoadType(0)
   , mID(gEntryID++)
   , mScrollPositionX(0)
@@ -416,6 +416,9 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
                   const nsID& aDocShellID,
                   bool aDynamicCreation)
 {
+  MOZ_ASSERT(aTriggeringPrincipal,
+             "need a valid triggeringPrincipal to create a session history entry");
+
   mURI = aURI;
   mTitle = aTitle;
   mPostData = aInputStream;
@@ -515,6 +518,10 @@ nsSHEntry::GetTriggeringPrincipal(nsIPrincipal** aTriggeringPrincipal)
 NS_IMETHODIMP
 nsSHEntry::SetTriggeringPrincipal(nsIPrincipal* aTriggeringPrincipal)
 {
+  MOZ_ASSERT(aTriggeringPrincipal, "need a valid triggeringPrincipal");
+  if (!aTriggeringPrincipal) {
+    return NS_ERROR_FAILURE;
+  }
   mShared->mTriggeringPrincipal = aTriggeringPrincipal;
   return NS_OK;
 }
@@ -749,6 +756,8 @@ nsSHEntry::RemoveChild(nsISHEntry* aChild)
   } else {
     int32_t index = mChildren.IndexOfObject(aChild);
     if (index >= 0) {
+      // Other alive non-dynamic child docshells still keep mChildOffset,
+      // so we don't want to change the indices here.
       mChildren.ReplaceObjectAt(nullptr, index);
       childRemoved = true;
     }

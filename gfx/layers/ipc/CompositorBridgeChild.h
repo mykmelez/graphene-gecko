@@ -38,6 +38,7 @@ class IAPZCTreeManager;
 class APZCTreeManagerChild;
 class ClientLayerManager;
 class CompositorBridgeParent;
+class CompositorOptions;
 class TextureClient;
 class TextureClientPool;
 struct FrameMetrics;
@@ -80,7 +81,7 @@ public:
     widget::CompositorWidget* aWidget,
     const uint64_t& aLayerTreeId,
     CSSToLayoutDeviceScale aScale,
-    bool aUseAPZ,
+    const CompositorOptions& aOptions,
     bool aUseExternalSurface,
     const gfx::IntSize& aSurfaceSize);
 
@@ -91,11 +92,6 @@ public:
   // Returns whether the compositor is in the GPU process (false if in the UI
   // process). This may only be called on the main thread.
   static bool CompositorIsInGPUProcess();
-
-  void AddOverfillObserver(ClientLayerManager* aLayerManager);
-
-  virtual mozilla::ipc::IPCResult
-  RecvClearCachedResources(const uint64_t& id) override;
 
   virtual mozilla::ipc::IPCResult
   RecvDidComposite(const uint64_t& aId, const uint64_t& aTransactionId,
@@ -108,10 +104,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvCompositorUpdated(const uint64_t& aLayersId,
                         const TextureFactoryIdentifier& aNewIdentifier,
-                        const uint64_t& aSeqNo) override;
-
-  virtual mozilla::ipc::IPCResult
-  RecvOverfill(const uint32_t &aOverfill) override;
+                        const uint64_t& aSequenceNumber) override;
 
   virtual mozilla::ipc::IPCResult
   RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint& aContentOffset,
@@ -220,8 +213,6 @@ public:
   PCompositorWidgetChild* AllocPCompositorWidgetChild(const CompositorWidgetInitData& aInitData) override;
   bool DeallocPCompositorWidgetChild(PCompositorWidgetChild* aActor) override;
 
-  bool GetAPZEnabled(uint64_t aLayerTreeId);
-
   PAPZCTreeManagerChild* AllocPAPZCTreeManagerChild(const uint64_t& aLayersId) override;
   bool DeallocPAPZCTreeManagerChild(PAPZCTreeManagerChild* aActor) override;
 
@@ -231,6 +222,10 @@ public:
   void ProcessingError(Result aCode, const char* aReason) override;
 
   void WillEndTransaction();
+
+  uint64_t DeviceResetSequenceNumber() const {
+    return mDeviceResetSequenceNumber;
+  }
 
 private:
   // Private destructor, to discourage deletion outside of Release():
@@ -305,9 +300,6 @@ private:
 
   DISALLOW_EVIL_CONSTRUCTORS(CompositorBridgeChild);
 
-  // When we receive overfill numbers, notify these client layer managers
-  AutoTArray<ClientLayerManager*,0> mOverfillObservers;
-
   // True until the beginning of the two-step shutdown sequence of this actor.
   bool mCanSend;
 
@@ -316,6 +308,11 @@ private:
    * It is incrementaed by UpdateFwdTransactionId() in each BeginTransaction() call.
    */
   uint64_t mFwdTransactionId;
+
+  /**
+   * Last sequence number recognized for a device reset.
+   */
+  uint64_t mDeviceResetSequenceNumber;
 
   /**
    * Hold TextureClients refs until end of their usages on host side.

@@ -37,7 +37,7 @@ function initTest() {
     // inject cookies
     for (v in vals) {
         let [host, name, value] = vals[v];
-        var cookieUri = ios.newURI("http://" + host, null, null);
+        var cookieUri = ios.newURI("http://" + host);
         cookieSvc.setCookieString(cookieUri, null, name + "=" + value + ";", null);
     }
 
@@ -46,7 +46,7 @@ function initTest() {
                                 "Browser:Cookies", "", {});
 
     // when it has loaded, run actual tests
-    cmd.addEventListener("load", function() { executeSoon(function() { runTest(cmd, searchTerm, vals.length, matches); }); }, false);
+    cmd.addEventListener("load", function() { executeSoon(function() { runTest(cmd, searchTerm, vals.length, matches); }); });
 }
 
 function isDisabled(win, expectation) {

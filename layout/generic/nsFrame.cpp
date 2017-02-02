@@ -696,18 +696,16 @@ nsFrame::DestroyFrom(nsIFrame* aDestructRoot)
     }
   }
 
-  if (EffectSet::GetEffectSet(this)) {
+  if (HasCSSAnimations() || HasCSSTransitions() ||
+      EffectSet::GetEffectSet(this)) {
     // If no new frame for this element is created by the end of the
     // restyling process, stop animations and transitions for this frame
-    if (presContext->RestyleManager()->IsGecko()) {
-      RestyleManager::AnimationsWithDestroyedFrame* adf =
-        presContext->RestyleManager()->AsGecko()->GetAnimationsWithDestroyedFrame();
-      // AnimationsWithDestroyedFrame only lives during the restyling process.
-      if (adf) {
-        adf->Put(mContent, mStyleContext);
-      }
-    } else {
-      NS_ERROR("stylo: ServoRestyleManager does not support animations yet");
+    RestyleManagerBase::AnimationsWithDestroyedFrame* adf =
+      presContext->RestyleManager()->AsBase()
+                 ->GetAnimationsWithDestroyedFrame();
+    // AnimationsWithDestroyedFrame only lives during the restyling process.
+    if (adf) {
+      adf->Put(mContent, mStyleContext);
     }
   }
 
@@ -1115,9 +1113,11 @@ nsIFrame::GetPaddingRect() const
 }
 
 WritingMode
-nsIFrame::GetWritingMode(nsIFrame* aSubFrame) const
+nsIFrame::WritingModeForLine(WritingMode aSelfWM,
+                             nsIFrame*   aSubFrame) const
 {
-  WritingMode writingMode = GetWritingMode();
+  MOZ_ASSERT(aSelfWM == GetWritingMode());
+  WritingMode writingMode = aSelfWM;
 
   if (StyleTextReset()->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_PLAINTEXT) {
     nsBidiLevel frameLevel = nsBidiPresUtils::GetFrameBaseLevel(aSubFrame);
@@ -1253,7 +1253,7 @@ nsIFrame::ComputeBorderRadii(const nsStyleCorners& aBorderRadius,
   NS_FOR_CSS_HALF_CORNERS(i) {
     const nsStyleCoord c = aBorderRadius.Get(i);
     nscoord axis =
-      NS_HALF_CORNER_IS_X(i) ? aFrameSize.width : aFrameSize.height;
+      HalfCornerIsX(i) ? aFrameSize.width : aFrameSize.height;
 
     if (c.IsCoordPercentCalcUnit()) {
       aRadii[i] = nsRuleNode::ComputeCoordPercentCalc(c, axis);
@@ -1268,31 +1268,31 @@ nsIFrame::ComputeBorderRadii(const nsStyleCorners& aBorderRadius,
   }
 
   if (aSkipSides.Top()) {
-    aRadii[NS_CORNER_TOP_LEFT_X] = 0;
-    aRadii[NS_CORNER_TOP_LEFT_Y] = 0;
-    aRadii[NS_CORNER_TOP_RIGHT_X] = 0;
-    aRadii[NS_CORNER_TOP_RIGHT_Y] = 0;
+    aRadii[eCornerTopLeftX] = 0;
+    aRadii[eCornerTopLeftY] = 0;
+    aRadii[eCornerTopRightX] = 0;
+    aRadii[eCornerTopRightY] = 0;
   }
 
   if (aSkipSides.Right()) {
-    aRadii[NS_CORNER_TOP_RIGHT_X] = 0;
-    aRadii[NS_CORNER_TOP_RIGHT_Y] = 0;
-    aRadii[NS_CORNER_BOTTOM_RIGHT_X] = 0;
-    aRadii[NS_CORNER_BOTTOM_RIGHT_Y] = 0;
+    aRadii[eCornerTopRightX] = 0;
+    aRadii[eCornerTopRightY] = 0;
+    aRadii[eCornerBottomRightX] = 0;
+    aRadii[eCornerBottomRightY] = 0;
   }
 
   if (aSkipSides.Bottom()) {
-    aRadii[NS_CORNER_BOTTOM_RIGHT_X] = 0;
-    aRadii[NS_CORNER_BOTTOM_RIGHT_Y] = 0;
-    aRadii[NS_CORNER_BOTTOM_LEFT_X] = 0;
-    aRadii[NS_CORNER_BOTTOM_LEFT_Y] = 0;
+    aRadii[eCornerBottomRightX] = 0;
+    aRadii[eCornerBottomRightY] = 0;
+    aRadii[eCornerBottomLeftX] = 0;
+    aRadii[eCornerBottomLeftY] = 0;
   }
 
   if (aSkipSides.Left()) {
-    aRadii[NS_CORNER_BOTTOM_LEFT_X] = 0;
-    aRadii[NS_CORNER_BOTTOM_LEFT_Y] = 0;
-    aRadii[NS_CORNER_TOP_LEFT_X] = 0;
-    aRadii[NS_CORNER_TOP_LEFT_Y] = 0;
+    aRadii[eCornerBottomLeftX] = 0;
+    aRadii[eCornerBottomLeftY] = 0;
+    aRadii[eCornerTopLeftX] = 0;
+    aRadii[eCornerTopLeftY] = 0;
   }
 
   // css3-background specifies this algorithm for reducing
@@ -1300,10 +1300,10 @@ nsIFrame::ComputeBorderRadii(const nsStyleCorners& aBorderRadius,
   bool haveRadius = false;
   double ratio = 1.0f;
   NS_FOR_CSS_SIDES(side) {
-    uint32_t hc1 = NS_SIDE_TO_HALF_CORNER(side, false, true);
-    uint32_t hc2 = NS_SIDE_TO_HALF_CORNER(side, true, true);
+    uint32_t hc1 = SideToHalfCorner(side, false, true);
+    uint32_t hc2 = SideToHalfCorner(side, true, true);
     nscoord length =
-      NS_SIDE_IS_VERTICAL(side) ? aBorderArea.height : aBorderArea.width;
+      SideIsVertical(side) ? aBorderArea.height : aBorderArea.width;
     nscoord sum = aRadii[hc1] + aRadii[hc2];
     if (sum)
       haveRadius = true;
@@ -1326,8 +1326,8 @@ nsIFrame::InsetBorderRadii(nscoord aRadii[8], const nsMargin &aOffsets)
 {
   NS_FOR_CSS_SIDES(side) {
     nscoord offset = aOffsets.Side(side);
-    uint32_t hc1 = NS_SIDE_TO_HALF_CORNER(side, false, false);
-    uint32_t hc2 = NS_SIDE_TO_HALF_CORNER(side, true, false);
+    uint32_t hc1 = SideToHalfCorner(side, false, false);
+    uint32_t hc2 = SideToHalfCorner(side, true, false);
     aRadii[hc1] = std::max(0, aRadii[hc1] - offset);
     aRadii[hc2] = std::max(0, aRadii[hc2] - offset);
   }
@@ -1351,8 +1351,8 @@ nsIFrame::OutsetBorderRadii(nscoord aRadii[8], const nsMargin &aOffsets)
 
   NS_FOR_CSS_SIDES(side) {
     const nscoord offset = aOffsets.Side(side);
-    const uint32_t hc1 = NS_SIDE_TO_HALF_CORNER(side, false, false);
-    const uint32_t hc2 = NS_SIDE_TO_HALF_CORNER(side, true, false);
+    const uint32_t hc1 = SideToHalfCorner(side, false, false);
+    const uint32_t hc2 = SideToHalfCorner(side, true, false);
     if (aRadii[hc1] > 0) {
       const nscoord offset1 = AdjustOffset(aRadii[hc1], offset);
       aRadii[hc1] = std::max(0, aRadii[hc1] + offset1);
@@ -1821,20 +1821,17 @@ nsFrame::DisplaySelectionOverlay(nsDisplayListBuilder*   aBuilder,
     offset = newContent->IndexOf(mContent);
   }
 
-  SelectionDetails *details;
   //look up to see what selection(s) are on this frame
-  details = frameSelection->LookUpSelection(newContent, offset, 1, false);
+  UniquePtr<SelectionDetails> details
+    = frameSelection->LookUpSelection(newContent, offset, 1, false);
   if (!details)
     return;
-  
+
   bool normal = false;
-  while (details) {
-    if (details->mSelectionType == SelectionType::eNormal) {
+  for (SelectionDetails* sd = details.get(); sd; sd = sd->mNext.get()) {
+    if (sd->mSelectionType == SelectionType::eNormal) {
       normal = true;
     }
-    SelectionDetails *next = details->mNext;
-    delete details;
-    details = next;
   }
 
   if (!normal && aContentType == nsISelectionDisplay::DISPLAY_IMAGES) {
@@ -1881,8 +1878,7 @@ nsIFrame::DisplayCaret(nsDisplayListBuilder* aBuilder,
 nscolor
 nsIFrame::GetCaretColorAt(int32_t aOffset)
 {
-  // Use text color.
-  return StyleColor()->mColor;
+  return nsLayoutUtils::GetColor(this, &nsStyleUserInterface::mCaretColor);
 }
 
 bool
@@ -1894,7 +1890,7 @@ nsFrame::DisplayBackgroundUnconditional(nsDisplayListBuilder* aBuilder,
   // receive a propagated background should just set aForceBackground to
   // true.
   if (aBuilder->IsForEventDelivery() || aForceBackground ||
-      !StyleBackground()->IsTransparent() || StyleDisplay()->mAppearance) {
+      !StyleBackground()->IsTransparent(this) || StyleDisplay()->mAppearance) {
     return nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
         aBuilder, this, GetRectRelativeToSelf(), aLists.BorderBackground());
   }
@@ -3024,6 +3020,19 @@ nsFrame::FireDOMEvent(const nsAString& aDOMEventName, nsIContent *aContent)
   }
 }
 
+WritingMode
+nsFrame::GetWritingModeDeferringToRootElem() const
+{
+  Element* rootElem = PresContext()->Document()->GetRootElement();
+  if (rootElem) {
+    nsIFrame* primaryFrame = rootElem->GetPrimaryFrame();
+    if (primaryFrame) {
+      return primaryFrame->GetWritingMode();
+    }
+  }
+  return nsIFrame::GetWritingMode();
+}
+
 nsresult
 nsFrame::HandleEvent(nsPresContext* aPresContext, 
                      WidgetGUIEvent* aEvent,
@@ -3410,22 +3419,21 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   // starting a new selection since the user may be trying to
   // drag the selected region to some other app.
 
-  SelectionDetails *details = 0;
   if (GetContent()->IsSelectionDescendant())
   {
     bool inSelection = false;
-    details = frameselection->LookUpSelection(offsets.content, 0,
-        offsets.EndOffset(), false);
+    UniquePtr<SelectionDetails> details
+      = frameselection->LookUpSelection(offsets.content, 0,
+                                        offsets.EndOffset(), false);
 
     //
     // If there are any details, check to see if the user clicked
     // within any selected region of the frame.
     //
 
-    SelectionDetails *curDetail = details;
-
-    while (curDetail)
-    {
+    for (SelectionDetails* curDetail = details.get();
+         curDetail;
+         curDetail = curDetail->mNext.get()) {
       //
       // If the user clicked inside a selection, then just
       // return without doing anything. We will handle placing
@@ -3441,10 +3449,6 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
       {
         inSelection = true;
       }
-
-      SelectionDetails *nextDetail = curDetail->mNext;
-      delete curDetail;
-      curDetail = nextDetail;
     }
 
     if (inSelection) {
@@ -4512,9 +4516,17 @@ nsIFrame::InlineMinISizeData::OptionallyBreak(nscoord aHyphenWidth)
 }
 
 void
-nsIFrame::InlinePrefISizeData::ForceBreak()
+nsIFrame::InlinePrefISizeData::ForceBreak(StyleClear aBreakType)
 {
-  if (mFloats.Length() != 0) {
+  MOZ_ASSERT(aBreakType == StyleClear::None ||
+             aBreakType == StyleClear::Both ||
+             aBreakType == StyleClear::Left ||
+             aBreakType == StyleClear::Right,
+             "Must be a physical break type");
+
+  // If this force break is not clearing any float, we can leave all the
+  // floats to the next force break.
+  if (mFloats.Length() != 0 && aBreakType != StyleClear::None) {
             // preferred widths accumulated for floats that have already
             // been cleared past
     nscoord floats_done = 0,
@@ -4522,11 +4534,12 @@ nsIFrame::InlinePrefISizeData::ForceBreak()
             // been cleared past
             floats_cur_left = 0,
             floats_cur_right = 0;
+    const WritingMode wm = mLineContainerWM;
 
     for (uint32_t i = 0, i_end = mFloats.Length(); i != i_end; ++i) {
       const FloatInfo& floatInfo = mFloats[i];
       const nsStyleDisplay* floatDisp = floatInfo.Frame()->StyleDisplay();
-      StyleClear breakType = floatDisp->PhysicalBreakType(mLineContainerWM);
+      StyleClear breakType = floatDisp->PhysicalBreakType(wm);
       if (breakType == StyleClear::Left ||
           breakType == StyleClear::Right ||
           breakType == StyleClear::Both) {
@@ -4543,7 +4556,7 @@ nsIFrame::InlinePrefISizeData::ForceBreak()
         }
       }
 
-      StyleFloat floatStyle = floatDisp->PhysicalFloats(mLineContainerWM);
+      StyleFloat floatStyle = floatDisp->PhysicalFloats(wm);
       nscoord& floats_cur =
         floatStyle == StyleFloat::Left ? floats_cur_left : floats_cur_right;
       nscoord floatWidth = floatInfo.Width();
@@ -4560,7 +4573,44 @@ nsIFrame::InlinePrefISizeData::ForceBreak()
 
     mCurrentLine = NSCoordSaturatingAdd(mCurrentLine, floats_done);
 
-    mFloats.Clear();
+    if (aBreakType == StyleClear::Both) {
+      mFloats.Clear();
+    } else {
+      // If the break type does not clear all floats, it means there may
+      // be some floats whose isize should contribute to the intrinsic
+      // isize of the next line. The code here scans the current mFloats
+      // and keeps floats which are not cleared by this break. Note that
+      // floats may be cleared directly or indirectly. See below.
+      nsTArray<FloatInfo> newFloats;
+      MOZ_ASSERT(aBreakType == StyleClear::Left ||
+                 aBreakType == StyleClear::Right,
+                 "Other values should have been handled in other branches");
+      StyleFloat clearFloatType =
+        aBreakType == StyleClear::Left ? StyleFloat::Left : StyleFloat::Right;
+      // Iterate the array in reverse so that we can stop when there are
+      // no longer any floats we need to keep. See below.
+      for (FloatInfo& floatInfo : Reversed(mFloats)) {
+        const nsStyleDisplay* floatDisp = floatInfo.Frame()->StyleDisplay();
+        if (floatDisp->PhysicalFloats(wm) != clearFloatType) {
+          newFloats.AppendElement(floatInfo);
+        } else {
+          // This is a float on the side that this break directly clears
+          // which means we're not keeping it in mFloats. However, if
+          // this float clears floats on the opposite side (via a value
+          // of either 'both' or one of 'left'/'right'), any remaining
+          // (earlier) floats on that side would be indirectly cleared
+          // as well. Thus, we should break out of this loop and stop
+          // considering earlier floats to be kept in mFloats.
+          StyleClear floatBreakType = floatDisp->PhysicalBreakType(wm);
+          if (floatBreakType != aBreakType &&
+              floatBreakType != StyleClear::None) {
+            break;
+          }
+        }
+      }
+      newFloats.Reverse();
+      mFloats = Move(newFloats);
+    }
   }
 
   mCurrentLine =
@@ -5390,7 +5440,7 @@ nsRect
 nsFrame::ComputeSimpleTightBounds(DrawTarget* aDrawTarget) const
 {
   if (StyleOutline()->mOutlineStyle != NS_STYLE_BORDER_STYLE_NONE ||
-      StyleBorder()->HasBorder() || !StyleBackground()->IsTransparent() ||
+      StyleBorder()->HasBorder() || !StyleBackground()->IsTransparent(this) ||
       StyleDisplay()->mAppearance) {
     // Not necessarily tight, due to clipping, negative
     // outline-offset, and lots of other issues, but that's OK
@@ -8267,12 +8317,27 @@ nsIFrame::GetFrameFromDirection(nsDirection aDirection, bool aVisual,
     if (NS_FAILED(result))
       return result;
 
-    if (aDirection == eDirNext)
-      frameTraversal->Next();
-    else
-      frameTraversal->Prev();
+    auto Advance = [&frameTraversal, aDirection] () {
+      if (aDirection == eDirNext) {
+        frameTraversal->Next();
+      } else {
+        frameTraversal->Prev();
+      }
+      return frameTraversal->CurrentItem();
+    };
 
-    traversedFrame = frameTraversal->CurrentItem();
+    traversedFrame = Advance();
+
+    if (nsIContent* content = GetContent()) {
+      // Advance until the frame is inside the same tree as 'this'.
+      for (nsIContent* traversedContent;
+           traversedFrame &&
+             !traversedFrame->IsGeneratedContentFrame() &&
+             (traversedContent = traversedFrame->GetContent()) &&
+             !nsContentUtils::IsInSameAnonymousTree(content, traversedContent);) {
+        traversedFrame = Advance();
+      }
+    }
 
     // Skip anonymous elements, but watch out for generated content
     if (!traversedFrame ||
@@ -9129,23 +9194,31 @@ nsFrame::DoGetParentStyleContext(nsIFrame** aProviderFrame) const
 void
 nsFrame::GetLastLeaf(nsPresContext* aPresContext, nsIFrame **aFrame)
 {
-  if (!aFrame || !*aFrame)
+  if (!aFrame || !*aFrame) {
     return;
-  nsIFrame *child = *aFrame;
-  //if we are a block frame then go for the last line of 'this'
-  while (1){
+  }
+
+  nsIFrame* child = *aFrame;
+  while (true) {
     child = child->PrincipalChildList().FirstChild();
-    if (!child)
-      return;//nothing to do
-    nsIFrame* siblingFrame;
-    nsIContent* content;
-    //ignore anonymous elements, e.g. mozTableAdd* mozTableRemove*
-    //see bug 278197 comment #12 #13 for details
-    while ((siblingFrame = child->GetNextSibling()) &&
-           (content = siblingFrame->GetContent()) &&
-           !content->IsRootOfNativeAnonymousSubtree())
-      child = siblingFrame;
-    *aFrame = child;
+    if (!child) {
+      return; // done
+    }
+
+    // Ignore anonymous elements, e.g. mozTableAdd* mozTableRemove*
+    // see bug 278197 comment #12 #13 for details.
+    nsIFrame* nonAnonymousChild = nullptr;
+    const nsIContent* content;
+    while (child &&
+           (content = child->GetContent()) &&
+           !content->IsRootOfNativeAnonymousSubtree()) {
+      nonAnonymousChild = child;
+      child = child->GetNextSibling();
+    }
+    if (!nonAnonymousChild) {
+      return;
+    }
+    *aFrame = child = nonAnonymousChild;
   }
 }
 

@@ -109,16 +109,17 @@ MOZ_MTLOG_MODULE("mtransport")
 
 const char kNrIceTransportUdp[] = "udp";
 const char kNrIceTransportTcp[] = "tcp";
+const char kNrIceTransportTls[] = "tls";
 
 static bool initialized = false;
 
 // Implement NSPR-based crypto algorithms
 static int nr_crypto_nss_random_bytes(UCHAR *buf, int len) {
-  ScopedPK11SlotInfo slot(PK11_GetInternalSlot());
+  UniquePK11SlotInfo slot(PK11_GetInternalSlot());
   if (!slot)
     return R_INTERNAL;
 
-  SECStatus rv = PK11_GenerateRandomOnSlot(slot, buf, len);
+  SECStatus rv = PK11_GenerateRandomOnSlot(slot.get(), buf, len);
   if (rv != SECSuccess)
     return R_INTERNAL;
 
@@ -211,6 +212,9 @@ nsresult NrIceStunServer::ToNicerStunStruct(nr_ice_stun_server *server) const {
     server->transport = IPPROTO_UDP;
   } else if (transport_ == kNrIceTransportTcp) {
     server->transport = IPPROTO_TCP;
+  } else if (transport_ == kNrIceTransportTls) {
+    server->transport = IPPROTO_TCP;
+    server->tls = 1;
   } else {
     MOZ_MTLOG(ML_ERROR, "Unsupported STUN server transport: " << transport_);
     return NS_ERROR_FAILURE;
@@ -587,6 +591,7 @@ NrIceCtx::Initialize(const std::string& ufrag,
   nsCString mapping_type;
   nsCString filtering_type;
   bool block_udp = false;
+  bool block_tcp = false;
 
   nsresult rv;
   nsCOMPtr<nsIPrefService> pref_service =
@@ -605,6 +610,9 @@ NrIceCtx::Initialize(const std::string& ufrag,
       rv = pref_branch->GetBoolPref(
           "media.peerconnection.nat_simulator.block_udp",
           &block_udp);
+      rv = pref_branch->GetBoolPref(
+          "media.peerconnection.nat_simulator.block_tcp",
+          &block_tcp);
     }
   }
 
@@ -615,6 +623,7 @@ NrIceCtx::Initialize(const std::string& ufrag,
     test_nat->filtering_type_ = TestNat::ToNatBehavior(filtering_type.get());
     test_nat->mapping_type_ = TestNat::ToNatBehavior(mapping_type.get());
     test_nat->block_udp_ = block_udp;
+    test_nat->block_tcp_ = block_tcp;
     test_nat->enabled_ = true;
     SetNat(test_nat);
   }
@@ -677,17 +686,51 @@ void NrIceCtx::internal_SetTimerAccelarator(int divider) {
   ctx_->test_timer_divider = divider;
 }
 
-NrIceCtx::~NrIceCtx() {
+void NrIceCtx::AccumulateStats(const NrIceStats& stats) {
+  nr_ice_accumulate_count(&(ctx_->stats.stun_retransmits),
+                          stats.stun_retransmits);
+  nr_ice_accumulate_count(&(ctx_->stats.turn_401s), stats.turn_401s);
+  nr_ice_accumulate_count(&(ctx_->stats.turn_403s), stats.turn_403s);
+  nr_ice_accumulate_count(&(ctx_->stats.turn_438s), stats.turn_438s);
+}
+
+NrIceStats NrIceCtx::Destroy() {
+  // designed to be called more than once so if stats are desired, this can be
+  // called just prior to the destructor
   MOZ_MTLOG(ML_DEBUG, "Destroying ICE ctx '" << name_ <<"'");
   for (auto stream = streams_.begin(); stream != streams_.end(); stream++) {
     if (*stream) {
       (*stream)->Close();
     }
   }
-  nr_ice_peer_ctx_destroy(&peer_);
-  nr_ice_ctx_destroy(&ctx_);
+
+  NrIceStats stats;
+  if (ctx_) {
+    stats.stun_retransmits = ctx_->stats.stun_retransmits;
+    stats.turn_401s = ctx_->stats.turn_401s;
+    stats.turn_403s = ctx_->stats.turn_403s;
+    stats.turn_438s = ctx_->stats.turn_438s;
+  }
+
+  if (peer_) {
+    nr_ice_peer_ctx_destroy(&peer_);
+  }
+  if (ctx_) {
+    nr_ice_ctx_destroy(&ctx_);
+  }
+
   delete ice_handler_vtbl_;
   delete ice_handler_;
+
+  ice_handler_vtbl_ = 0;
+  ice_handler_ = 0;
+  streams_.clear();
+
+  return stats;
+}
+
+NrIceCtx::~NrIceCtx() {
+  Destroy();
 }
 
 void
@@ -969,6 +1012,16 @@ nsresult NrIceCtx::Finalize() {
   }
 
   return NS_OK;
+}
+
+void NrIceCtx::UpdateNetworkState(bool online) {
+  MOZ_MTLOG(ML_INFO, "NrIceCtx(" << name_ << "): updating network state to " <<
+            (online ? "online" : "offline"));
+  if (online) {
+    nr_ice_peer_ctx_refresh_consent_all_streams(peer_);
+  } else {
+    nr_ice_peer_ctx_disconnect_all_streams(peer_);
+  }
 }
 
 void NrIceCtx::SetConnectionState(ConnectionState state) {

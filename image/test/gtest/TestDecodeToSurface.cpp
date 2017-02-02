@@ -47,7 +47,7 @@ public:
                                 imgIContainer::DECODE_FLAGS_DEFAULT);
     ASSERT_TRUE(mSurface != nullptr);
 
-    EXPECT_EQ(SurfaceType::DATA, mSurface->GetType());
+    EXPECT_TRUE(mSurface->IsDataSourceSurface());
     EXPECT_TRUE(mSurface->GetFormat() == SurfaceFormat::B8G8R8X8 ||
                 mSurface->GetFormat() == SurfaceFormat::B8G8R8A8);
     EXPECT_EQ(mTestCase.mSize, mSurface->GetSize());
@@ -69,7 +69,8 @@ RunDecodeToSurface(const ImageTestCase& aTestCase)
   ASSERT_TRUE(inputStream != nullptr);
 
   nsCOMPtr<nsIThread> thread;
-  nsresult rv = NS_NewThread(getter_AddRefs(thread), nullptr);
+  nsresult rv =
+    NS_NewNamedThread("DecodeToSurface", getter_AddRefs(thread), nullptr);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // We run the DecodeToSurface tests off-main-thread to ensure that

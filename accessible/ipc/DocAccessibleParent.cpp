@@ -12,6 +12,13 @@
 #include "nsAccUtils.h"
 #include "nsCoreUtils.h"
 
+#if defined(XP_WIN)
+#include "AccessibleWrap.h"
+#include "Compatibility.h"
+#include "nsWinUtils.h"
+#include "RootAccessible.h"
+#endif
+
 namespace mozilla {
 namespace a11y {
 
@@ -35,13 +42,13 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
   // required show events.
   if (!parent) {
     NS_ERROR("adding child to unknown accessible");
-    return IPC_OK();
+    return IPC_FAIL(this, "unknown parent accessible");
   }
 
   uint32_t newChildIdx = aData.Idx();
   if (newChildIdx > parent->ChildrenCount()) {
     NS_ERROR("invalid index to add child at");
-    return IPC_OK();
+    return IPC_FAIL(this, "invalid index");
   }
 
   uint32_t consumed = AddSubtree(parent, aData.NewTree(), 0, newChildIdx);
@@ -50,7 +57,7 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
   // XXX This shouldn't happen, but if we failed to add children then the below
   // is pointless and can crash.
   if (!consumed) {
-    return IPC_OK();
+    return IPC_FAIL(this, "failed to add children");
   }
 
 #ifdef DEBUG
@@ -191,6 +198,10 @@ DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID,
 mozilla::ipc::IPCResult
 DocAccessibleParent::RecvEvent(const uint64_t& aID, const uint32_t& aEventType)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
   ProxyAccessible* proxy = GetAccessible(aID);
   if (!proxy) {
     NS_ERROR("no proxy for event!");
@@ -219,6 +230,10 @@ DocAccessibleParent::RecvStateChangeEvent(const uint64_t& aID,
                                           const uint64_t& aState,
                                           const bool& aEnabled)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
   ProxyAccessible* target = GetAccessible(aID);
   if (!target) {
     NS_ERROR("we don't know about the target of a state change event!");
@@ -249,6 +264,10 @@ DocAccessibleParent::RecvStateChangeEvent(const uint64_t& aID,
 mozilla::ipc::IPCResult
 DocAccessibleParent::RecvCaretMoveEvent(const uint64_t& aID, const int32_t& aOffset)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
   ProxyAccessible* proxy = GetAccessible(aID);
   if (!proxy) {
     NS_ERROR("unknown caret move event target!");
@@ -281,6 +300,10 @@ DocAccessibleParent::RecvTextChangeEvent(const uint64_t& aID,
                                          const bool& aIsInsert,
                                          const bool& aFromUser)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
   ProxyAccessible* target = GetAccessible(aID);
   if (!target) {
     NS_ERROR("text change event target is unknown!");
@@ -311,6 +334,10 @@ DocAccessibleParent::RecvSelectionEvent(const uint64_t& aID,
                                         const uint64_t& aWidgetID,
                                         const uint32_t& aType)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
   ProxyAccessible* target = GetAccessible(aID);
   ProxyAccessible* widget = GetAccessible(aWidgetID);
   if (!target || !widget) {
@@ -334,6 +361,10 @@ DocAccessibleParent::RecvSelectionEvent(const uint64_t& aID,
 mozilla::ipc::IPCResult
 DocAccessibleParent::RecvRoleChangedEvent(const uint32_t& aRole)
 {
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
  if (aRole >= roles::LAST_ROLE) {
    NS_ERROR("child sent bad role in RoleChangedEvent");
    return IPC_FAIL_NO_REASON(this);
@@ -350,22 +381,22 @@ DocAccessibleParent::RecvBindChildDoc(PDocAccessibleParent* aChildDoc, const uin
   // We should always have at least an outer doc accessible in between.
   MOZ_ASSERT(aID);
   if (!aID)
-    return IPC_FAIL_NO_REASON(this);
+    return IPC_FAIL(this, "ID is 0!");
 
   MOZ_DIAGNOSTIC_ASSERT(CheckDocTree());
 
   auto childDoc = static_cast<DocAccessibleParent*>(aChildDoc);
   childDoc->Unbind();
-  bool result = AddChildDoc(childDoc, aID, false);
+  ipc::IPCResult result = AddChildDoc(childDoc, aID, false);
   MOZ_ASSERT(result);
   MOZ_DIAGNOSTIC_ASSERT(CheckDocTree());
   if (!result) {
-    return IPC_FAIL_NO_REASON(this);
+    return result;
   }
   return IPC_OK();
 }
 
-bool
+ipc::IPCResult
 DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
                                  uint64_t aParentID, bool aCreating)
 {
@@ -373,7 +404,7 @@ DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
   // document it self.
   ProxyEntry* e = mAccessibles.GetEntry(aParentID);
   if (!e)
-    return false;
+    return IPC_FAIL(this, "binding to nonexistant proxy!");
 
   ProxyAccessible* outerDoc = e->mProxy;
   MOZ_ASSERT(outerDoc);
@@ -383,7 +414,7 @@ DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
   // here.
   if (outerDoc->ChildrenCount() > 1 ||
       (outerDoc->ChildrenCount() == 1 && !outerDoc->ChildAt(0)->IsDoc())) {
-    return false;
+    return IPC_FAIL(this, "binding to proxy that can't be a outerDoc!");
   }
 
   aChildDoc->mParent = outerDoc;
@@ -395,7 +426,7 @@ DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
     ProxyCreated(aChildDoc, Interfaces::DOCUMENT | Interfaces::HYPERTEXT);
   }
 
-  return true;
+  return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
@@ -416,9 +447,14 @@ DocAccessibleParent::RecvShutdown()
 void
 DocAccessibleParent::Destroy()
 {
+  // If we are already shutdown that is because our containing tab parent is
+  // shutting down in which case we don't need to do anything.
+  if (mShutdown) {
+    return;
+  }
+
   NS_ASSERTION(mChildDocs.IsEmpty(),
                "why weren't the child docs destroyed already?");
-  MOZ_ASSERT(!mShutdown);
   mShutdown = true;
 
   uint32_t childDocCount = mChildDocs.Length();
@@ -430,6 +466,11 @@ DocAccessibleParent::Destroy()
     ProxyDestroyed(iter.Get()->mProxy);
     iter.Remove();
   }
+
+  // The code above should have already completely cleared these, but to be
+  // extra safe make sure they are cleared here.
+  mAccessibles.Clear();
+  mChildDocs.Clear();
 
   DocManager::NotifyOfRemoteDocShutdown(this);
   ProxyDestroyed(this);
@@ -491,7 +532,43 @@ DocAccessibleParent::SetCOMProxy(const RefPtr<IAccessible>& aCOMProxy)
 
   IAccessibleHolder::COMPtrType ptr(rawNative);
   IAccessibleHolder holder(Move(ptr));
-  Unused << SendParentCOMProxy(holder);
+
+  if (nsWinUtils::IsWindowEmulationStarted()) {
+    RootAccessible* rootDocument = outerDoc->RootAccessible();
+    MOZ_ASSERT(rootDocument);
+
+    bool isActive = true;
+    nsIntRect rect(CW_USEDEFAULT, CW_USEDEFAULT, 0, 0);
+    if (Compatibility::IsDolphin()) {
+      rect = Bounds();
+      nsIntRect rootRect = rootDocument->Bounds();
+      rect.x = rootRect.x - rect.x;
+      rect.y -= rootRect.y;
+      tab->GetDocShellIsActive(&isActive);
+    }
+
+    HWND parentWnd = reinterpret_cast<HWND>(rootDocument->GetNativeWindow());
+    HWND hWnd = nsWinUtils::CreateNativeWindow(kClassNameTabContent,
+                                               parentWnd, rect.x, rect.y,
+                                               rect.width, rect.height,
+                                               isActive);
+    if (hWnd) {
+      // Attach accessible document to the emulated native window
+      ::SetPropW(hWnd, kPropNameDocAccParent, (HANDLE)this);
+      SetEmulatedWindowHandle(hWnd);
+    }
+  }
+  Unused << SendParentCOMProxy(holder, reinterpret_cast<uintptr_t>(
+                               mEmulatedWindowHandle));
+}
+
+void
+DocAccessibleParent::SetEmulatedWindowHandle(HWND aWindowHandle)
+{
+  if (!aWindowHandle && mEmulatedWindowHandle && IsTopLevel()) {
+    ::DestroyWindow(mEmulatedWindowHandle);
+  }
+  mEmulatedWindowHandle = aWindowHandle;
 }
 
 mozilla::ipc::IPCResult

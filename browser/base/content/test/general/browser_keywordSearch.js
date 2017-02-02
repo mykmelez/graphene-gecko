@@ -20,14 +20,13 @@ function test() {
   waitForExplicitFinish();
 
   let windowObserver = {
-    observe: function(aSubject, aTopic, aData) {
+    observe(aSubject, aTopic, aData) {
       if (aTopic == "domwindowopened") {
         ok(false, "Alert window opened");
         let win = aSubject.QueryInterface(Ci.nsIDOMEventTarget);
         win.addEventListener("load", function() {
-          win.removeEventListener("load", arguments.callee, false);
           win.close();
-        }, false);
+        }, {once: true});
         executeSoon(finish);
       }
     }

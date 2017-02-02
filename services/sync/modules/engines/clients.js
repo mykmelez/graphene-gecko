@@ -251,9 +251,16 @@ ClientEngine.prototype = {
     const allCommands = this._readCommands();
     const clientCommands = allCommands[clientId] || [];
     if (hasDupeCommand(clientCommands, command)) {
-      return;
+      return false;
     }
     allCommands[clientId] = clientCommands.concat(command);
+    this._saveCommands(allCommands);
+    return true;
+  },
+
+  _removeClientCommands(clientId) {
+    const allCommands = this._readCommands();
+    delete allCommands[clientId];
     this._saveCommands(allCommands);
   },
 
@@ -477,7 +484,7 @@ ClientEngine.prototype = {
    * @param args Array of arguments/data for command
    * @param clientId Client to send command to
    */
-  _sendCommandToClient: function sendCommandToClient(command, args, clientId) {
+  _sendCommandToClient: function sendCommandToClient(command, args, clientId, flowID = null) {
     this._log.trace("Sending " + command + " to " + clientId);
 
     let client = this._store._remoteClients[clientId];
@@ -489,13 +496,23 @@ ClientEngine.prototype = {
     }
 
     let action = {
-      command: command,
-      args: args,
+      command,
+      args,
+      flowID: flowID || Utils.makeGUID(), // used for telemetry.
     };
 
-    this._log.trace("Client " + clientId + " got a new action: " + [command, args]);
-    this._addClientCommand(clientId, action);
-    this._tracker.addChangedID(clientId);
+    if (this._addClientCommand(clientId, action)) {
+      this._log.trace(`Client ${clientId} got a new action`, [command, args]);
+      this._tracker.addChangedID(clientId);
+      let deviceID;
+      try {
+        deviceID = this.service.identity.hashedDeviceID(clientId);
+      } catch (_) {}
+      this.service.recordTelemetryEvent("sendcommand", command, undefined,
+                                        { flowID: action.flowID, deviceID });
+    } else {
+      this._log.trace(`Client ${clientId} got a duplicate action`, [command, args]);
+    }
   },
 
   /**
@@ -515,8 +532,11 @@ ClientEngine.prototype = {
       let URIsToDisplay = [];
       // Process each command in order.
       for (let rawCommand of commands) {
-        let {command, args} = rawCommand;
+        let {command, args, flowID} = rawCommand;
         this._log.debug("Processing command: " + command + "(" + args + ")");
+
+        this.service.recordTelemetryEvent("processcommand", command, undefined,
+                                          { flowID });
 
         let engines = [args[0]];
         switch (command) {
@@ -570,27 +590,29 @@ ClientEngine.prototype = {
    * @param clientId
    *        Client ID to send command to. If undefined, send to all remote
    *        clients.
+   * @param flowID
+   *        A unique identifier used to track success for this operation across
+   *        devices.
    */
-  sendCommand: function sendCommand(command, args, clientId) {
+  sendCommand: function sendCommand(command, args, clientId, flowID = null) {
     let commandData = this._commands[command];
     // Don't send commands that we don't know about.
     if (!commandData) {
       this._log.error("Unknown command to send: " + command);
       return;
-    }
-    // Don't send a command with the wrong number of arguments.
-    else if (!args || args.length != commandData.args) {
+    } else if (!args || args.length != commandData.args) {
+      // Don't send a command with the wrong number of arguments.
       this._log.error("Expected " + commandData.args + " args for '" +
                       command + "', but got " + args);
       return;
     }
 
     if (clientId) {
-      this._sendCommandToClient(command, args, clientId);
+      this._sendCommandToClient(command, args, clientId, flowID);
     } else {
       for (let [id, record] of Object.entries(this._store._remoteClients)) {
         if (!record.stale) {
-          this._sendCommandToClient(command, args, id);
+          this._sendCommandToClient(command, args, id, flowID);
         }
       }
     }
@@ -651,6 +673,8 @@ ClientEngine.prototype = {
   _removeRemoteClient(id) {
     delete this._store._remoteClients[id];
     this._tracker.removeChangedID(id);
+    this._removeClientCommands(id);
+    this._modified.delete(id);
   },
 };
 
@@ -688,7 +712,7 @@ ClientStore.prototype = {
       fxAccounts.getDeviceId().then(id => cb(null, id), cb);
       try {
         record.fxaDeviceId = cb.wait();
-      } catch(error) {
+      } catch (error) {
         this._log.warn("failed to get fxa device id", error);
       }
       record.name = this.engine.localName;

@@ -10,7 +10,7 @@
 #include "nsISerializable.h"
 #include "nsIFileURL.h"
 #include "nsIStandardURL.h"
-#include "nsIUnicodeEncoder.h"
+#include "nsNCRFallbackEncoderWrapper.h"
 #include "nsIObserver.h"
 #include "nsCOMPtr.h"
 #include "nsURLHelper.h"
@@ -55,7 +55,6 @@ protected:
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIURI
-    NS_DECL_NSIURIWITHQUERY
     NS_DECL_NSIURL
     NS_DECL_NSIFILEURL
     NS_DECL_NSISTANDARDURL
@@ -143,7 +142,7 @@ public: /* internal -- HPUX compiler can't handle this being private */
         
         const char* mCharset;  // Caller should keep this alive for
                                // the life of the segment encoder
-        nsCOMPtr<nsIUnicodeEncoder> mEncoder;
+        mozilla::UniquePtr<nsNCRFallbackEncoderWrapper> mEncoder;
     };
     friend class nsSegmentEncoder;
 
@@ -302,9 +301,6 @@ private:
     static nsIIDNService               *gIDN;
     static char                         gHostLimitDigits[];
     static bool                         gInitialized;
-    static bool                         gEscapeUTF8;
-    static bool                         gAlwaysEncodeInUTF8;
-    static bool                         gEncodeQueryInUTF8;
 
 public:
 #ifdef DEBUG_DUMP_URLS_AT_SHUTDOWN

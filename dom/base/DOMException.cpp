@@ -82,7 +82,7 @@ enum DOM4ErrorTypeCodeMap {
 #define DOM4_MSG_DEF(name, message, nsresult) {(nsresult), name, #name, message},
 #define DOM_MSG_DEF(val, message) {(val), NS_ERROR_GET_CODE(val), #val, message},
 
-static const struct ResultStruct
+static constexpr struct ResultStruct
 {
   nsresult mNSResult;
   uint16_t mCode;
@@ -165,7 +165,6 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(Exception)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Exception)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLocation)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mData)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(Exception)

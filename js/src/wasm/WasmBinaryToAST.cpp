@@ -599,6 +599,8 @@ AstDecodeEnd(AstDecodeContext& c)
     if (!c.iter().readEnd(&kind, &type, nullptr))
         return false;
 
+    c.iter().popEnd();
+
     if (!c.push(AstDecodeStackItem(AstDecodeTerminationKind::End, type)))
         return false;
 
@@ -1044,7 +1046,7 @@ AstDecodeExpr(AstDecodeContext& c)
             return false;
         break;
       case uint16_t(Op::F32Const): {
-        RawF32 f32;
+        float f32;
         if (!c.iter().readF32Const(&f32))
             return false;
         tmp = new(c.lifo) AstConst(Val(f32));
@@ -1053,7 +1055,7 @@ AstDecodeExpr(AstDecodeContext& c)
         break;
       }
       case uint16_t(Op::F64Const): {
-        RawF64 f64;
+        double f64;
         if (!c.iter().readF64Const(&f64))
             return false;
         tmp = new(c.lifo) AstConst(Val(f64));
@@ -1412,8 +1414,14 @@ AstDecodeExpr(AstDecodeContext& c)
     }
 
     AstExpr* lastExpr = c.top().expr;
-    if (lastExpr)
-        lastExpr->setOffset(exprOffset);
+    if (lastExpr) {
+        // If last node is a 'first' node, the offset must assigned to it
+        // last child.
+        if (lastExpr->kind() == AstExprKind::First)
+            lastExpr->as<AstFirst>().exprs().back()->setOffset(exprOffset);
+        else
+            lastExpr->setOffset(exprOffset);
+    }
     return true;
 }
 
@@ -1471,6 +1479,7 @@ AstDecodeFunctionBody(AstDecodeContext &c, uint32_t funcIndex, AstFunc** func)
     if (!c.depths().append(c.exprs().length()))
         return false;
 
+    uint32_t endOffset = offset;
     while (c.d.currentPosition() < bodyEnd) {
         if (!AstDecodeExpr(c))
             return false;
@@ -1480,6 +1489,8 @@ AstDecodeFunctionBody(AstDecodeContext &c, uint32_t funcIndex, AstFunc** func)
             c.popBack();
             break;
         }
+
+        endOffset = c.d.currentOffset();
     }
 
     AstExprVector body(c.lifo);
@@ -1507,6 +1518,7 @@ AstDecodeFunctionBody(AstDecodeContext &c, uint32_t funcIndex, AstFunc** func)
     if (!*func)
         return false;
     (*func)->setOffset(offset);
+    (*func)->setEndOffset(endOffset);
 
     return true;
 }
@@ -1812,16 +1824,15 @@ AstDecodeEnvironment(AstDecodeContext& c)
 }
 
 static bool
-AstDecodeCodeSection(AstDecodeContext &c)
+AstDecodeCodeSection(AstDecodeContext& c)
 {
     uint32_t sectionStart, sectionSize;
-    if (!c.d.startSection(SectionId::Code, &sectionStart, &sectionSize, "code"))
+    if (!c.d.startSection(SectionId::Code, &c.env(), &sectionStart, &sectionSize, "code"))
         return false;
 
     if (sectionStart == Decoder::NotStarted) {
         if (c.env().numFuncDefs() != 0)
             return c.d.fail("expected function bodies");
-
         return true;
     }
 
@@ -1840,25 +1851,21 @@ AstDecodeCodeSection(AstDecodeContext &c)
             return false;
     }
 
-    if (!c.d.finishSection(sectionStart, sectionSize, "code"))
-        return false;
-
-    return true;
+    return c.d.finishSection(sectionStart, sectionSize, "code");
 }
 
 // Number of bytes to display in a single fragment of a data section (per line).
 static const size_t WRAP_DATA_BYTES = 30;
 
 static bool
-AstDecodeDataSection(AstDecodeContext &c)
+AstDecodeModuleTail(AstDecodeContext& c)
 {
     MOZ_ASSERT(c.module().memories().length() <= 1, "at most one memory in MVP");
 
-    DataSegmentVector segments;
-    if (!DecodeDataSection(c.d, c.env(), &segments))
+    if (!DecodeModuleTail(c.d, &c.env()))
         return false;
 
-    for (DataSegment& s : segments) {
+    for (DataSegment& s : c.env().dataSegments) {
         const uint8_t* src = c.d.begin() + s.bytecodeOffset;
         char16_t* buffer = static_cast<char16_t*>(c.lifo.alloc(s.length * sizeof(char16_t)));
         for (size_t i = 0; i < s.length; i++)
@@ -1884,21 +1891,20 @@ AstDecodeDataSection(AstDecodeContext &c)
 }
 
 bool
-wasm::BinaryToAst(JSContext* cx, const uint8_t* bytes, uint32_t length,
-                  LifoAlloc& lifo, AstModule** module)
+wasm::BinaryToAst(JSContext* cx, const uint8_t* bytes, uint32_t length, LifoAlloc& lifo,
+                  AstModule** module)
 {
     AstModule* result = new(lifo) AstModule(lifo);
-    if (!result->init())
+    if (!result || !result->init())
         return false;
 
     UniqueChars error;
-    Decoder d(bytes, bytes + length, &error);
+    Decoder d(bytes, bytes + length, &error, /* resilient */ true);
     AstDecodeContext c(cx, lifo, d, *result, true);
 
     if (!AstDecodeEnvironment(c) ||
         !AstDecodeCodeSection(c) ||
-        !AstDecodeDataSection(c) ||
-        !DecodeUnknownSections(c.d))
+        !AstDecodeModuleTail(c))
     {
         if (error) {
             JS_ReportErrorNumberASCII(c.cx, GetErrorMessage, nullptr, JSMSG_WASM_COMPILE_ERROR,

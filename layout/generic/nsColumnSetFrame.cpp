@@ -83,7 +83,7 @@ nsColumnSetFrame::PaintColumnRule(nsRenderingContext* aCtx,
     return;
 
   nscolor ruleColor =
-    GetVisitedDependentColor(eCSSProperty_column_rule_color);
+    GetVisitedDependentColor(&nsStyleColumn::mColumnRuleColor);
 
   // In order to re-use a large amount of code, we treat the column rule as a border.
   // We create a new border style object and fill in all the details of the column rule as
@@ -205,6 +205,7 @@ nsColumnSetFrame::ChooseColumnStrategy(const ReflowInput& aReflowInput,
 {
   nscoord knownFeasibleBSize = aFeasibleBSize;
   nscoord knownInfeasibleBSize = aInfeasibleBSize;
+  WritingMode wm = aReflowInput.GetWritingMode();
 
   const nsStyleColumn* colStyle = StyleColumn();
   nscoord availContentISize = GetAvailableContentISize(aReflowInput);
@@ -212,7 +213,7 @@ nsColumnSetFrame::ChooseColumnStrategy(const ReflowInput& aReflowInput,
     availContentISize = aReflowInput.ComputedISize();
   }
 
-  nscoord consumedBSize = GetConsumedBSize();
+  nscoord consumedBSize = ConsumedBSize(wm);
 
   // The effective computed height is the height of the current continuation
   // of the column set frame. This should be the same as the computed height

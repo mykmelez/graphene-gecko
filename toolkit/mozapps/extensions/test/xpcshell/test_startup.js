@@ -120,7 +120,7 @@ function run_test() {
   let obs = AM_Cc["@mozilla.org/observer-service;1"].
     getService(AM_Ci.nsIObserverService);
   obs.addObserver({
-    observe: function(aSubject, aTopic, aData) {
+    observe(aSubject, aTopic, aData) {
       gCachePurged = true;
     }
   }, "startupcache-invalidate", false);
@@ -643,7 +643,7 @@ function run_test_8() {
 
 // More hiding and revealing
 function run_test_9() {
-  Services.prefs.clearUserPref("extensions.enabledScopes", 0);
+  Services.prefs.clearUserPref("extensions.enabledScopes");
 
   var dest = userDir.clone();
   dest.append(do_get_expected_addon_name("addon1@tests.mozilla.org"));

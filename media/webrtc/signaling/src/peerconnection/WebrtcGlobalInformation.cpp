@@ -34,7 +34,7 @@
 #include "runnable_utils.h"
 #include "PeerConnectionCtx.h"
 #include "PeerConnectionImpl.h"
-#include "webrtc/system_wrappers/interface/trace.h"
+#include "webrtc/system_wrappers/include/trace.h"
 
 static const char* logTag = "WebrtcGlobalInformation";
 
@@ -1081,7 +1081,7 @@ static void StoreLongTermICEStatisticsImpl_m(
     uint32_t candBitmask = GetCandidateIpAndTransportMask(&cand);
 
     // Note: shift values need to result in the above enum table
-    if (cand.mType.Value() == RTCStatsType::Localcandidate) {
+    if (cand.mType.Value() == RTCStatsType::Local_candidate) {
       candBitmask <<= kLocalShift;
     }
 

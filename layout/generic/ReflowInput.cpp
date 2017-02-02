@@ -852,6 +852,7 @@ ReflowInput::InitFrameType(nsIAtom* aFrameType)
     case StyleDisplay::Flex:
     case StyleDisplay::WebkitBox:
     case StyleDisplay::Grid:
+    case StyleDisplay::FlowRoot:
     case StyleDisplay::RubyTextContainer:
       frameType = NS_CSS_FRAME_TYPE_BLOCK;
       break;
@@ -2388,8 +2389,12 @@ ReflowInput::InitConstraints(nsPresContext*     aPresContext,
       nsIAtom* alignCBType = alignCB ? alignCB->GetType() : nullptr;
       if (alignCBType == nsGkAtoms::tableWrapperFrame &&
           alignCB->GetParent()) {
-        alignCB = alignCB->GetParent();
-        alignCBType = alignCB->GetType();
+        auto parentCBType = alignCB->GetParent()->GetType();
+        // XXX grid-specific for now; maybe remove this check after we address bug 799725
+        if (parentCBType == nsGkAtoms::gridContainerFrame) {
+          alignCB = alignCB->GetParent();
+          alignCBType = parentCBType;
+        }
       }
       if (alignCBType == nsGkAtoms::gridContainerFrame) {
         // Shrink-wrap grid items that will be aligned (rather than stretched)

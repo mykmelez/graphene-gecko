@@ -33,6 +33,7 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "nsIWebBrowserChrome3.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "AudioChannelService.h"
@@ -68,6 +69,7 @@ class PluginWidgetChild;
 namespace dom {
 
 class TabChild;
+class TabGroup;
 class ClonedMessageData;
 class TabChildBase;
 
@@ -336,11 +338,13 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvShow(const ScreenIntSize& aSize,
            const ShowInfo& aInfo,
-           const TextureFactoryIdentifier& aTextureFactoryIdentifier,
-           const uint64_t& aLayersId,
-           PRenderFrameChild* aRenderFrame,
            const bool& aParentIsActive,
            const nsSizeMode& aSizeMode) override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvInitRendering(const TextureFactoryIdentifier& aTextureFactoryIdentifier,
+                    const uint64_t& aLayersId,
+                    PRenderFrameChild* aRenderFrame) override;
 
   virtual mozilla::ipc::IPCResult
   RecvUpdateDimensions(const CSSRect& aRect,
@@ -562,7 +566,8 @@ public:
   void ClearCachedResources();
   void InvalidateLayers();
   void ReinitRendering();
-  void CompositorUpdated(const TextureFactoryIdentifier& aNewIdentifier);
+  void CompositorUpdated(const TextureFactoryIdentifier& aNewIdentifier,
+                         uint64_t aDeviceResetSeqNo);
 
   static inline TabChild* GetFrom(nsIDOMWindow* aWindow)
   {
@@ -616,7 +621,7 @@ public:
     return mParentIsActive;
   }
 
-  bool AsyncPanZoomEnabled() const { return mAsyncPanZoomEnabled; }
+  bool AsyncPanZoomEnabled() const;
 
   virtual ScreenIntSize GetInnerSize() override;
 
@@ -656,14 +661,22 @@ public:
   uintptr_t GetNativeWindowHandle() const { return mNativeWindowHandle; }
 #endif
 
-  bool TakeIsFreshProcess()
+  // These methods return `true` if this TabChild is currently awaiting a
+  // Large-Allocation header.
+  bool TakeAwaitingLargeAlloc();
+  bool IsAwaitingLargeAlloc();
+
+  // Returns `true` if this this process was created to load a docshell in a
+  // "Fresh Process". This value is initialized to `false`, and is set to `true`
+  // in RecvSetFreshProcess.
+  static bool InLargeAllocProcess()
   {
-    bool wasFreshProcess = mIsFreshProcess;
-    mIsFreshProcess = false;
-    return wasFreshProcess;
+    return sInLargeAllocProcess;
   }
 
   already_AddRefed<nsISHistory> GetRelatedSHistory();
+
+  mozilla::dom::TabGroup* TabGroup();
 
 protected:
   virtual ~TabChild();
@@ -695,14 +708,15 @@ protected:
   virtual mozilla::ipc::IPCResult RecvMenuKeyboardListenerInstalled(
     const bool& aInstalled) override;
 
-  virtual mozilla::ipc::IPCResult RecvNotifyAttachGroupedSessionHistory(const uint32_t& aOffset) override;
+  virtual mozilla::ipc::IPCResult RecvNotifyAttachGroupedSHistory(const uint32_t& aOffset) override;
 
-  virtual mozilla::ipc::IPCResult RecvNotifyPartialSessionHistoryActive(const uint32_t& aGlobalLength,
-                                                                        const uint32_t& aTargetLocalIndex) override;
+  virtual mozilla::ipc::IPCResult RecvNotifyPartialSHistoryActive(const uint32_t& aGlobalLength,
+                                                                  const uint32_t& aTargetLocalIndex) override;
 
-  virtual mozilla::ipc::IPCResult RecvNotifyPartialSessionHistoryDeactive() override;
+  virtual mozilla::ipc::IPCResult RecvNotifyPartialSHistoryDeactive() override;
 
-  virtual mozilla::ipc::IPCResult RecvSetFreshProcess() override;
+  virtual mozilla::ipc::IPCResult RecvSetIsLargeAllocation(const bool& aIsLA,
+                                                           const bool& aNewProcess) override;
 
 private:
   void HandleDoubleTap(const CSSPoint& aPoint, const Modifiers& aModifiers,
@@ -743,6 +757,10 @@ private:
     mUnscaledInnerSize = aSize;
   }
 
+  bool SkipRepeatedKeyEvent(const WidgetKeyboardEvent& aEvent);
+
+  void UpdateRepeatedKeyEventEndTime(const WidgetKeyboardEvent& aEvent);
+
   class DelayedDeleteRunnable;
 
   TextureFactoryIdentifier mTextureFactoryIdentifier;
@@ -773,6 +791,10 @@ private:
   LayoutDeviceIntPoint mChromeDisp;
   TabId mUniqueId;
 
+  // Holds the compositor options for the compositor rendering this tab,
+  // once we find out which compositor that is.
+  Maybe<mozilla::layers::CompositorOptions> mCompositorOptions;
+
   friend class ContentChild;
   float mDPI;
   int32_t mRounding;
@@ -782,11 +804,17 @@ private:
 
   bool mIPCOpen;
   bool mParentIsActive;
-  bool mAsyncPanZoomEnabled;
   CSSSize mUnscaledInnerSize;
   bool mDidSetRealShowInfo;
   bool mDidLoadURLInit;
-  bool mIsFreshProcess;
+  bool mAwaitingLA;
+
+  bool mSkipKeyPress;
+
+  // Store the end time of the handling of the last repeated keydown/keypress
+  // event so that in case event handling takes time, some repeated events can
+  // be skipped to not flood child process.
+  mozilla::TimeStamp mRepeatedKeyEventTime;
 
   AutoTArray<bool, NUMBER_OF_AUDIO_CHANNELS> mAudioChannelsActive;
 
@@ -799,6 +827,8 @@ private:
   // The handle associated with the native window that contains this tab
   uintptr_t mNativeWindowHandle;
 #endif // defined(XP_WIN)
+
+  static bool sInLargeAllocProcess;
 
   DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

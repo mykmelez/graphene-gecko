@@ -19,7 +19,6 @@
 #include "mozilla/SheetType.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StyleComplexColor.h"
-#include "mozilla/StyleStructContext.h"
 #include "mozilla/UniquePtr.h"
 #include "nsColor.h"
 #include "nsCoord.h"
@@ -155,9 +154,9 @@ struct Position {
 // The lifetime of these objects is managed by the presshell's arena.
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
 {
-  nsStyleFont(const nsFont& aFont, StyleStructContext aContext);
+  nsStyleFont(const nsFont& aFont, const nsPresContext* aContext);
   nsStyleFont(const nsStyleFont& aStyleFont);
-  explicit nsStyleFont(StyleStructContext aContext);
+  explicit nsStyleFont(const nsPresContext* aContext);
   ~nsStyleFont() {
     MOZ_COUNT_DTOR(nsStyleFont);
   }
@@ -181,14 +180,14 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
    * aSize is allowed to be negative, but the caller is expected to deal with
    * negative results.  The result is clamped to nscoord_MIN .. nscoord_MAX.
    */
-  static nscoord ZoomText(StyleStructContext aContext, nscoord aSize);
+  static nscoord ZoomText(const nsPresContext* aPresContext, nscoord aSize);
   /**
    * Return aSize divided by the current text zoom factor (in aPresContext).
    * aSize is allowed to be negative, but the caller is expected to deal with
    * negative results.  The result is clamped to nscoord_MIN .. nscoord_MAX.
    */
   static nscoord UnZoomText(nsPresContext* aPresContext, nscoord aSize);
-  static already_AddRefed<nsIAtom> GetLanguage(StyleStructContext aPresContext);
+  static already_AddRefed<nsIAtom> GetLanguage(const nsPresContext* aPresContext);
 
   void* operator new(size_t sz, nsStyleFont* aSelf) { return aSelf; }
   void* operator new(size_t sz, nsPresContext* aContext) {
@@ -482,9 +481,12 @@ struct nsStyleImage
                                bool* aIsEntireImage = nullptr) const;
 
   /**
-   * Starts the decoding of a image.
+   * Starts the decoding of a image. Returns true if the current frame of the
+   * image is complete. The return value is intended to be used instead of
+   * IsComplete because IsComplete may not be up to date if notifications
+   * from decoding are pending because they are being sent async.
    */
-  nsresult StartDecoding() const;
+  bool StartDecoding() const;
   /**
    * @return true if the item is definitely opaque --- i.e., paints every
    * pixel within its bounds opaquely, and the bounds contains at least a pixel.
@@ -558,7 +560,7 @@ private:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColor
 {
-  explicit nsStyleColor(StyleStructContext aContext);
+  explicit nsStyleColor(const nsPresContext* aContext);
   nsStyleColor(const nsStyleColor& aOther);
   ~nsStyleColor() {
     MOZ_COUNT_DTOR(nsStyleColor);
@@ -621,6 +623,13 @@ public:
   }
   bool operator!=(const nsStyleAutoArray& aOther) const {
     return !(*this == aOther);
+  }
+
+  nsStyleAutoArray& operator=(nsStyleAutoArray&& aOther) {
+    mFirstElement = aOther.mFirstElement;
+    mOtherElements.SwapElements(aOther.mOtherElements);
+
+    return *this;
   }
 
   size_t Length() const {
@@ -784,6 +793,8 @@ struct nsStyleImageLayers {
   struct Layer;
   friend struct Layer;
   struct Layer {
+    typedef mozilla::StyleGeometryBox StyleGeometryBox;
+
     nsStyleImage  mImage;         // [reset]
     RefPtr<mozilla::css::URLValueData> mSourceURI;  // [reset]
                                   // mask-only property
@@ -795,9 +806,9 @@ struct nsStyleImageLayers {
                                   // or an ImageValue.)
     mozilla::Position mPosition;  // [reset]
     Size          mSize;          // [reset]
-    uint8_t       mClip;          // [reset] See nsStyleConsts.h
+    StyleGeometryBox  mClip;      // [reset] See nsStyleConsts.h
     MOZ_INIT_OUTSIDE_CTOR
-      uint8_t     mOrigin;        // [reset] See nsStyleConsts.h
+      StyleGeometryBox mOrigin;   // [reset] See nsStyleConsts.h
     uint8_t       mAttachment;    // [reset] See nsStyleConsts.h
                                   // background-only property
                                   // This property is used for background layer
@@ -895,6 +906,8 @@ struct nsStyleImageLayers {
 
   bool HasLayerWithImage() const;
   nsStyleImageLayers& operator=(const nsStyleImageLayers& aOther);
+  nsStyleImageLayers& operator=(nsStyleImageLayers&& aOther);
+  bool operator==(const nsStyleImageLayers& aOther) const;
 
   static const nsCSSPropertyID kBackgroundLayerTable[];
   static const nsCSSPropertyID kMaskLayerTable[];
@@ -908,7 +921,7 @@ struct nsStyleImageLayers {
 };
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
-  explicit nsStyleBackground(StyleStructContext aContext);
+  explicit nsStyleBackground(const nsPresContext* aContext);
   nsStyleBackground(const nsStyleBackground& aOther);
   ~nsStyleBackground();
 
@@ -937,8 +950,13 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
     return nsChangeHint(0);
   }
 
+  // Return the background color as nscolor.
+  nscolor BackgroundColor(const nsIFrame* aFrame) const;
+  nscolor BackgroundColor(nsStyleContext* aContext) const;
+
   // True if this background is completely transparent.
-  bool IsTransparent() const;
+  bool IsTransparent(const nsIFrame* aFrame) const;
+  bool IsTransparent(nsStyleContext* aContext) const;
 
   // We have to take slower codepaths for fixed background attachment,
   // but we don't want to do that when there's no image.
@@ -953,7 +971,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
   const nsStyleImageLayers::Layer& BottomLayer() const { return mImage.BottomLayer(); }
 
   nsStyleImageLayers mImage;
-  nscolor mBackgroundColor;       // [reset]
+  mozilla::StyleComplexColor mBackgroundColor;       // [reset]
 };
 
 #define NS_SPACING_MARGIN   0
@@ -963,7 +981,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleMargin
 {
-  explicit nsStyleMargin(StyleStructContext aContext);
+  explicit nsStyleMargin(const nsPresContext* aContext);
   nsStyleMargin(const nsStyleMargin& aMargin);
   ~nsStyleMargin() {
     MOZ_COUNT_DTOR(nsStyleMargin);
@@ -1011,7 +1029,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleMargin
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
 {
-  explicit nsStylePadding(StyleStructContext aContext);
+  explicit nsStylePadding(const nsPresContext* aContext);
   nsStylePadding(const nsStylePadding& aPadding);
   ~nsStylePadding() {
     MOZ_COUNT_DTOR(nsStylePadding);
@@ -1219,7 +1237,7 @@ static bool IsVisibleBorderStyle(uint8_t aStyle)
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
 {
-  explicit nsStyleBorder(StyleStructContext aContext);
+  explicit nsStyleBorder(const nsPresContext* aContext);
   nsStyleBorder(const nsStyleBorder& aBorder);
   ~nsStyleBorder();
 
@@ -1401,6 +1419,22 @@ public:
     mozilla::StyleComplexColor mBorderColor[4];
   };
 
+  static mozilla::StyleComplexColor nsStyleBorder::*
+  BorderColorFieldFor(mozilla::Side aSide) {
+    switch (aSide) {
+      case mozilla::eSideTop:
+        return &nsStyleBorder::mBorderTopColor;
+      case mozilla::eSideRight:
+        return &nsStyleBorder::mBorderRightColor;
+      case mozilla::eSideBottom:
+        return &nsStyleBorder::mBorderBottomColor;
+      case mozilla::eSideLeft:
+        return &nsStyleBorder::mBorderLeftColor;
+    }
+    MOZ_ASSERT_UNREACHABLE("Unknown side");
+    return nullptr;
+  }
+
 protected:
   // mComputedBorder holds the CSS2.1 computed border-width values.
   // In particular, these widths take into account the border-style
@@ -1445,7 +1479,7 @@ ASSERT_BORDER_COLOR_FIELD(Left);
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
 {
-  explicit nsStyleOutline(StyleStructContext aContext);
+  explicit nsStyleOutline(const nsPresContext* aContext);
   nsStyleOutline(const nsStyleOutline& aOutline);
   ~nsStyleOutline() {
     MOZ_COUNT_DTOR(nsStyleOutline);
@@ -1521,7 +1555,7 @@ private:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList
 {
-  explicit nsStyleList(StyleStructContext aContext);
+  explicit nsStyleList(const nsPresContext* aContext);
   nsStyleList(const nsStyleList& aStyleList);
   ~nsStyleList();
 
@@ -1747,7 +1781,7 @@ struct nsStyleGridTemplate
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
 {
-  explicit nsStylePosition(StyleStructContext aContext);
+  explicit nsStylePosition(const nsPresContext* aContext);
   nsStylePosition(const nsStylePosition& aOther);
   ~nsStylePosition();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -1984,7 +2018,7 @@ struct nsStyleTextOverflow
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTextReset
 {
-  explicit nsStyleTextReset(StyleStructContext aContext);
+  explicit nsStyleTextReset(const nsPresContext* aContext);
   nsStyleTextReset(const nsStyleTextReset& aOther);
   ~nsStyleTextReset();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -2033,7 +2067,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTextReset
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
 {
-  explicit nsStyleText(StyleStructContext aContext);
+  explicit nsStyleText(const nsPresContext* aContext);
   nsStyleText(const nsStyleText& aOther);
   ~nsStyleText();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -2072,7 +2106,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
   uint8_t mWhiteSpace;                  // [inherited] see nsStyleConsts.h
   uint8_t mWordBreak;                   // [inherited] see nsStyleConsts.h
   uint8_t mOverflowWrap;                // [inherited] see nsStyleConsts.h
-  uint8_t mHyphens;                     // [inherited] see nsStyleConsts.h
+  mozilla::StyleHyphens mHyphens;       // [inherited] see nsStyleConsts.h
   uint8_t mRubyAlign;                   // [inherited] see nsStyleConsts.h
   uint8_t mRubyPosition;                // [inherited] see nsStyleConsts.h
   uint8_t mTextSizeAdjust;              // [inherited] see nsStyleConsts.h
@@ -2250,7 +2284,7 @@ protected:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVisibility
 {
-  explicit nsStyleVisibility(StyleStructContext aContext);
+  explicit nsStyleVisibility(const nsPresContext* aContext);
   nsStyleVisibility(const nsStyleVisibility& aVisibility);
   ~nsStyleVisibility() {
     MOZ_COUNT_DTOR(nsStyleVisibility);
@@ -2751,14 +2785,14 @@ private:
   ReferenceBox mReferenceBox = ReferenceBox::NoBox;
 };
 
-using StyleClipPath = StyleShapeSource<StyleClipPathGeometryBox>;
+using StyleClipPath = StyleShapeSource<StyleGeometryBox>;
 using StyleShapeOutside = StyleShapeSource<StyleShapeOutsideShapeBox>;
 
 } // namespace mozilla
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
 {
-  explicit nsStyleDisplay(StyleStructContext aContext);
+  explicit nsStyleDisplay(const nsPresContext* aContext);
   nsStyleDisplay(const nsStyleDisplay& aOther);
   ~nsStyleDisplay() {
     MOZ_COUNT_DTOR(nsStyleDisplay);
@@ -2883,7 +2917,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
     return mozilla::StyleDisplay::Block == mDisplay ||
            mozilla::StyleDisplay::ListItem == mDisplay ||
            mozilla::StyleDisplay::InlineBlock == mDisplay ||
-           mozilla::StyleDisplay::TableCaption == mDisplay;
+           mozilla::StyleDisplay::TableCaption == mDisplay ||
+           mozilla::StyleDisplay::FlowRoot == mDisplay;
     // Should TABLE_CELL be included here?  They have
     // block frames nested inside of them.
     // (But please audit all callers before changing.)
@@ -2895,7 +2930,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
            mozilla::StyleDisplay::WebkitBox == mDisplay ||
            mozilla::StyleDisplay::Grid == mDisplay ||
            mozilla::StyleDisplay::ListItem == mDisplay ||
-           mozilla::StyleDisplay::Table == mDisplay;
+           mozilla::StyleDisplay::Table == mDisplay ||
+           mozilla::StyleDisplay::FlowRoot == mDisplay;
   }
 
   static bool IsDisplayTypeInlineOutside(mozilla::StyleDisplay aDisplay) {
@@ -3072,7 +3108,7 @@ public:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTable
 {
-  explicit nsStyleTable(StyleStructContext aContext);
+  explicit nsStyleTable(const nsPresContext* aContext);
   nsStyleTable(const nsStyleTable& aOther);
   ~nsStyleTable();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3104,7 +3140,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTable
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTableBorder
 {
-  explicit nsStyleTableBorder(StyleStructContext aContext);
+  explicit nsStyleTableBorder(const nsPresContext* aContext);
   nsStyleTableBorder(const nsStyleTableBorder& aOther);
   ~nsStyleTableBorder();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3154,23 +3190,11 @@ enum nsStyleContentType {
   eStyleContentType_Uninitialized
 };
 
-struct nsStyleContentData
+class nsStyleContentData
 {
-  nsStyleContentType  mType;
-  union {
-    char16_t *mString;
-    imgRequestProxy *mImage;
-    nsCSSValue::Array* mCounters;
-  } mContent;
-#ifdef DEBUG
-  bool mImageTracked;
-#endif
-
+public:
   nsStyleContentData()
     : mType(eStyleContentType_Uninitialized)
-#ifdef DEBUG
-    , mImageTracked(false)
-#endif
   {
     MOZ_COUNT_CTOR(nsStyleContentData);
     mContent.mString = nullptr;
@@ -3185,16 +3209,84 @@ struct nsStyleContentData
     return !(*this == aOther);
   }
 
-  void TrackImage(mozilla::dom::ImageTracker* aImageTracker);
-  void UntrackImage(mozilla::dom::ImageTracker* aImageTracker);
+  nsStyleContentType GetType() const { return mType; }
 
-  void SetImage(already_AddRefed<imgRequestProxy> aRequest)
+  char16_t* GetString() const
   {
-    MOZ_ASSERT(!mImageTracked,
-               "Setting a new image without untracking the old one!");
-    MOZ_ASSERT(mType == eStyleContentType_Image, "Wrong type!");
-    mContent.mImage = aRequest.take();
+    MOZ_ASSERT(mType == eStyleContentType_String ||
+               mType == eStyleContentType_Attr);
+    return mContent.mString;
   }
+
+  nsCSSValue::Array* GetCounters() const
+  {
+    MOZ_ASSERT(mType == eStyleContentType_Counter ||
+               mType == eStyleContentType_Counters);
+    return mContent.mCounters;
+  }
+
+  nsStyleImageRequest* GetImageRequest() const
+  {
+    MOZ_ASSERT(mType == eStyleContentType_Image);
+    return mContent.mImage;
+  }
+
+  imgRequestProxy* GetImage() const
+  {
+    return GetImageRequest()->get();
+  }
+
+  void SetKeyword(nsStyleContentType aType)
+  {
+    MOZ_ASSERT(aType == eStyleContentType_OpenQuote ||
+               aType == eStyleContentType_CloseQuote ||
+               aType == eStyleContentType_NoOpenQuote ||
+               aType == eStyleContentType_NoCloseQuote ||
+               aType == eStyleContentType_AltContent);
+    MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
+               "should only initialize nsStyleContentData once");
+    mType = aType;
+  }
+
+  void SetString(nsStyleContentType aType, const char16_t* aString)
+  {
+    MOZ_ASSERT(aType == eStyleContentType_String ||
+               aType == eStyleContentType_Attr);
+    MOZ_ASSERT(aString);
+    MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
+               "should only initialize nsStyleContentData once");
+    mType = aType;
+    mContent.mString = NS_strdup(aString);
+  }
+
+  void SetCounters(nsStyleContentType aType, nsCSSValue::Array* aCounters)
+  {
+    MOZ_ASSERT(aType == eStyleContentType_Counter ||
+               aType == eStyleContentType_Counters);
+    MOZ_ASSERT(aCounters);
+    MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
+               "should only initialize nsStyleContentData once");
+    mType = aType;
+    mContent.mCounters = aCounters;
+    mContent.mCounters->AddRef();
+  }
+
+  void SetImageRequest(already_AddRefed<nsStyleImageRequest> aRequest)
+  {
+    MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
+               "should only initialize nsStyleContentData once");
+    mType = eStyleContentType_Image;
+    mContent.mImage = aRequest.take();
+    MOZ_ASSERT(mContent.mImage);
+  }
+
+private:
+  nsStyleContentType mType;
+  union {
+    char16_t *mString;
+    nsStyleImageRequest* mImage;
+    nsCSSValue::Array* mCounters;
+  } mContent;
 };
 
 struct nsStyleCounterData
@@ -3213,7 +3305,7 @@ struct nsStyleCounterData
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleContent
 {
-  explicit nsStyleContent(StyleStructContext aContext);
+  explicit nsStyleContent(const nsPresContext* aContext);
   nsStyleContent(const nsStyleContent& aContent);
   ~nsStyleContent();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3294,7 +3386,7 @@ protected:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUIReset
 {
-  explicit nsStyleUIReset(StyleStructContext aContext);
+  explicit nsStyleUIReset(const nsPresContext* aContext);
   nsStyleUIReset(const nsStyleUIReset& aOther);
   ~nsStyleUIReset();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3313,7 +3405,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUIReset
   nsChangeHint CalcDifference(const nsStyleUIReset& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_ReconstructFrame |
-           NS_STYLE_HINT_REFLOW;
+           NS_STYLE_HINT_REFLOW |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -3354,7 +3447,7 @@ struct nsCursorImage
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
 {
-  explicit nsStyleUserInterface(StyleStructContext aContext);
+  explicit nsStyleUserInterface(const nsPresContext* aContext);
   nsStyleUserInterface(const nsStyleUserInterface& aOther);
   ~nsStyleUserInterface();
 
@@ -3393,13 +3486,14 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
 
   uint8_t mCursor;                            // [inherited] See nsStyleConsts.h
   nsTArray<nsCursorImage> mCursorImages;      // [inherited] images and coords
+  mozilla::StyleComplexColor mCaretColor;     // [inherited]
 
   inline uint8_t GetEffectivePointerEvents(nsIFrame* aFrame) const;
 };
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleXUL
 {
-  explicit nsStyleXUL(StyleStructContext aContext);
+  explicit nsStyleXUL(const nsPresContext* aContext);
   nsStyleXUL(const nsStyleXUL& aSource);
   ~nsStyleXUL();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3439,7 +3533,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleXUL
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
 {
-  explicit nsStyleColumn(StyleStructContext aContext);
+  explicit nsStyleColumn(const nsPresContext* aContext);
   nsStyleColumn(const nsStyleColumn& aSource);
   ~nsStyleColumn();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3564,7 +3658,7 @@ private:
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
 {
-  explicit nsStyleSVG(StyleStructContext aContext);
+  explicit nsStyleSVG(const nsPresContext* aContext);
   nsStyleSVG(const nsStyleSVG& aSource);
   ~nsStyleSVG();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3755,7 +3849,7 @@ struct nsTArray_CopyChooser<nsStyleFilter>
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
 {
-  explicit nsStyleSVGReset(StyleStructContext aContext);
+  explicit nsStyleSVGReset(const nsPresContext* aContext);
   nsStyleSVGReset(const nsStyleSVGReset& aSource);
   ~nsStyleSVGReset();
 
@@ -3812,7 +3906,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVariables
 {
-  explicit nsStyleVariables(StyleStructContext aContext);
+  nsStyleVariables();
+  explicit nsStyleVariables(const nsPresContext* aContext);
   nsStyleVariables(const nsStyleVariables& aSource);
   ~nsStyleVariables();
   void FinishStyle(nsPresContext* aPresContext) {}
@@ -3843,7 +3938,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVariables
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleEffects
 {
-  explicit nsStyleEffects(StyleStructContext aContext);
+  explicit nsStyleEffects(const nsPresContext* aContext);
   nsStyleEffects(const nsStyleEffects& aSource);
   ~nsStyleEffects();
   void FinishStyle(nsPresContext* aPresContext) {}

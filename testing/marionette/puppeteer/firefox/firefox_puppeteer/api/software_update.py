@@ -4,12 +4,12 @@
 
 import ConfigParser
 import os
+import re
 
 import mozinfo
 
 from firefox_puppeteer.base import BaseLib
 from firefox_puppeteer.api.appinfo import AppInfo
-from firefox_puppeteer.api.prefs import Preferences
 
 
 class ActiveUpdate(BaseLib):
@@ -169,7 +169,6 @@ class SoftwareUpdate(BaseLib):
         BaseLib.__init__(self, marionette)
 
         self.app_info = AppInfo(marionette)
-        self.prefs = Preferences(marionette)
 
         self._mar_channels = MARChannels(marionette)
         self._active_update = ActiveUpdate(marionette)
@@ -221,7 +220,7 @@ class SoftwareUpdate(BaseLib):
         return {
             'buildid': self.app_info.appBuildID,
             'channel': self.update_channel,
-            'disabled_addons': self.prefs.get_pref(self.PREF_DISABLED_ADDONS),
+            'disabled_addons': self.marionette.get_pref(self.PREF_DISABLED_ADDONS),
             'locale': self.app_info.locale,
             'mar_channels': self.mar_channels.channels,
             'update_url': update_url,
@@ -316,7 +315,8 @@ class SoftwareUpdate(BaseLib):
     @property
     def update_channel(self):
         """Return the currently used update channel."""
-        return self.prefs.get_pref(self.PREF_APP_UPDATE_CHANNEL, default_branch=True)
+        return self.marionette.get_pref(self.PREF_APP_UPDATE_CHANNEL,
+                                        default_branch=True)
 
     @update_channel.setter
     def update_channel(self, channel):
@@ -325,12 +325,14 @@ class SoftwareUpdate(BaseLib):
         :param channel: New update channel to use
 
         """
-        self.prefs.set_pref(self.PREF_APP_UPDATE_CHANNEL, channel, default_branch=True)
+        writer = UpdateChannelWriter(self.marionette)
+        writer.set_channel(channel)
 
     @property
     def update_url(self):
         """Return the update URL used for update checks."""
-        return self.prefs.get_pref(self.PREF_APP_UPDATE_URL, default_branch=True)
+        return self.marionette.get_pref(self.PREF_APP_UPDATE_URL,
+                                        default_branch=True)
 
     @update_url.setter
     def update_url(self, url):
@@ -339,7 +341,8 @@ class SoftwareUpdate(BaseLib):
         :param url: New update URL to use
 
         """
-        self.prefs.set_pref(self.PREF_APP_UPDATE_URL, url, default_branch=True)
+        self.marionette.set_pref(self.PREF_APP_UPDATE_URL, url,
+                                 default_branch=True)
 
     @property
     def update_type(self):
@@ -387,3 +390,33 @@ class SoftwareUpdate(BaseLib):
             url += 'force=1'
 
         return url
+
+
+class UpdateChannelWriter(BaseLib):
+    """Class to handle the update channel as listed in channel-prefs.js"""
+    REGEX_UPDATE_CHANNEL = re.compile(r'("app\.update\.channel", ")([^"].*)(?=")')
+
+    def __init__(self, *args, **kwargs):
+        BaseLib.__init__(self, *args, **kwargs)
+
+        self.file_path = self.marionette.execute_script("""
+          Components.utils.import('resource://gre/modules/Services.jsm');
+
+          let file = Services.dirsvc.get('PrfDef', Components.interfaces.nsIFile);
+          file.append('channel-prefs.js');
+
+          return file.path;
+        """)
+
+    def set_channel(self, channel):
+        """Set default update channel.
+
+        :param channel: New default update channel
+        """
+        with open(self.file_path) as f:
+            file_contents = f.read()
+
+        new_content = re.sub(
+            self.REGEX_UPDATE_CHANNEL, r'\g<1>' + channel, file_contents)
+        with open(self.file_path, 'w') as f:
+            f.write(new_content)

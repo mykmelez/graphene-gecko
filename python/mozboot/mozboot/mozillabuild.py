@@ -35,10 +35,13 @@ class MozillaBuildBootstrapper(BaseBootstrapper):
             with open(mozillabuild_dir + 'msys/etc/profile.d/profile-rustup.sh', 'wb') as f:
                 f.write('#!/bash/sh\n')
                 f.write('if test -n "$MOZILLABUILD"; then\n')
-                f.write('    WIN_HOME=$(cd "$HOME" && pwd)\n')
+                f.write('    WIN_HOME=$(command cd "$HOME" && pwd)\n')
                 f.write('    PATH="$WIN_HOME/.cargo/bin:$PATH"\n')
                 f.write('    export PATH\n')
                 f.write('fi')
+            _, cargo_bin = self.cargo_home()
+            rustup = os.path.join(cargo_bin, 'rustup')
+            self.run([rustup, 'target', 'add', 'i686-pc-windows-msvc'])
         finally:
             try:
                 os.remove(rustup_init)

@@ -29,8 +29,13 @@ const ConsoleOutput = createClass({
     messagesUi: PropTypes.object.isRequired,
     serviceContainer: PropTypes.shape({
       attachRefToHud: PropTypes.func.isRequired,
+      openContextMenu: PropTypes.func.isRequired,
     }),
     autoscroll: PropTypes.bool.isRequired,
+    dispatch: PropTypes.func.isRequired,
+    timestampsVisible: PropTypes.bool,
+    groups: PropTypes.object.isRequired,
+    messagesTableData: PropTypes.object.isRequired,
   },
 
   componentDidMount() {
@@ -56,6 +61,12 @@ const ConsoleOutput = createClass({
     if (this.shouldScrollBottom) {
       scrollToBottom(this.outputNode);
     }
+  },
+
+  onContextMenu(e) {
+    this.props.serviceContainer.openContextMenu(e);
+    e.stopPropagation();
+    e.preventDefault();
   },
 
   render() {
@@ -99,6 +110,7 @@ const ConsoleOutput = createClass({
     return (
       dom.div({
         className: classList.join(" "),
+        onContextMenu: this.onContextMenu,
         ref: node => {
           this.outputNode = node;
         },

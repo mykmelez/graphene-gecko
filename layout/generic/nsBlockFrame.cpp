@@ -306,7 +306,7 @@ NS_NewBlockFormattingContext(nsIPresShell* aPresShell,
                              nsStyleContext* aStyleContext)
 {
   nsBlockFrame* blockFrame = NS_NewBlockFrame(aPresShell, aStyleContext);
-  blockFrame->AddStateBits(NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
+  blockFrame->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
   return blockFrame;
 }
 
@@ -490,12 +490,44 @@ nsBlockFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItem
 }
 
 nscoord
-nsBlockFrame::GetLogicalBaseline(WritingMode aWritingMode) const
+nsBlockFrame::GetLogicalBaseline(WritingMode aWM) const
 {
-  nscoord result;
-  if (nsLayoutUtils::GetLastLineBaseline(aWritingMode, this, &result))
-    return result;
-  return nsFrame::GetLogicalBaseline(aWritingMode);
+  auto lastBaseline =
+    BaselineBOffset(aWM, BaselineSharingGroup::eLast, AlignmentContext::eInline);
+  return BSize(aWM) - lastBaseline;
+}
+
+bool
+nsBlockFrame::GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
+                                        BaselineSharingGroup aBaselineGroup,
+                                        nscoord*             aBaseline) const
+{
+  if (aBaselineGroup == BaselineSharingGroup::eFirst) {
+    return nsLayoutUtils::GetFirstLineBaseline(aWM, this, aBaseline);
+  }
+
+  for (ConstReverseLineIterator line = LinesRBegin(), line_end = LinesREnd();
+       line != line_end; ++line) {
+    if (line->IsBlock()) {
+      nscoord offset;
+      nsIFrame* kid = line->mFirstChild;
+      if (kid->GetVerticalAlignBaseline(aWM, &offset)) {
+        // Ignore relative positioning for baseline calculations.
+        const nsSize& sz = line->mContainerSize;
+        offset += kid->GetLogicalNormalPosition(aWM, sz).B(aWM);
+        *aBaseline = BSize(aWM) - offset;
+        return true;
+      }
+    } else {
+      // XXX Is this the right test?  We have some bogus empty lines
+      // floating around, but IsEmpty is perhaps too weak.
+      if (line->BSize() != 0 || !line->IsEmpty()) {
+        *aBaseline = BSize(aWM) - (line->BStart() + line->GetLogicalAscent());
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 nscoord
@@ -806,9 +838,14 @@ nsBlockFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
       AutoNoisyIndenter lineindent(gNoisyIntrinsic);
 #endif
       if (line->IsBlock()) {
+        StyleClear breakType;
         if (!data.mLineIsEmpty || BlockCanIntersectFloats(line->mFirstChild)) {
-          data.ForceBreak();
+          breakType = StyleClear::Both;
+        } else {
+          breakType = line->mFirstChild->
+            StyleDisplay()->PhysicalBreakType(data.mLineContainerWM);
         }
+        data.ForceBreak(breakType);
         data.mCurrentLine = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
                         line->mFirstChild, nsLayoutUtils::PREF_ISIZE);
         data.ForceBreak();
@@ -1074,7 +1111,7 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
 
   const ReflowInput *reflowInput = &aReflowInput;
   WritingMode wm = aReflowInput.GetWritingMode();
-  nscoord consumedBSize = GetConsumedBSize();
+  nscoord consumedBSize = ConsumedBSize(wm);
   nscoord effectiveComputedBSize = GetEffectiveComputedBSize(aReflowInput,
                                                              consumedBSize);
   Maybe<ReflowInput> mutableReflowInput;
@@ -1591,7 +1628,7 @@ nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
                                      aState.mBCoord + nonCarriedOutBDirMargin);
       // ... but don't take up more block size than is available
       nscoord effectiveComputedBSize =
-        GetEffectiveComputedBSize(aReflowInput, aState.GetConsumedBSize());
+        GetEffectiveComputedBSize(aReflowInput, aState.ConsumedBSize());
       finalSize.BSize(wm) =
         std::min(finalSize.BSize(wm),
                  borderPadding.BStart(wm) + effectiveComputedBSize);
@@ -3861,7 +3898,7 @@ nsBlockFrame::DoReflowInlineFrames(BlockReflowInput& aState,
 #endif
 
   WritingMode outerWM = aState.mReflowInput.GetWritingMode();
-  WritingMode lineWM = GetWritingMode(aLine->mFirstChild);
+  WritingMode lineWM = WritingModeForLine(outerWM, aLine->mFirstChild);
   LogicalRect lineRect =
     aFloatAvailableSpace.mRect.ConvertTo(lineWM, outerWM,
                                          aState.ContainerSize());
@@ -6875,6 +6912,7 @@ nsBlockFrame::Init(nsIContent*       aContent,
     AddStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION);
   }
 
+  // A display:flow-root box establishes a block formatting context.
   // If a box has a different block flow direction than its containing block:
   // ...
   //   If the box is a block container, then it establishes a new block
@@ -6882,10 +6920,11 @@ nsBlockFrame::Init(nsIContent*       aContent,
   // (http://dev.w3.org/csswg/css-writing-modes/#block-flow)
   // If the box has contain: paint (or contain: strict), then it should also
   // establish a formatting context.
-  if ((GetParent() && StyleVisibility()->mWritingMode !=
+  if (StyleDisplay()->mDisplay == mozilla::StyleDisplay::FlowRoot ||
+      (GetParent() && StyleVisibility()->mWritingMode !=
                       GetParent()->StyleVisibility()->mWritingMode) ||
       StyleDisplay()->IsContainPaint()) {
-    AddStateBits(NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
+    AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
   }
 
   if ((GetStateBits() &

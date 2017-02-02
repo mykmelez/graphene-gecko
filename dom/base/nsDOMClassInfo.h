@@ -11,6 +11,7 @@
 #include "nsDOMClassInfoID.h"
 #include "nsIXPCScriptable.h"
 #include "nsIScriptGlobalObject.h"
+#include "js/Class.h"
 #include "js/Id.h"
 #include "nsIXPConnect.h"
 
@@ -30,8 +31,10 @@ typedef nsresult (*nsDOMConstructorFunc)(nsISupports** aNewObject);
 
 struct nsDOMClassInfoData
 {
-  const char *mName;
+  // The ASCII name is available as mClass.name.
   const char16_t *mNameUTF16;
+  const js::ClassOps mClassOps;
+  const js::Class mClass;
   nsDOMClassInfoConstructorFnc mConstructorFptr;
 
   nsIClassInfo *mCachedClassInfo;

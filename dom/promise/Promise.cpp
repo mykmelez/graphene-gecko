@@ -62,7 +62,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Promise)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(Promise)
@@ -89,18 +88,6 @@ Promise::Promise(nsIGlobalObject* aGlobal)
 Promise::~Promise()
 {
   mozilla::DropJSObjects(this);
-}
-
-
-bool
-Promise::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto,
-                    JS::MutableHandle<JSObject*> aWrapper)
-{
-#ifdef DEBUG
-  binding_detail::AssertReflectorHasGivenProto(aCx, mPromiseObj, aGivenProto);
-#endif // DEBUG
-  aWrapper.set(mPromiseObj);
-  return true;
 }
 
 // static
@@ -214,7 +201,7 @@ Promise::Then(JSContext* aCx,
 
   JS::Rooted<JSObject*> resolveCallback(aCx);
   if (aResolveCallback) {
-    resolveCallback = aResolveCallback->Callback();
+    resolveCallback = aResolveCallback->CallbackOrNull();
     if (!JS_WrapObject(aCx, &resolveCallback)) {
       aRv.NoteJSContextException(aCx);
       return;
@@ -223,7 +210,7 @@ Promise::Then(JSContext* aCx,
 
   JS::Rooted<JSObject*> rejectCallback(aCx);
   if (aRejectCallback) {
-    rejectCallback = aRejectCallback->Callback();
+    rejectCallback = aRejectCallback->CallbackOrNull();
     if (!JS_WrapObject(aCx, &rejectCallback)) {
       aRv.NoteJSContextException(aCx);
       return;
@@ -836,16 +823,6 @@ PromiseWorkerProxy::WorkerPromise() const
 #endif
   MOZ_ASSERT(mWorkerPromise);
   return mWorkerPromise;
-}
-
-void
-PromiseWorkerProxy::StoreISupports(nsISupports* aSupports)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  nsMainThreadPtrHandle<nsISupports> supports(
-    new nsMainThreadPtrHolder<nsISupports>(aSupports));
-  mSupportsArray.AppendElement(supports);
 }
 
 void

@@ -61,15 +61,18 @@ inline bool
 JSCompartment::wrap(JSContext* cx, JS::MutableHandleValue vp)
 {
     /* Only GC things have to be wrapped or copied. */
-    if (!vp.isMarkable())
+    if (!vp.isGCThing())
         return true;
 
     /*
      * Symbols are GC things, but never need to be wrapped or copied because
-     * they are always allocated in the atoms compartment.
+     * they are always allocated in the atoms compartment. They still need to
+     * be marked in the new compartment's zone, however.
      */
-    if (vp.isSymbol())
+    if (vp.isSymbol()) {
+        cx->markAtomValue(vp);
         return true;
+    }
 
     /* Handle strings. */
     if (vp.isString()) {

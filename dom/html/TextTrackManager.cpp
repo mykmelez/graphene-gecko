@@ -37,6 +37,7 @@ CompareTextTracks::CompareTextTracks(HTMLMediaElement* aMediaElement)
 
 int32_t
 CompareTextTracks::TrackChildPosition(TextTrack* aTextTrack) const {
+  MOZ_DIAGNOSTIC_ASSERT(aTextTrack);
   HTMLTrackElement* trackElement = aTextTrack->GetTrackElement();
   if (!trackElement) {
     return -1;
@@ -56,6 +57,14 @@ CompareTextTracks::Equals(TextTrack* aOne, TextTrack* aTwo) const {
 bool
 CompareTextTracks::LessThan(TextTrack* aOne, TextTrack* aTwo) const
 {
+  // Protect against nullptr TextTrack objects; treat them as
+  // sorting toward the end.
+  if (!aOne) {
+    return false;
+  }
+  if (!aTwo) {
+    return true;
+  }
   TextTrackSource sourceOne = aOne->GetTextTrackSource();
   TextTrackSource sourceTwo = aTwo->GetTextTrackSource();
   if (sourceOne != sourceTwo) {
@@ -158,7 +167,9 @@ TextTrackManager::AddTextTrack(TextTrackKind aKind, const nsAString& aLabel,
   ReportTelemetryForTrack(track);
 
   if (aTextTrackSource == TextTrackSource::Track) {
-    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection));
+    RefPtr<nsIRunnable> task =
+      NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection);
+    nsContentUtils::RunInStableState(task.forget());
   }
 
   return track.forget();
@@ -176,7 +187,9 @@ TextTrackManager::AddTextTrack(TextTrack* aTextTrack)
   ReportTelemetryForTrack(aTextTrack);
 
   if (aTextTrack->GetTextTrackSource() == TextTrackSource::Track) {
-    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection));
+    RefPtr<nsIRunnable> task =
+      NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection);
+    nsContentUtils::RunInStableState(task.forget());
   }
 }
 
@@ -491,11 +504,13 @@ class CompareSimpleTextTrackEvents {
 private:
   int32_t TrackChildPosition(SimpleTextTrackEvent* aEvent) const
   {
-    HTMLTrackElement* trackElement = aEvent->mTrack->GetTrackElement();;
-    if (!trackElement) {
-      return -1;
+    if (aEvent->mTrack) {
+      HTMLTrackElement* trackElement = aEvent->mTrack->GetTrackElement();
+      if (trackElement) {
+        return mMediaElement->IndexOf(trackElement);
+      }
     }
-    return mMediaElement->IndexOf(trackElement);
+    return -1;
   }
   HTMLMediaElement* mMediaElement;
 public:

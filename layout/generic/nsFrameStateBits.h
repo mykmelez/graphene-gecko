@@ -311,6 +311,9 @@ FRAME_STATE_BIT(FlexContainer, 20, NS_STATE_FLEX_CHILDREN_REORDERED)
 // 'display:-webkit-{inline-}box' container.
 FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_LEGACY_WEBKIT_BOX)
 
+// True if the container has no flex items; may lie if there is a pending reflow
+FRAME_STATE_BIT(FlexContainer, 22, NS_STATE_FLEX_SYNTHESIZE_BASELINE)
+
 // == Frame state bits that apply to grid container frames ====================
 
 FRAME_STATE_GROUP(GridContainer, nsGridContainerFrame)
@@ -327,6 +330,9 @@ FRAME_STATE_BIT(GridContainer, 21, NS_STATE_GRID_DID_PUSH_ITEMS)
 
 // True iff computed grid values should be generated on the next reflow
 FRAME_STATE_BIT(GridContainer, 22, NS_STATE_GRID_GENERATE_COMPUTED_VALUES)
+
+// True if the container has no grid items; may lie if there is a pending reflow
+FRAME_STATE_BIT(GridContainer, 23, NS_STATE_GRID_SYNTHESIZE_BASELINE)
 
 // == Frame state bits that apply to SVG frames ===============================
 
@@ -476,6 +482,9 @@ FRAME_STATE_BIT(Block, 22, NS_BLOCK_MARGIN_ROOT)
 // is required by each block frame that can contain floats. The float manager is
 // used to reserve space for the floated frames.
 FRAME_STATE_BIT(Block, 23, NS_BLOCK_FLOAT_MGR)
+
+// For setting the relevant bits on a block formatting context:
+#define NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS (NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT)
 
 FRAME_STATE_BIT(Block, 24, NS_BLOCK_HAS_LINE_CURSOR)
 

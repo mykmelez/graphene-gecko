@@ -8,6 +8,7 @@ package org.mozilla.gecko.db;
 import org.mozilla.gecko.AppConstants;
 
 import android.net.Uri;
+import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
 
 import org.mozilla.gecko.annotation.RobocopTarget;
@@ -595,6 +596,9 @@ public class BrowserContract {
         public static final int TYPE_PINNED = 2;
         public static final int TYPE_SUGGESTED = 3;
 
+        @IntDef({TYPE_BLANK, TYPE_TOP, TYPE_PINNED, TYPE_SUGGESTED})
+        public @interface TopSiteType {}
+
         public static final String BOOKMARK_ID = "bookmark_id";
         public static final String HISTORY_ID = "history_id";
         public static final String TYPE = "type";
@@ -606,6 +610,7 @@ public class BrowserContract {
         public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "highlights");
 
         public static final String DATE = "date";
+        public static final String METADATA = "metadata";
     }
 
     @RobocopTarget

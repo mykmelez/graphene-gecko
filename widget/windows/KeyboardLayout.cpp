@@ -19,6 +19,7 @@
 #include "nsGkAtoms.h"
 #include "nsIDOMKeyEvent.h"
 #include "nsIIdleServiceInternal.h"
+#include "nsIWindowsRegKey.h"
 #include "nsMemory.h"
 #include "nsPrintfCString.h"
 #include "nsQuickSort.h"
@@ -503,7 +504,7 @@ GetAppCommandDeviceName(LPARAM aDevice)
 class MOZ_STACK_CLASS GetAppCommandKeysName final : public nsAutoCString
 {
 public:
-  GetAppCommandKeysName(WPARAM aKeys)
+  explicit GetAppCommandKeysName(WPARAM aKeys)
   {
     if (aKeys & MK_CONTROL) {
       AppendLiteral("MK_CONTROL");
@@ -1358,34 +1359,6 @@ NativeKey::InitWithKeyChar()
         break;
       }
 
-      if (!CanComputeVirtualKeyCodeFromScanCode()) {
-        // The right control key and the right alt key are extended keys.
-        // Therefore, we never get VK_RCONTRL and VK_RMENU for the result of
-        // MapVirtualKeyEx() on WinXP or WinServer2003.
-        //
-        // If VK_SHIFT, VK_CONTROL or VK_MENU key message is caused by well
-        // known scan code, we should decide it as Right key.  Otherwise,
-        // decide it as Left key.
-        switch (mOriginalVirtualKeyCode) {
-          case VK_CONTROL:
-            mVirtualKeyCode =
-              mIsExtended && mScanCode == 0x1D ? VK_RCONTROL : VK_LCONTROL;
-            break;
-          case VK_MENU:
-            mVirtualKeyCode =
-              mIsExtended && mScanCode == 0x38 ? VK_RMENU : VK_LMENU;
-            break;
-          case VK_SHIFT:
-            // Neither left shift nor right shift is an extended key,
-            // let's use VK_LSHIFT for unknown mapping.
-            mVirtualKeyCode = VK_LSHIFT;
-            break;
-          default:
-            MOZ_CRASH("Unsupported mOriginalVirtualKeyCode");
-        }
-        break;
-      }
-
       NS_ASSERTION(!mVirtualKeyCode,
                    "mVirtualKeyCode has been computed already");
 
@@ -1442,11 +1415,6 @@ NativeKey::InitWithKeyChar()
       //       scancode, we cannot compute virtual keycode.  I.e., with such
       //       applications, we cannot generate proper KeyboardEvent.code value.
 
-      // We cannot compute the virtual key code from WM_CHAR message on WinXP
-      // if it's caused by an extended key.
-      if (!CanComputeVirtualKeyCodeFromScanCode()) {
-        break;
-      }
       mVirtualKeyCode = mOriginalVirtualKeyCode =
         ComputeVirtualKeyCodeFromScanCodeEx();
       NS_ASSERTION(mVirtualKeyCode, "Failed to compute virtual keycode");
@@ -1864,18 +1832,6 @@ NativeKey::GetKeyLocation() const
   }
 }
 
-bool
-NativeKey::CanComputeVirtualKeyCodeFromScanCode() const
-{
-  // Vista or later supports ScanCodeEx.
-  if (IsVistaOrLater()) {
-    return true;
-  }
-  // Otherwise, MapVirtualKeyEx() can compute virtual keycode only with
-  // non-extended key.
-  return !mIsExtended;
-}
-
 uint8_t
 NativeKey::ComputeVirtualKeyCodeFromScanCode() const
 {
@@ -1889,12 +1845,6 @@ NativeKey::ComputeVirtualKeyCodeFromScanCodeEx() const
   // MapVirtualKeyEx() has been improved for supporting extended keys since
   // Vista.  When we call it for mapping a scancode of an extended key and
   // a virtual keycode, we need to add 0xE000 to the scancode.
-  // On the other hand, neither WinXP nor WinServer2003 doesn't support 0xE000.
-  // Therefore, we have no way to get virtual keycode from scan code of
-  // extended keys.
-  if (NS_WARN_IF(!CanComputeVirtualKeyCodeFromScanCode())) {
-    return 0;
-  }
   return static_cast<uint8_t>(
            ::MapVirtualKeyEx(GetScanCodeWithExtendedFlag(), MAPVK_VSC_TO_VK_EX,
                              mKeyboardLayout));
@@ -1905,8 +1855,7 @@ NativeKey::ComputeScanCodeExFromVirtualKeyCode(UINT aVirtualKeyCode) const
 {
   return static_cast<uint16_t>(
            ::MapVirtualKeyEx(aVirtualKeyCode,
-                             IsVistaOrLater() ? MAPVK_VK_TO_VSC_EX :
-                                                MAPVK_VK_TO_VSC,
+                             MAPVK_VK_TO_VSC_EX,
                              mKeyboardLayout));
 }
 
@@ -2967,11 +2916,14 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
     if (doCrash) {
 #ifdef MOZ_CRASHREPORTER
       nsPrintfCString info("\nPeekMessage() failed to remove char message! "
+                           "\nActive keyboard layout=0x%08X (%s), "
                            "\nHandling message: %s, InSendMessageEx()=%s, "
                            "\nFound message: %s, "
                            "\nWM_NULL has been removed: %d, "
                            "\nNext key message in all windows: %s, "
                            "time=%d, ",
+                           KeyboardLayout::GetActiveLayout(),
+                           KeyboardLayout::GetActiveLayoutName().get(),
                            ToString(mMsg).get(),
                            GetResultOfInSendMessageEx().get(),
                            ToString(nextKeyMsg).get(), i,
@@ -3025,9 +2977,12 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
          this, ToString(removedMsg).get(), ToString(nextKeyMsg).get()));
 #ifdef MOZ_CRASHREPORTER
       nsPrintfCString info("\nPeekMessage() removed unexpcted char message! "
+                           "\nActive keyboard layout=0x%08X (%s), "
                            "\nHandling message: %s, InSendMessageEx()=%s, "
                            "\nFound message: %s, "
                            "\nRemoved message: %s, ",
+                           KeyboardLayout::GetActiveLayout(),
+                           KeyboardLayout::GetActiveLayoutName().get(),
                            ToString(mMsg).get(),
                            GetResultOfInSendMessageEx().get(),
                            ToString(nextKeyMsg).get(),
@@ -3076,8 +3031,11 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
      this, ToString(nextKeyMsg).get()));
 #ifdef MOZ_CRASHREPORTER
   nsPrintfCString info("\nWe lost following char message! "
+                       "\nActive keyboard layout=0x%08X (%s), "
                        "\nHandling message: %s, InSendMessageEx()=%s, \n"
                        "Found message: %s, removed a lot of WM_NULL",
+                       KeyboardLayout::GetActiveLayout(),
+                       KeyboardLayout::GetActiveLayoutName().get(),
                        ToString(mMsg).get(),
                        GetResultOfInSendMessageEx().get(),
                        ToString(nextKeyMsg).get());
@@ -3898,6 +3856,124 @@ KeyboardLayout::GetCompositeChar(char16_t aBaseChar) const
   return mVirtualKeys[key].GetCompositeChar(mDeadKeyShiftStates[0], aBaseChar);
 }
 
+// static
+HKL
+KeyboardLayout::GetActiveLayout()
+{
+  return GetInstance()->mKeyboardLayout;
+}
+
+// static
+nsCString
+KeyboardLayout::GetActiveLayoutName()
+{
+  return GetInstance()->GetLayoutName(GetActiveLayout());
+}
+
+static bool IsValidKeyboardLayoutsChild(const nsAString& aChildName)
+{
+  if (aChildName.Length() != 8) {
+    return false;
+  }
+  for (size_t i = 0; i < aChildName.Length(); i++) {
+    if ((aChildName[i] >= '0' && aChildName[i] <= '9') ||
+        (aChildName[i] >= 'a' && aChildName[i] <= 'f') ||
+        (aChildName[i] >= 'A' && aChildName[i] <= 'F')) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+nsCString
+KeyboardLayout::GetLayoutName(HKL aLayout) const
+{
+  const wchar_t kKeyboardLayouts[] =
+    L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layouts\\";
+  uint16_t language = reinterpret_cast<uintptr_t>(aLayout) & 0xFFFF;
+  uint16_t layout = (reinterpret_cast<uintptr_t>(aLayout) >> 16) & 0xFFFF;
+  // If the layout is less than 0xA000XXXX (normal keyboard layout for the
+  // language) or 0xEYYYXXXX (IMM-IME), we can retrieve its name simply.
+  if (layout < 0xA000 || (layout & 0xF000) == 0xE000) {
+    nsAutoString key(kKeyboardLayouts);
+    key.AppendPrintf("%08X", layout < 0xA000 ?
+                               layout : reinterpret_cast<uintptr_t>(aLayout));
+    wchar_t buf[256];
+    if (NS_WARN_IF(!WinUtils::GetRegistryKey(HKEY_LOCAL_MACHINE,
+                                             key.get(), L"Layout Text",
+                                             buf, sizeof(buf)))) {
+      return NS_LITERAL_CSTRING("No name or too long name");
+    }
+    return NS_ConvertUTF16toUTF8(buf);
+  }
+
+  if (NS_WARN_IF((layout & 0xF000) != 0xF000)) {
+    nsAutoCString result;
+    result.AppendPrintf("Odd HKL: 0x%08X",
+                        reinterpret_cast<uintptr_t>(aLayout));
+    return result;
+  }
+
+  // Otherwise, we need to walk the registry under "Keyboard Layouts".
+  nsCOMPtr<nsIWindowsRegKey> regKey =
+    do_CreateInstance("@mozilla.org/windows-registry-key;1");
+  if (NS_WARN_IF(!regKey)) {
+    return EmptyCString();
+  }
+  nsresult rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_LOCAL_MACHINE,
+                             nsString(kKeyboardLayouts),
+                             nsIWindowsRegKey::ACCESS_READ);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return EmptyCString();
+  }
+  uint32_t childCount = 0;
+  if (NS_WARN_IF(NS_FAILED(regKey->GetChildCount(&childCount))) ||
+      NS_WARN_IF(!childCount)) {
+    return EmptyCString();
+  }
+  for (uint32_t i = 0; i < childCount; i++) {
+    nsAutoString childName;
+    if (NS_WARN_IF(NS_FAILED(regKey->GetChildName(i, childName))) ||
+        !IsValidKeyboardLayoutsChild(childName)) {
+      continue;
+    }
+    uint32_t childNum = static_cast<uint32_t>(childName.ToInteger64(&rv, 16));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      continue;
+    }
+    // Ignore normal keyboard layouts for each language.
+    if (childNum <= 0xFFFF) {
+      continue;
+    }
+    // If it doesn't start with 'A' nor 'a', language should be matched.
+    if ((childNum & 0xFFFF) != language &&
+        (childNum & 0xF0000000) != 0xA0000000) {
+      continue;
+    }
+    // Then, the child should have "Layout Id" which is "YYY" of 0xFYYYXXXX.
+    nsAutoString key(kKeyboardLayouts);
+    key += childName;
+    wchar_t buf[256];
+    if (NS_WARN_IF(!WinUtils::GetRegistryKey(HKEY_LOCAL_MACHINE,
+                                             key.get(), L"Layout Id",
+                                             buf, sizeof(buf)))) {
+      continue;
+    }
+    uint16_t layoutId = wcstol(buf, nullptr, 16);
+    if (layoutId != (layout & 0x0FFF)) {
+      continue;
+    }
+    if (NS_WARN_IF(!WinUtils::GetRegistryKey(HKEY_LOCAL_MACHINE,
+                                             key.get(), L"Layout Text",
+                                             buf, sizeof(buf)))) {
+      continue;
+    }
+    return NS_ConvertUTF16toUTF8(buf);
+  }
+  return EmptyCString();
+}
+
 void
 KeyboardLayout::LoadLayout(HKL aLayout)
 {
@@ -3909,8 +3985,9 @@ KeyboardLayout::LoadLayout(HKL aLayout)
 
   mKeyboardLayout = aLayout;
 
-  MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Debug,
-    ("KeyboardLayout::LoadLayout(aLayout=0x%08X)", aLayout));
+  MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Info,
+    ("KeyboardLayout::LoadLayout(aLayout=0x%08X (%s))",
+     aLayout, GetLayoutName(aLayout).get()));
 
   BYTE kbdState[256];
   memset(kbdState, 0, sizeof(kbdState));
@@ -4006,8 +4083,7 @@ KeyboardLayout::LoadLayout(HKL aLayout)
 
   if (MOZ_LOG_TEST(sKeyboardLayoutLogger, LogLevel::Verbose)) {
     static const UINT kExtendedScanCode[] = { 0x0000, 0xE000 };
-    static const UINT kMapType =
-      IsVistaOrLater() ? MAPVK_VSC_TO_VK_EX : MAPVK_VSC_TO_VK;
+    static const UINT kMapType = MAPVK_VSC_TO_VK_EX;
     MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Verbose,
       ("Logging virtual keycode values for scancode (0x%p)...",
        mKeyboardLayout));
@@ -4018,11 +4094,6 @@ KeyboardLayout::LoadLayout(HKL aLayout)
           ::MapVirtualKeyEx(scanCode, kMapType, mKeyboardLayout);
         MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Verbose,
           ("0x%04X, %s", scanCode, kVirtualKeyName[virtualKeyCode]));
-      }
-      // XP and Server 2003 don't support 0xE0 prefix of the scancode.
-      // Therefore, we don't need to continue on them.
-      if (!IsVistaOrLater()) {
-        break;
       }
     }
   }

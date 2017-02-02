@@ -9,7 +9,6 @@
 const Services = require("Services");
 const { Cc, Ci, Cu } = require("chrome");
 const { DebuggerServer, ActorPool } = require("devtools/server/main");
-const { EnvironmentActor } = require("devtools/server/actors/environment");
 const { ThreadActor } = require("devtools/server/actors/script");
 const { ObjectActor, LongStringActor, createValueGrip, stringIsLong } = require("devtools/server/actors/object");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
@@ -27,6 +26,7 @@ loader.lazyRequireGetter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm", 
 loader.lazyRequireGetter(this, "addWebConsoleCommands", "devtools/server/actors/utils/webconsole-utils", true);
 loader.lazyRequireGetter(this, "CONSOLE_WORKER_IDS", "devtools/server/actors/utils/webconsole-utils", true);
 loader.lazyRequireGetter(this, "WebConsoleUtils", "devtools/server/actors/utils/webconsole-utils", true);
+loader.lazyRequireGetter(this, "EnvironmentActor", "devtools/server/actors/environment", true);
 
 // Overwrite implemented listeners for workers so that we don't attempt
 // to load an unsupported module.
@@ -151,8 +151,7 @@ WebConsoleActor.prototype =
    * @type boolean
    */
   get _parentIsContentActor() {
-    return "ContentActor" in DebuggerServer &&
-            this.parentActor instanceof DebuggerServer.ContentActor;
+    return this.parentActor.constructor.name == "ContentActor";
   },
 
   /**
@@ -1783,7 +1782,7 @@ WebConsoleActor.prototype =
     try {
       window = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
              .getInterface(Ci.nsIWebNavigation).QueryInterface(Ci.nsIDocShell)
-             .chromeEventHandler.ownerDocument.defaultView;
+             .chromeEventHandler.ownerGlobal;
     }
     catch (ex) {
       // The above can fail because chromeEventHandler is not available for all

@@ -9,6 +9,7 @@
 #define mozilla_StyleAnimationValue_h_
 
 #include "mozilla/gfx/MatrixFwd.h"
+#include "mozilla/ServoBindingTypes.h"
 #include "mozilla/UniquePtr.h"
 #include "nsStringFwd.h"
 #include "nsStringBuffer.h"
@@ -60,6 +61,15 @@ public:
       const StyleAnimationValue& aValueToAdd, uint32_t aCount) {
     return AddWeighted(aProperty, 1.0, aDest, aCount, aValueToAdd, aDest);
   }
+
+  /**
+   * Alternative version of Add that reflects the naming used in Web Animations
+   * and which returns the result using the return value.
+   */
+  static StyleAnimationValue
+  Add(nsCSSPropertyID aProperty,
+      const StyleAnimationValue& aA,
+      StyleAnimationValue&& aB);
 
   /**
    * Calculates a measure of 'distance' between two colors.
@@ -482,11 +492,11 @@ public:
   void SetIntValue(int32_t aInt, Unit aUnit);
   template<typename T,
            typename = typename std::enable_if<std::is_enum<T>::value>::type>
-  void SetIntValue(T aInt, Unit aUnit)
+  void SetEnumValue(T aInt)
   {
     static_assert(mozilla::EnumTypeFitsWithin<T, int32_t>::value,
                   "aValue must be an enum that fits within mValue.mInt");
-    SetIntValue(static_cast<int32_t>(aInt), aUnit);
+    SetIntValue(static_cast<int32_t>(aInt), eUnit_Enumerated);
   }
   void SetCoordValue(nscoord aCoord);
   void SetPercentValue(float aPercent);
@@ -576,6 +586,7 @@ struct PropertyStyleAnimationValuePair
 {
   nsCSSPropertyID mProperty;
   StyleAnimationValue mValue;
+  RefPtr<RawServoAnimationValue> mServoValue;
 };
 } // namespace mozilla
 

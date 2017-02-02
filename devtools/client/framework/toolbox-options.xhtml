@@ -6,7 +6,7 @@
 <!ENTITY % toolboxDTD SYSTEM "chrome://devtools/locale/toolbox.dtd" >
  %toolboxDTD;
 ]>
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html xmlns="http://www.w3.org/1999/xhtml" dir="">
   <head>
     <title>Toolbox option</title>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
@@ -110,7 +110,7 @@
 
       <fieldset id="screenshot-options" class="options-groupbox">
         <legend>&options.screenshot.label;
-          <span id="screenshot-icon" class="devtools-button"></span>
+          <button id="screenshot-icon" disabled="true" class="devtools-button"></button>
         </legend>
         <label title="&options.screenshot.clipboard.tooltip;">
           <input type="checkbox"

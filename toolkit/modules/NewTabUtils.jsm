@@ -23,11 +23,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
 XPCOMUtils.defineLazyModuleGetter(this, "BinarySearch",
   "resource://gre/modules/BinarySearch.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "gPrincipal", function() {
-  let uri = Services.io.newURI("about:newtab", null, null);
-  return Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
-});
-
 XPCOMUtils.defineLazyGetter(this, "gCryptoHash", function() {
   return Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
 });
@@ -35,7 +30,7 @@ XPCOMUtils.defineLazyGetter(this, "gCryptoHash", function() {
 XPCOMUtils.defineLazyGetter(this, "gUnicodeConverter", function() {
   let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                     .createInstance(Ci.nsIScriptableUnicodeConverter);
-  converter.charset = 'utf8';
+  converter.charset = "utf8";
   return converter;
 });
 
@@ -89,8 +84,7 @@ function LinksStorage() {
         throw new Error("Unsupported newTab storage version");
       }
       // Add further migration steps here.
-    }
-    else {
+    } else {
       // This is a downgrade.  Since we cannot predict future, upgrades should
       // be backwards compatible.  We will set the version to the old value
       // regardless, so, on next upgrade, the migration steps will run again.
@@ -522,7 +516,7 @@ var BlockedLinks = {
   /**
    * Registers an object that will be notified when the blocked links change.
    */
-  addObserver: function(aObserver) {
+  addObserver(aObserver) {
     this._observers.push(aObserver);
   },
 
@@ -648,7 +642,7 @@ var PlacesProvider = {
     let links = [];
 
     let callback = {
-      handleResult: function(aResultSet) {
+      handleResult(aResultSet) {
         let row;
 
         while ((row = aResultSet.getNextRow())) {
@@ -658,22 +652,22 @@ var PlacesProvider = {
             let frecency = row.getResultByIndex(12);
             let lastVisitDate = row.getResultByIndex(5);
             links.push({
-              url: url,
-              title: title,
-              frecency: frecency,
-              lastVisitDate: lastVisitDate,
+              url,
+              title,
+              frecency,
+              lastVisitDate,
               type: "history",
             });
           }
         }
       },
 
-      handleError: function(aError) {
+      handleError(aError) {
         // Should we somehow handle this error?
         aCallback([]);
       },
 
-      handleCompletion: function(aReason) {
+      handleCompletion(aReason) {
         // The Places query breaks ties in frecency by place ID descending, but
         // that's different from how Links.compareLinks breaks ties, because
         // compareLinks doesn't have access to place IDs.  It's very important
@@ -728,11 +722,11 @@ var PlacesProvider = {
   /**
    * Called by the history service.
    */
-  onBeginUpdateBatch: function() {
+  onBeginUpdateBatch() {
     this._batchProcessingDepth += 1;
   },
 
-  onEndUpdateBatch: function() {
+  onEndUpdateBatch() {
     this._batchProcessingDepth -= 1;
     if (this._batchProcessingDepth == 0 && this._batchCalledFrecencyChanged) {
       this.onManyFrecenciesChanged();
@@ -747,7 +741,7 @@ var PlacesProvider = {
     });
   },
 
-  onClearHistory: function() {
+  onClearHistory() {
     this._callObservers("onClearHistory")
   },
 
@@ -857,7 +851,7 @@ var Links = {
   /**
    * Registers an object that will be notified when links updates.
    */
-  addObserver: function(aObserver) {
+  addObserver(aObserver) {
     this._observers.push(aObserver);
   },
 
@@ -989,7 +983,7 @@ var Links = {
            aLink1.url.localeCompare(aLink2.url);
   },
 
-  _incrementSiteMap: function(map, link) {
+  _incrementSiteMap(map, link) {
     if (NewTabUtils.blockedLinks.isBlocked(link)) {
       // Don't count blocked URLs.
       return;
@@ -998,7 +992,7 @@ var Links = {
     map.set(site, (map.get(site) || 0) + 1);
   },
 
-  _decrementSiteMap: function(map, link) {
+  _decrementSiteMap(map, link) {
     if (NewTabUtils.blockedLinks.isBlocked(link)) {
       // Blocked URLs are not included in map.
       return;
@@ -1021,7 +1015,7 @@ var Links = {
     * @param aLink The link that will affect siteMap
     * @param increment A boolean for whether to increment or decrement siteMap
     */
-  _adjustSiteMapAndNotify: function(aLink, increment = true) {
+  _adjustSiteMapAndNotify(aLink, increment = true) {
     for (let [/* provider */, cache] of this._providers) {
       // We only update siteMap if aLink is already stored in linkMap.
       if (cache.linkMap.get(aLink.url)) {
@@ -1035,15 +1029,15 @@ var Links = {
     this._callObservers("onLinkChanged", aLink);
   },
 
-  onLinkBlocked: function(aLink) {
+  onLinkBlocked(aLink) {
     this._adjustSiteMapAndNotify(aLink, false);
   },
 
-  onLinkUnblocked: function(aLink) {
+  onLinkUnblocked(aLink) {
     this._adjustSiteMapAndNotify(aLink);
   },
 
-  populateProviderCache: function(provider, callback) {
+  populateProviderCache(provider, callback) {
     if (!this._providers.has(provider)) {
       throw new Error("Can only populate provider cache for existing provider.");
     }
@@ -1058,7 +1052,7 @@ var Links = {
    * @param aForce When true, populates the provider's cache even when it's
    *               already filled.
    */
-  _populateProviderCache: function(aProvider, aCallback, aForce) {
+  _populateProviderCache(aProvider, aCallback, aForce) {
     let cache = this._providers.get(aProvider);
     let createCache = !cache;
     if (createCache) {
@@ -1193,8 +1187,7 @@ var Links = {
         existingLink.title = aLink.title;
         updatePages = true;
       }
-    }
-    else if (this._sortProperties.every(prop => prop in aLink)) {
+    } else if (this._sortProperties.every(prop => prop in aLink)) {
       // Before doing the O(lg n) insertion below, do an O(1) check for the
       // common case where the new link is too low-ranked to be in the list.
       if (sortedLinks.length && sortedLinks.length == aProvider.maxNumLinks) {
@@ -1353,8 +1346,12 @@ var LinkChecker = {
 
   _doCheckLoadURI: function Links_doCheckLoadURI(aURI) {
     try {
+      // about:newtab is currently privileged. In any case, it should be
+      // possible for tiles to point to pretty much everything - but not
+      // to stuff that inherits the system principal, so we check:
+      let systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
       Services.scriptSecurityManager.
-        checkLoadURIStrWithPrincipal(gPrincipal, aURI, this.flags);
+        checkLoadURIStrWithPrincipal(systemPrincipal, aURI, this.flags);
       return true;
     } catch (e) {
       // We got a weird URI or one that would inherit the caller's principal.
@@ -1406,7 +1403,7 @@ this.NewTabUtils = {
     try {
       // Note that nsIURI.asciiHost throws NS_ERROR_FAILURE for some types of
       // URIs, including jar and moz-icon URIs.
-      host = Services.io.newURI(url, null, null).asciiHost;
+      host = Services.io.newURI(url).asciiHost;
     } catch (ex) {
       return null;
     }
@@ -1433,7 +1430,7 @@ this.NewTabUtils = {
     return false;
   },
 
-  getProviderLinks: function(aProvider) {
+  getProviderLinks(aProvider) {
     let cache = Links._providers.get(aProvider);
     if (cache && cache.sortedLinks) {
       return cache.sortedLinks;
@@ -1441,7 +1438,7 @@ this.NewTabUtils = {
     return [];
   },
 
-  isTopSiteGivenProvider: function(aSite, aProvider) {
+  isTopSiteGivenProvider(aSite, aProvider) {
     let cache = Links._providers.get(aProvider);
     if (cache && cache.siteMap) {
       return cache.siteMap.has(aSite);
@@ -1449,7 +1446,7 @@ this.NewTabUtils = {
     return false;
   },
 
-  isTopPlacesSite: function(aSite) {
+  isTopPlacesSite(aSite) {
     return this.isTopSiteGivenProvider(aSite, PlacesProvider);
   },
 

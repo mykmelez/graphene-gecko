@@ -285,7 +285,8 @@ nsStringBuffer::ToString(uint32_t aLen, nsAString& aStr,
   char16_t* data = static_cast<char16_t*>(Data());
 
   nsAStringAccessor* accessor = static_cast<nsAStringAccessor*>(&aStr);
-  NS_ASSERTION(data[aLen] == char16_t(0), "data should be null terminated");
+  MOZ_DIAGNOSTIC_ASSERT(data[aLen] == char16_t(0),
+                        "data should be null terminated");
 
   // preserve class flags
   uint32_t flags = accessor->flags();
@@ -304,7 +305,8 @@ nsStringBuffer::ToString(uint32_t aLen, nsACString& aStr,
   char* data = static_cast<char*>(Data());
 
   nsACStringAccessor* accessor = static_cast<nsACStringAccessor*>(&aStr);
-  NS_ASSERTION(data[aLen] == char(0), "data should be null terminated");
+  MOZ_DIAGNOSTIC_ASSERT(data[aLen] == char(0),
+                        "data should be null terminated");
 
   // preserve class flags
   uint32_t flags = accessor->flags();
@@ -353,6 +355,13 @@ static_assert(sizeof(nsStringContainer_base) == sizeof(nsSubstring),
 // Provide rust bindings to the nsA[C]String types
 extern "C" {
 
+// This is a no-op on release, when bug 1335203 is fixed we should ifdef this
+// to ensure using it in release results in a linker error.
+void Gecko_IncrementStringAdoptCount(void* aData)
+{
+  MOZ_LOG_CTOR(aData, "StringAdopt", 1);
+}
+
 void Gecko_FinalizeCString(nsACString* aThis)
 {
   aThis->~nsACString();
@@ -368,6 +377,11 @@ void Gecko_AppendCString(nsACString* aThis, const nsACString* aOther)
   aThis->Append(*aOther);
 }
 
+void Gecko_TruncateCString(nsACString* aThis)
+{
+  aThis->Truncate();
+}
+
 void Gecko_FinalizeString(nsAString* aThis)
 {
   aThis->~nsAString();
@@ -381,6 +395,11 @@ void Gecko_AssignString(nsAString* aThis, const nsAString* aOther)
 void Gecko_AppendString(nsAString* aThis, const nsAString* aOther)
 {
   aThis->Append(*aOther);
+}
+
+void Gecko_TruncateString(nsAString* aThis)
+{
+  aThis->Truncate();
 }
 
 } // extern "C"

@@ -13,12 +13,15 @@ import android.view.ViewGroup;
 
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
+import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
+import org.mozilla.gecko.activitystream.Utils;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.home.HomePager;
-import org.mozilla.gecko.home.activitystream.StreamItem.HighlightItem;
-import org.mozilla.gecko.home.activitystream.StreamItem.WelcomePanel;
-import org.mozilla.gecko.home.activitystream.StreamItem.HighlightsTitle;
-import org.mozilla.gecko.home.activitystream.StreamItem.TopPanel;
+import org.mozilla.gecko.home.activitystream.stream.HighlightItem;
+import org.mozilla.gecko.home.activitystream.stream.HighlightsTitle;
+import org.mozilla.gecko.home.activitystream.stream.StreamItem;
+import org.mozilla.gecko.home.activitystream.stream.TopPanel;
+import org.mozilla.gecko.home.activitystream.stream.WelcomePanel;
 import org.mozilla.gecko.widget.RecyclerViewClickSupport;
 
 import java.util.EnumSet;
@@ -100,7 +103,7 @@ public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> impl
             final int cursorPosition = translatePositionToCursor(position);
 
             highlightsCursor.moveToPosition(cursorPosition);
-            ((HighlightItem) holder).bind(highlightsCursor, tilesWidth,  tilesHeight);
+            ((HighlightItem) holder).bind(highlightsCursor, cursorPosition, tilesWidth,  tilesHeight);
         } else if (type == TopPanel.LAYOUT_ID) {
             ((TopPanel) holder).bind(topSitesCursor, tiles, tilesWidth, tilesHeight);
         }
@@ -113,15 +116,28 @@ public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> impl
             return;
         }
 
-        highlightsCursor.moveToPosition(
-                translatePositionToCursor(position));
+        int actualPosition = translatePositionToCursor(position);
+        highlightsCursor.moveToPosition(actualPosition);
 
         final String url = highlightsCursor.getString(
                 highlightsCursor.getColumnIndexOrThrow(BrowserContract.Combined.URL));
 
-        onUrlOpenListener.onUrlOpen(url, EnumSet.of(HomePager.OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB));
+        ActivityStreamTelemetry.Extras.Builder extras = ActivityStreamTelemetry.Extras.builder()
+                .forHighlightSource(Utils.highlightSource(highlightsCursor))
+                .set(ActivityStreamTelemetry.Contract.SOURCE_TYPE, ActivityStreamTelemetry.Contract.TYPE_HIGHLIGHTS)
+                .set(ActivityStreamTelemetry.Contract.ACTION_POSITION, actualPosition)
+                .set(ActivityStreamTelemetry.Contract.COUNT, highlightsCursor.getCount());
 
-        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM, "as_highlights");
+        Telemetry.sendUIEvent(
+                TelemetryContract.Event.LOAD_URL,
+                TelemetryContract.Method.LIST_ITEM,
+                extras.build()
+        );
+
+        // NB: This is hacky. We need to process telemetry data first, otherwise we run a risk of
+        // not having a cursor to work with once url is opened and BrowserApp closes A-S home screen
+        // and clears its resources (read: cursors). See Bug 1326018.
+        onUrlOpenListener.onUrlOpen(url, EnumSet.of(HomePager.OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB));
     }
 
     @Override

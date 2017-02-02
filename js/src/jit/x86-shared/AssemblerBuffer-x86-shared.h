@@ -116,11 +116,6 @@ namespace jit {
             return true;
         }
 
-        unsigned char* data()
-        {
-            return m_buffer.begin();
-        }
-
         size_t size() const
         {
             return m_buffer.length();
@@ -131,10 +126,39 @@ namespace jit {
             return m_oom;
         }
 
-        const unsigned char* buffer() const {
-            MOZ_ASSERT(!m_oom);
+        const unsigned char* buffer() const
+        {
+            MOZ_RELEASE_ASSERT(!m_oom);
             return m_buffer.begin();
         }
+
+        unsigned char* data()
+        {
+            return m_buffer.begin();
+        }
+
+#ifndef RELEASE_OR_BETA
+        void disableProtection() { m_buffer.disableProtection(); }
+        void enableProtection() { m_buffer.enableProtection(); }
+        void setLowerBoundForProtection(size_t size)
+        {
+            m_buffer.setLowerBoundForProtection(size);
+        }
+        void unprotectRegion(unsigned char* first, size_t size)
+        {
+            m_buffer.unprotectRegion(first, size);
+        }
+        void reprotectRegion(unsigned char* first, size_t size)
+        {
+            m_buffer.reprotectRegion(first, size);
+        }
+#else
+        void disableProtection() {}
+        void enableProtection() {}
+        void setLowerBoundForProtection(size_t) {}
+        void unprotectRegion(unsigned char*, size_t) {}
+        void reprotectRegion(unsigned char*, size_t) {}
+#endif
 
     protected:
         /*
@@ -151,15 +175,15 @@ namespace jit {
          *
          * See also the |buffer| method.
          */
-        void oomDetected() {
+        void oomDetected()
+        {
             m_oom = true;
             m_buffer.clear();
         }
 
 #ifndef RELEASE_OR_BETA
-        PageProtectingVector<unsigned char, 256, SystemAllocPolicy,
-                             /* ProtectUsed = */ false, /* ProtectUnused = */ true,
-                             /* InitialLowerBound = */ 32 * 1024> m_buffer;
+        PageProtectingVector<unsigned char, 256, ProtectedReallocPolicy,
+                             /* ProtectUsed = */ false, /* ProtectUnused = */ false> m_buffer;
 #else
         mozilla::Vector<unsigned char, 256, SystemAllocPolicy> m_buffer;
 #endif
@@ -172,11 +196,10 @@ namespace jit {
 
       public:
 
-        GenericAssembler()
-          : printer(NULL)
-        {}
+        GenericAssembler() : printer(nullptr) {}
 
-        void setPrinter(Sprinter* sp) {
+        void setPrinter(Sprinter* sp)
+        {
             printer = sp;
         }
 

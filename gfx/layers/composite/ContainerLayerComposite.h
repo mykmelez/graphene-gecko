@@ -70,11 +70,6 @@ public:
     LayerComposite::SetLayerManager(aManager);
     mManager = aManager;
     mLastIntermediateSurface = nullptr;
-
-    for (Layer* l = GetFirstChild(); l; l = l->GetNextSibling()) {
-      HostLayer* child = l->AsHostLayer();
-      child->SetLayerManager(aManager);
-    }
   }
 
   virtual void Destroy() override;
@@ -107,15 +102,15 @@ public:
   // post-scales.
   virtual float GetPostXScale() const override {
     if (mScaleToResolution) {
-      return mPostXScale * mPresShellResolution;
+      return mSimpleAttrs.PostXScale() * mPresShellResolution;
     }
-    return mPostXScale;
+    return mSimpleAttrs.PostXScale();
   }
   virtual float GetPostYScale() const override {
     if (mScaleToResolution) {
-      return mPostYScale * mPresShellResolution;
+      return mSimpleAttrs.PostYScale() * mPresShellResolution;
     }
-    return mPostYScale;
+    return mSimpleAttrs.PostYScale();
   }
 
   virtual const char* Name() const override { return "ContainerLayerComposite"; }
@@ -166,6 +161,13 @@ protected:
 public:
   /** LayerOGL implementation */
   Layer* GetLayer() override { return this; }
+
+  virtual void SetLayerManager(HostLayerManager* aManager) override
+  {
+    LayerComposite::SetLayerManager(aManager);
+    mManager = aManager;
+    mLastIntermediateSurface = nullptr;
+  }
 
   void Destroy() override;
 

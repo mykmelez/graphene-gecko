@@ -30,8 +30,8 @@
 #include "jit/VMFunctions.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/Debugger.h"
+#include "vm/GeckoProfiler.h"
 #include "vm/Interpreter.h"
-#include "vm/SPSProfiler.h"
 #include "vm/TraceLogging.h"
 #include "vm/TypeInference.h"
 
@@ -328,23 +328,47 @@ NumArgAndLocalSlots(const InlineFrameIterator& frame)
 }
 
 static void
-CloseLiveIteratorIon(JSContext* cx, const InlineFrameIterator& frame, uint32_t stackSlot)
+CloseLiveIteratorIon(JSContext* cx, const InlineFrameIterator& frame, JSTryNote* tn)
 {
+    MOZ_ASSERT(tn->kind == JSTRY_FOR_IN ||
+               tn->kind == JSTRY_ITERCLOSE ||
+               tn->kind == JSTRY_DESTRUCTURING_ITERCLOSE);
+
+    bool isDestructuring = tn->kind == JSTRY_DESTRUCTURING_ITERCLOSE;
+    MOZ_ASSERT_IF(!isDestructuring, tn->stackDepth > 0);
+    MOZ_ASSERT_IF(isDestructuring, tn->stackDepth > 1);
+
     SnapshotIterator si = frame.snapshotIterator();
 
-    // Skip stack slots until we reach the iterator object.
-    uint32_t skipSlots = NumArgAndLocalSlots(frame) + stackSlot - 1;
+    // Skip stack slots until we reach the iterator object on the stack. For
+    // the destructuring case, we also need to get the "done" value.
+    uint32_t stackSlot = tn->stackDepth;
+    uint32_t adjust = isDestructuring ? 2 : 1;
+    uint32_t skipSlots = NumArgAndLocalSlots(frame) + stackSlot - adjust;
 
     for (unsigned i = 0; i < skipSlots; i++)
         si.skip();
 
     Value v = si.read();
-    RootedObject obj(cx, &v.toObject());
+    RootedObject iterObject(cx, &v.toObject());
 
-    if (cx->isExceptionPending())
-        UnwindIteratorForException(cx, obj);
-    else
-        UnwindIteratorForUncatchableException(cx, obj);
+    if (isDestructuring) {
+        RootedValue doneValue(cx, si.read());
+        bool done = ToBoolean(doneValue);
+        // Do not call IteratorClose if the destructuring iterator is already
+        // done.
+        if (done)
+            return;
+    }
+
+    if (cx->isExceptionPending()) {
+        if (tn->kind == JSTRY_FOR_IN)
+            UnwindIteratorForException(cx, iterObject);
+        else
+            IteratorCloseForException(cx, iterObject);
+    } else {
+        UnwindIteratorForUncatchableException(cx, iterObject);
+    }
 }
 
 class IonFrameStackDepthOp
@@ -417,14 +441,13 @@ HandleExceptionIon(JSContext* cx, const InlineFrameIterator& frame, ResumeFromEx
         JSTryNote* tn = *tni;
 
         switch (tn->kind) {
-          case JSTRY_FOR_IN: {
-            MOZ_ASSERT(JSOp(*(script->main() + tn->start + tn->length)) == JSOP_ENDITER);
-            MOZ_ASSERT(tn->stackDepth > 0);
-
-            uint32_t localSlot = tn->stackDepth;
-            CloseLiveIteratorIon(cx, frame, localSlot);
+          case JSTRY_FOR_IN:
+          case JSTRY_ITERCLOSE:
+          case JSTRY_DESTRUCTURING_ITERCLOSE:
+            MOZ_ASSERT_IF(tn->kind == JSTRY_FOR_IN,
+                          JSOp(*(script->main() + tn->start + tn->length)) == JSOP_ENDITER);
+            CloseLiveIteratorIon(cx, frame, tn);
             break;
-          }
 
           case JSTRY_FOR_OF:
           case JSTRY_LOOP:
@@ -602,7 +625,7 @@ ProcessTryNotesBaseline(JSContext* cx, const JitFrameIterator& frame, Environmen
             uint8_t* framePointer;
             uint8_t* stackPointer;
             BaselineFrameAndStackPointersFromTryNote(tn, frame, &framePointer, &stackPointer);
-            Value iterValue(*(Value*) stackPointer);
+            Value iterValue(*reinterpret_cast<Value*>(stackPointer));
             RootedObject iterObject(cx, &iterValue.toObject());
             if (!UnwindIteratorForException(cx, iterObject)) {
                 // See comment in the JSTRY_FOR_IN case in Interpreter.cpp's
@@ -610,6 +633,36 @@ ProcessTryNotesBaseline(JSContext* cx, const JitFrameIterator& frame, Environmen
                 SettleOnTryNote(cx, tn, frame, ei, rfe, pc);
                 MOZ_ASSERT(**pc == JSOP_ENDITER);
                 return false;
+            }
+            break;
+          }
+
+          case JSTRY_ITERCLOSE: {
+            uint8_t* framePointer;
+            uint8_t* stackPointer;
+            BaselineFrameAndStackPointersFromTryNote(tn, frame, &framePointer, &stackPointer);
+            Value iterValue(*reinterpret_cast<Value*>(stackPointer));
+            RootedObject iterObject(cx, &iterValue.toObject());
+            if (!IteratorCloseForException(cx, iterObject)) {
+                SettleOnTryNote(cx, tn, frame, ei, rfe, pc);
+                return false;
+            }
+            break;
+          }
+
+          case JSTRY_DESTRUCTURING_ITERCLOSE: {
+            uint8_t* framePointer;
+            uint8_t* stackPointer;
+            BaselineFrameAndStackPointersFromTryNote(tn, frame, &framePointer, &stackPointer);
+            RootedValue doneValue(cx, *(reinterpret_cast<Value*>(stackPointer)));
+            bool done = ToBoolean(doneValue);
+            if (!done) {
+                Value iterValue(*(reinterpret_cast<Value*>(stackPointer) + 1));
+                RootedObject iterObject(cx, &iterValue.toObject());
+                if (!IteratorCloseForException(cx, iterObject)) {
+                    SettleOnTryNote(cx, tn, frame, ei, rfe, pc);
+                    return false;
+                }
             }
             break;
           }
@@ -813,7 +866,7 @@ HandleException(ResumeFromException* rfe)
 
                 JSScript* script = frames.script();
                 probes::ExitScript(cx, script, script->functionNonDelazifying(),
-                                   /* popSPSFrame = */ false);
+                                   /* popProfilerFrame = */ false);
                 if (!frames.more()) {
                     TraceLogStopEvent(logger, TraceLogger_IonMonkey);
                     TraceLogStopEvent(logger, TraceLogger_Scripts);
@@ -863,7 +916,7 @@ HandleException(ResumeFromException* rfe)
             // Unwind profiler pseudo-stack
             JSScript* script = iter.script();
             probes::ExitScript(cx, script, script->functionNonDelazifying(),
-                               /* popSPSFrame = */ false);
+                               /* popProfilerFrame = */ false);
 
             if (rfe->kind == ResumeFromException::RESUME_FORCED_RETURN)
                 return;
@@ -1181,11 +1234,11 @@ TraceJitStubFrame(JSTracer* trc, const JitFrameIterator& frame)
 }
 
 static void
-TraceIonAccessorICFrame(JSTracer* trc, const JitFrameIterator& frame)
+TraceIonICCallFrame(JSTracer* trc, const JitFrameIterator& frame)
 {
-    MOZ_ASSERT(frame.type() == JitFrame_IonAccessorIC);
-    IonAccessorICFrameLayout* layout = (IonAccessorICFrameLayout*)frame.fp();
-    TraceRoot(trc, layout->stubCode(), "ion-ic-accessor-code");
+    MOZ_ASSERT(frame.type() == JitFrame_IonICCall);
+    IonICCallFrameLayout* layout = (IonICCallFrameLayout*)frame.fp();
+    TraceRoot(trc, layout->stubCode(), "ion-ic-call-code");
 }
 
 #ifdef JS_CODEGEN_MIPS32
@@ -1443,8 +1496,8 @@ TraceJitActivation(JSTracer* trc, const JitActivationIterator& activations)
           case JitFrame_Rectifier:
             TraceRectifierFrame(trc, frames);
             break;
-          case JitFrame_IonAccessorIC:
-            TraceIonAccessorICFrame(trc, frames);
+          case JitFrame_IonICCall:
+            TraceIonICCallFrame(trc, frames);
             break;
           default:
             MOZ_CRASH("unexpected frame type");
@@ -1502,11 +1555,11 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes)
             MOZ_ASSERT(it.isBaselineStub() || it.isBaselineJS() || it.isIonJS());
         }
 
-        // Skip Baseline/Ion stub and accessor IC frames.
+        // Skip Baseline/Ion stub and IC call frames.
         if (it.isBaselineStub()) {
             ++it;
             MOZ_ASSERT(it.isBaselineJS());
-        } else if (it.isIonStub() || it.isIonAccessorIC()) {
+        } else if (it.isIonStub() || it.isIonICCall()) {
             ++it;
             MOZ_ASSERT(it.isIonJS());
         }
@@ -1999,7 +2052,7 @@ SnapshotIterator::traceAllocation(JSTracer* trc)
         return;
 
     Value v = allocationValue(alloc, RM_AlwaysDefault);
-    if (!v.isMarkable())
+    if (!v.isGCThing())
         return;
 
     Value copy = v;
@@ -2683,8 +2736,8 @@ JitFrameIterator::dump() const
         fprintf(stderr, " Rectifier frame\n");
         fprintf(stderr, "  Frame size: %u\n", unsigned(current()->prevFrameLocalSize()));
         break;
-      case JitFrame_IonAccessorIC:
-        fprintf(stderr, " Ion scripted accessor IC\n");
+      case JitFrame_IonICCall:
+        fprintf(stderr, " Ion IC call\n");
         fprintf(stderr, "  Frame size: %u\n", unsigned(current()->prevFrameLocalSize()));
         break;
       case JitFrame_Exit:
@@ -3041,14 +3094,14 @@ JitProfilingFrameIterator::moveToNextFrame(CommonFrameLayout* frame)
         MOZ_CRASH("Bad frame type prior to rectifier frame.");
     }
 
-    if (prevType == JitFrame_IonAccessorIC) {
-        IonAccessorICFrameLayout* accessorFrame =
-            GetPreviousRawFrame<IonAccessorICFrameLayout*>(frame);
+    if (prevType == JitFrame_IonICCall) {
+        IonICCallFrameLayout* callFrame =
+            GetPreviousRawFrame<IonICCallFrameLayout*>(frame);
 
-        MOZ_ASSERT(accessorFrame->prevType() == JitFrame_IonJS);
+        MOZ_ASSERT(callFrame->prevType() == JitFrame_IonJS);
 
-        returnAddressToFp_ = accessorFrame->returnAddress();
-        fp_ = GetPreviousRawFrame<uint8_t*>(accessorFrame);
+        returnAddressToFp_ = callFrame->returnAddress();
+        fp_ = GetPreviousRawFrame<uint8_t*>(callFrame);
         type_ = JitFrame_IonJS;
         return;
     }

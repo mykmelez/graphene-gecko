@@ -359,6 +359,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     public void refresh() {
+        progressBar.setImageDrawable(getResources().getDrawable(R.drawable.progress));
         urlDisplayLayout.dismissSiteIdentityPopup();
     }
 
@@ -652,13 +653,6 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
         if (needsNewFocus) {
             requestFocus();
-        }
-    }
-
-    public void setToolBarButtonsAlpha(float alpha) {
-        ViewHelper.setAlpha(tabsCounter, alpha);
-        if (!HardwareUtils.isTablet()) {
-            ViewHelper.setAlpha(menuIcon, alpha);
         }
     }
 

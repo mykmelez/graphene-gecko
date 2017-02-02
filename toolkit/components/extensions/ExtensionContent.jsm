@@ -111,6 +111,7 @@ function Script(extension, options, deferred = PromiseUtils.defer()) {
   this.css = this.options.css || [];
   this.remove_css = this.options.remove_css;
   this.match_about_blank = this.options.match_about_blank;
+  this.css_origin = this.options.css_origin;
 
   this.deferred = deferred;
 
@@ -143,6 +144,7 @@ Script.prototype = {
 
   matches(window) {
     let uri = window.document.documentURIObject;
+    let principal = window.document.nodePrincipal;
 
     // If mozAddonManager is present on this page, don't allow
     // content scripts.
@@ -150,16 +152,25 @@ Script.prototype = {
       return false;
     }
 
-    if (this.match_about_blank && ["about:blank", "about:srcdoc"].includes(uri.spec)) {
-      const principal = window.document.nodePrincipal;
-
+    if (this.match_about_blank) {
       // When matching top-level about:blank documents,
       // allow loading into any with a NullPrincipal.
-      if (window === window.top && principal.isNullPrincipal) {
+      if (uri.spec === "about:blank" && window === window.top && principal.isNullPrincipal) {
         return true;
       }
+
       // When matching about:blank/srcdoc iframes, the checks below
       // need to be performed against the "owner" document's URI.
+      if (["about:blank", "about:srcdoc"].includes(uri.spec)) {
+        uri = principal.URI;
+      }
+    }
+
+    // Documents from data: URIs also inherit the principal.
+    if (Services.netUtils.URIChainHasFlags(uri, Ci.nsIProtocolHandler.URI_INHERITS_SECURITY_CONTEXT)) {
+      if (!this.match_about_blank) {
+        return false;
+      }
       uri = principal.URI;
     }
 
@@ -197,8 +208,9 @@ Script.prototype = {
       let winUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindowUtils);
 
+      let type = this.css_origin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
       for (let url of this.cssURLs) {
-        runSafeSyncWithoutClone(winUtils.removeSheetUsingURIString, url, winUtils.AUTHOR_SHEET);
+        runSafeSyncWithoutClone(winUtils.removeSheetUsingURIString, url, type);
       }
     }
   },
@@ -236,8 +248,9 @@ Script.prototype = {
                              .getInterface(Ci.nsIDOMWindowUtils);
 
         let method = this.remove_css ? winUtils.removeSheetUsingURIString : winUtils.loadSheetUsingURIString;
+        let type = this.css_origin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
         for (let url of cssURLs) {
-          runSafeSyncWithoutClone(method, url, winUtils.AUTHOR_SHEET);
+          runSafeSyncWithoutClone(method, url, type);
         }
 
         this.deferred.resolve();
@@ -792,7 +805,7 @@ class BrowserExtensionContent extends EventEmitter {
     this.localeData = new LocaleData(data.localeData);
 
     this.manifest = data.manifest;
-    this.baseURI = Services.io.newURI(data.baseURL, null, null);
+    this.baseURI = Services.io.newURI(data.baseURL);
 
     // Only used in addon processes.
     this.views = new Set();
@@ -800,7 +813,7 @@ class BrowserExtensionContent extends EventEmitter {
     // Only used for devtools views.
     this.devtoolsViews = new Set();
 
-    let uri = Services.io.newURI(data.resourceURL, null, null);
+    let uri = Services.io.newURI(data.resourceURL);
 
     if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
       // Extension.jsm takes care of this in the parent.

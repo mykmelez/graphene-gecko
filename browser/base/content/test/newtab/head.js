@@ -220,8 +220,8 @@ function fillHistory(aLinks) {
 
       PlacesUtils.asyncHistory.updatePlaces(place, {
         handleError: () => ok(false, "couldn't add visit to history"),
-        handleResult: function() {},
-        handleCompletion: function() {
+        handleResult() {},
+        handleCompletion() {
           if (--numLinks == 0) {
             resolve();
           }
@@ -428,10 +428,9 @@ function* simulateExternalDrop(aDestIndex) {
         resolve();
       }
 
-      iframe.addEventListener("load", function onLoad() {
-        iframe.removeEventListener("load", onLoad);
+      iframe.addEventListener("load", function() {
         content.setTimeout(iframeLoaded, 0);
-      });
+      }, {once: true});
 
       iframe.setAttribute("src", url);
       iframe.style.width = "50px";
@@ -491,7 +490,6 @@ function whenSearchInitDone() {
             // Wait for the search controller to receive the event, then resolve.
             if (content.gSearch._contentSearchController.defaultEngine) {
               resolve();
-              return;
             }
           }
           content.setTimeout(resolver, 0);

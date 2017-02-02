@@ -142,14 +142,7 @@ class ModuleNamespaceObject : public ProxyObject
   private:
     struct ProxyHandler : public BaseProxyHandler
     {
-        enum
-        {
-            EnumerateFunctionSlot = 0
-        };
-
         ProxyHandler();
-
-        JS::Value getEnumerateFunction(HandleObject proxy) const;
 
         bool getOwnPropertyDescriptor(JSContext* cx, HandleObject proxy, HandleId id,
                                       MutableHandle<PropertyDescriptor> desc) const override;
@@ -244,7 +237,7 @@ class ModuleObject : public NativeObject
 #ifdef DEBUG
     static bool IsFrozen(JSContext* cx, HandleModuleObject self);
 #endif
-    void fixEnvironmentsAfterCompartmentMerge(JSContext* cx);
+    void fixEnvironmentsAfterCompartmentMerge();
 
     JSScript* script() const;
     Scope* enclosingScope() const;

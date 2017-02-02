@@ -5,14 +5,14 @@ function test() {
   let sessionData = {
     windows: [{
       tabs: [
-        { entries: [{ url: "about:mozilla" }], hidden: true },
-        { entries: [{ url: "about:blank" }], hidden: false }
+        { entries: [{ url: "about:mozilla", triggeringPrincipal_base64 }], hidden: true },
+        { entries: [{ url: "about:blank", triggeringPrincipal_base64 }], hidden: false }
       ]
     }]
   };
   let url = "about:sessionrestore";
   let formdata = {id: {sessionData}, url};
-  let state = { windows: [{ tabs: [{ entries: [{url}], formdata }] }] };
+  let state = { windows: [{ tabs: [{ entries: [{url, triggeringPrincipal_base64}], formdata }] }] };
 
   waitForExplicitFinish();
 
@@ -55,20 +55,17 @@ function newWindowWithState(state, callback) {
   let opts = "chrome,all,dialog=no,height=800,width=800";
   let win = window.openDialog(getBrowserURL(), "_blank", opts);
 
-  win.addEventListener("load", function onLoad() {
-    win.removeEventListener("load", onLoad, false);
-
+  win.addEventListener("load", function() {
     let tab = win.gBrowser.selectedTab;
 
     // The form data will be restored before SSTabRestored, so we want to listen
     // for that on the currently selected tab (it will be reused)
-    tab.addEventListener("SSTabRestored", function onRestored() {
-      tab.removeEventListener("SSTabRestored", onRestored, true);
+    tab.addEventListener("SSTabRestored", function() {
       callback(win);
-    }, true);
+    }, {capture: true, once: true});
 
     executeSoon(function () {
       ss.setWindowState(win, JSON.stringify(state), true);
     });
-  }, false);
+  }, {once: true});
 }

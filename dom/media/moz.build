@@ -5,7 +5,16 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 with Files('*'):
-    BUG_COMPONENT = ('Core', 'Video/Audio')
+    BUG_COMPONENT = ('Core', 'Audio/Video')
+
+with Files('test/**'):
+    BUG_COMPONENT = ('Core', 'Audio/Video: Playback')
+
+with Files('gtest/TestGMP*'):
+    BUG_COMPONENT = ('Core', 'Audio/Video: GMP')
+
+with Files('tests/**'):
+    BUG_COMPONENT = ('Core', 'WebRTC')
 
 component_signaling = ('Core', 'WebRTC: Signaling')
 with Files('IdpSandbox.jsm'):
@@ -39,7 +48,6 @@ DIRS += [
     'webrtc',
     'webspeech',
     'webvtt',
-    'standalone',
 ]
 
 if CONFIG['MOZ_DIRECTSHOW']:
@@ -100,7 +108,7 @@ EXPORTS += [
     'Intervals.h',
     'Latency.h',
     'MediaCache.h',
-    'MediaContentType.h',
+    'MediaContainerType.h',
     'MediaData.h',
     'MediaDataDemuxer.h',
     'MediaDecoder.h',
@@ -111,6 +119,7 @@ EXPORTS += [
     'MediaFormatReader.h',
     'MediaInfo.h',
     'MediaMetadataManager.h',
+    'MediaMIMETypes.h',
     'MediaPrefs.h',
     'MediaQueue.h',
     'MediaRecorder.h',
@@ -128,13 +137,11 @@ EXPORTS += [
     'MP3Decoder.h',
     'MP3Demuxer.h',
     'MP3FrameParser.h',
-    'NextFrameSeekTask.h',
     'nsIDocumentActivity.h',
     'PrincipalChangeObserver.h',
     'QueueObject.h',
     'SeekJob.h',
     'SeekTarget.h',
-    'SeekTask.h',
     'SelfRef.h',
     'SharedBuffer.h',
     'StreamTracks.h',
@@ -209,7 +216,7 @@ UNIFIED_SOURCES += [
     'GraphDriver.cpp',
     'Latency.cpp',
     'MediaCache.cpp',
-    'MediaContentType.cpp',
+    'MediaContainerType.cpp',
     'MediaData.cpp',
     'MediaDecoder.cpp',
     'MediaDecoderReader.cpp',
@@ -220,6 +227,7 @@ UNIFIED_SOURCES += [
     'MediaFormatReader.cpp',
     'MediaInfo.cpp',
     'MediaManager.cpp',
+    'MediaMIMETypes.cpp',
     'MediaPrefs.cpp',
     'MediaRecorder.cpp',
     'MediaResource.cpp',
@@ -235,10 +243,8 @@ UNIFIED_SOURCES += [
     'MP3Decoder.cpp',
     'MP3Demuxer.cpp',
     'MP3FrameParser.cpp',
-    'NextFrameSeekTask.cpp',
     'QueueObject.cpp',
     'SeekJob.cpp',
-    'SeekTask.cpp',
     'StreamTracks.cpp',
     'TextTrack.cpp',
     'TextTrackCue.cpp',

@@ -529,10 +529,18 @@ class TypeSet
     // out of Ion, such as for argument and local types.
     static inline Type GetMaybeUntrackedValueType(const Value& val);
 
-    static bool IsTypeMarked(Type* v);
+    static bool IsTypeMarked(JSRuntime* rt, Type* v);
     static bool IsTypeAllocatedDuringIncremental(Type v);
     static bool IsTypeAboutToBeFinalized(Type* v);
 } JS_HAZ_GC_POINTER;
+
+#if JS_BITS_PER_WORD == 32
+static const uintptr_t BaseTypeInferenceMagic = 0xa1a2b3b4;
+#else
+static const uintptr_t BaseTypeInferenceMagic = 0xa1a2b3b4c5c6d7d8;
+#endif
+static const uintptr_t TypeConstraintMagic = BaseTypeInferenceMagic + 1;
+static const uintptr_t ConstraintTypeSetMagic = BaseTypeInferenceMagic + 2;
 
 /*
  * A constraint which listens to additions to a type set and propagates those
@@ -540,13 +548,41 @@ class TypeSet
  */
 class TypeConstraint
 {
-public:
-    /* Next constraint listening to the same type set. */
-    TypeConstraint* next;
+#ifdef JS_CRASH_DIAGNOSTICS
+    uintptr_t magic_;
+#endif
 
+    /* Next constraint listening to the same type set. */
+    TypeConstraint* next_;
+
+  public:
     TypeConstraint()
-        : next(nullptr)
-    {}
+      : next_(nullptr)
+    {
+#ifdef JS_CRASH_DIAGNOSTICS
+        magic_ = TypeConstraintMagic;
+#endif
+    }
+
+    void checkMagic() const {
+#ifdef JS_CRASH_DIAGNOSTICS
+        MOZ_RELEASE_ASSERT(magic_ == TypeConstraintMagic);
+#endif
+    }
+
+    TypeConstraint* next() const {
+        checkMagic();
+        if (next_)
+            next_->checkMagic();
+        return next_;
+    }
+    void setNext(TypeConstraint* next) {
+        MOZ_ASSERT(!next_);
+        checkMagic();
+        if (next)
+            next->checkMagic();
+        next_ = next;
+    }
 
     /* Debugging name for this kind of constraint. */
     virtual const char* kind() = 0;
@@ -588,11 +624,11 @@ class AutoClearTypeInferenceStateOnOOM
     Zone* zone;
     bool oom;
 
-  public:
-    explicit AutoClearTypeInferenceStateOnOOM(Zone* zone)
-      : zone(zone), oom(false)
-    {}
+    AutoClearTypeInferenceStateOnOOM(const AutoClearTypeInferenceStateOnOOM&) = delete;
+    void operator=(const AutoClearTypeInferenceStateOnOOM&) = delete;
 
+  public:
+    explicit AutoClearTypeInferenceStateOnOOM(Zone* zone);
     ~AutoClearTypeInferenceStateOnOOM();
 
     void setOOM() {
@@ -606,11 +642,49 @@ class AutoClearTypeInferenceStateOnOOM
 /* Superclass common to stack and heap type sets. */
 class ConstraintTypeSet : public TypeSet
 {
-  public:
-    /* Chain of constraints which propagate changes out from this type set. */
-    TypeConstraint* constraintList;
+#ifdef JS_CRASH_DIAGNOSTICS
+    uintptr_t magic_;
+#endif
 
-    ConstraintTypeSet() : constraintList(nullptr) {}
+  protected:
+    /* Chain of constraints which propagate changes out from this type set. */
+    TypeConstraint* constraintList_;
+
+  public:
+    ConstraintTypeSet()
+      : constraintList_(nullptr)
+    {
+#ifdef JS_CRASH_DIAGNOSTICS
+        magic_ = ConstraintTypeSetMagic;
+#endif
+    }
+
+#ifdef JS_CRASH_DIAGNOSTICS
+    void initMagic() {
+        MOZ_ASSERT(!magic_);
+        magic_ = ConstraintTypeSetMagic;
+    }
+#endif
+
+    void checkMagic() const {
+#ifdef JS_CRASH_DIAGNOSTICS
+        MOZ_RELEASE_ASSERT(magic_ == ConstraintTypeSetMagic);
+#endif
+    }
+
+    TypeConstraint* constraintList() const {
+        checkMagic();
+        if (constraintList_)
+            constraintList_->checkMagic();
+        return constraintList_;
+    }
+    void setConstraintList(TypeConstraint* constraint) {
+        MOZ_ASSERT(!constraintList_);
+        checkMagic();
+        if (constraint)
+            constraint->checkMagic();
+        constraintList_ = constraint;
+    }
 
     /*
      * Add a type to this set, calling any constraint handlers if this is a new
@@ -1128,7 +1202,12 @@ class HeapTypeSetKey
 
     TypeSet::ObjectKey* object() const { return object_; }
     jsid id() const { return id_; }
-    HeapTypeSet* maybeTypes() const { return maybeTypes_; }
+
+    HeapTypeSet* maybeTypes() const {
+        if (maybeTypes_)
+            maybeTypes_->checkMagic();
+        return maybeTypes_;
+    }
 
     bool instantiate(JSContext* cx);
 
@@ -1266,6 +1345,8 @@ struct TypeZone
     // information attached to scripts.
     bool sweepReleaseTypes;
 
+    bool sweepingTypes;
+
     // The topmost AutoEnterAnalysis on the stack, if there is one.
     AutoEnterAnalysis* activeAnalysis;
 
@@ -1283,6 +1364,11 @@ struct TypeZone
     void addPendingRecompile(JSContext* cx, JSScript* script);
 
     void processPendingRecompiles(FreeOp* fop, RecompileInfoVector& recompiles);
+
+    void setSweepingTypes(bool sweeping) {
+        MOZ_RELEASE_ASSERT(sweepingTypes != sweeping);
+        sweepingTypes = sweeping;
+    }
 };
 
 enum SpewChannel {

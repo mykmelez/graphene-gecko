@@ -58,11 +58,7 @@ def mach_parsed_kwargs(logger):
         'log_unittest': None,
         'log_xunit': None,
         'logger_name': 'Marionette-based Tests',
-        'prefs': {
-            'browser.tabs.remote.autostart': True,
-            'browser.tabs.remote.force-enable': True,
-            'extensions.e10sBlocksEnabling': False,
-        },
+        'prefs': {},
         'prefs_args': None,
         'prefs_files': None,
         'profile': None,
@@ -96,9 +92,9 @@ def mock_httpd(request):
 @pytest.fixture
 def mock_marionette(request):
     """ Mock marionette instance """
-    marionette = MagicMock(spec=Marionette)
+    marionette_class = MagicMock(spec=Marionette)
     if 'has_crashed' in request.funcargnames:
-        marionette.check_for_crash.return_value = request.getfuncargvalue(
+        marionette_class.check_for_crash.return_value = request.getfuncargvalue(
             'has_crashed'
         )
-    return marionette
+    return marionette_class

@@ -73,10 +73,12 @@ ServiceWorkerRegistrationInfo::Clear()
 }
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(const nsACString& aScope,
-                                                             nsIPrincipal* aPrincipal)
+                                                             nsIPrincipal* aPrincipal,
+                                                             nsLoadFlags aLoadFlags)
   : mControlledDocumentsCounter(0)
   , mUpdateState(NoUpdate)
   , mLastUpdateCheckTime(0)
+  , mLoadFlags(aLoadFlags)
   , mScope(aScope)
   , mPrincipal(aPrincipal)
   , mPendingUninstall(false)
@@ -236,12 +238,17 @@ ServiceWorkerRegistrationInfo::Activate()
     return;
   }
 
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  if (!swm) {
+    // browser shutdown began during async activation step
+    return;
+  }
+
   TransitionWaitingToActive();
 
   // FIXME(nsm): Unlink appcache if there is one.
 
   // "Queue a task to fire a simple event named controllerchange..."
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   nsCOMPtr<nsIRunnable> controllerChangeRunnable =
     NewRunnableMethod<RefPtr<ServiceWorkerRegistrationInfo>>(
       swm, &ServiceWorkerManager::FireControllerChange, this);
@@ -277,6 +284,10 @@ ServiceWorkerRegistrationInfo::FinishActivate(bool aSuccess)
   // Activation never fails, so aSuccess is ignored.
   mActiveWorker->UpdateState(ServiceWorkerState::Activated);
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  if (!swm) {
+    // browser shutdown started during async activation completion step
+    return;
+  }
   swm->StoreRegistration(mPrincipal, this);
 }
 
@@ -312,6 +323,11 @@ ServiceWorkerRegistrationInfo::AsyncUpdateRegistrationStateProperties(WhichServi
 {
   AssertIsOnMainThread();
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  if (!swm) {
+    // browser shutdown started during this async step
+    return;
+  }
+
   if (aTransition == Invalidate) {
     swm->InvalidateServiceWorkerRegistrationWorker(this, aWorker);
   } else {
@@ -493,6 +509,10 @@ ServiceWorkerRegistrationInfo::TransitionInstallingToWaiting()
   mWaitingWorker->UpdateState(ServiceWorkerState::Installed);
 
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  if (!swm) {
+    // browser shutdown began
+    return;
+  }
   swm->StoreRegistration(mPrincipal, this);
 }
 
@@ -546,6 +566,18 @@ bool
 ServiceWorkerRegistrationInfo::IsIdle() const
 {
   return !mActiveWorker || mActiveWorker->WorkerPrivate()->IsIdle();
+}
+
+nsLoadFlags
+ServiceWorkerRegistrationInfo::GetLoadFlags() const
+{
+  return mLoadFlags;
+}
+
+void
+ServiceWorkerRegistrationInfo::SetLoadFlags(nsLoadFlags aLoadFlags)
+{
+  mLoadFlags = aLoadFlags;
 }
 
 END_WORKERS_NAMESPACE

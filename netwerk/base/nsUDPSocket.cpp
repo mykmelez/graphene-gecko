@@ -39,7 +39,6 @@ namespace mozilla {
 namespace net {
 
 static const uint32_t UDP_PACKET_CHUNK_SIZE = 1400;
-static NS_DEFINE_CID(kSocketTransportServiceCID2, NS_SOCKETTRANSPORTSERVICE_CID);
 
 //-----------------------------------------------------------------------------
 
@@ -69,6 +68,22 @@ ResolveHost(const nsACString &host, nsIDNSListener *listener)
   return dns->AsyncResolve(host, 0, listener, nullptr,
                            getter_AddRefs(tmpOutstanding));
 
+}
+
+static nsresult
+CheckIOStatus(const NetAddr *aAddr)
+{
+  MOZ_ASSERT(gIOService);
+
+  if (gIOService->IsNetTearingDown()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (gIOService->IsOffline() && !IsLoopBackAddress(aAddr)) {
+    return NS_ERROR_OFFLINE;
+  }
+
+  return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -177,7 +192,6 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsUDPMessage)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsUDPMessage)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsUDPMessage)
@@ -260,7 +274,7 @@ nsUDPSocket::nsUDPSocket()
   {
     // This call can fail if we're offline, for example.
     nsCOMPtr<nsISocketTransportService> sts =
-        do_GetService(kSocketTransportServiceCID2);
+        do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID);
   }
 
   mSts = gSocketTransportService;
@@ -321,8 +335,9 @@ nsUDPSocket::TryAttach()
   if (!gSocketTransportService)
     return NS_ERROR_FAILURE;
 
-  if (gIOService->IsNetTearingDown()) {
-    return NS_ERROR_FAILURE;
+  rv = CheckIOStatus(&mAddr);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   //
@@ -531,7 +546,7 @@ void
 nsUDPSocket::IsLocal(bool *aIsLocal)
 {
   // If bound to loopback, this UDP socket only accepts local connections.
-  *aIsLocal = mAddr.raw.family == nsINetAddr::FAMILY_LOCAL;
+  *aIsLocal = IsLoopBackAddress(&mAddr);
 }
 
 //-----------------------------------------------------------------------------
@@ -574,18 +589,29 @@ nsUDPSocket::Init2(const nsACString& aAddr, int32_t aPort, nsIPrincipal *aPrinci
   }
 
   PRNetAddr prAddr;
+  memset(&prAddr, 0, sizeof(prAddr));
   if (PR_StringToNetAddr(aAddr.BeginReading(), &prAddr) != PR_SUCCESS) {
     return NS_ERROR_FAILURE;
   }
 
-  NetAddr addr;
-
-  if (aPort < 0)
+  if (aPort < 0) {
     aPort = 0;
+  }
 
-  addr.raw.family = AF_INET;
-  addr.inet.port = htons(aPort);
-  addr.inet.ip = prAddr.inet.ip;
+  switch (prAddr.raw.family) {
+    case PR_AF_INET:
+      prAddr.inet.port = PR_htons(aPort);
+      break;
+    case PR_AF_INET6:
+      prAddr.ipv6.port = PR_htons(aPort);
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Dont accept address other than IPv4 and IPv6");
+      return NS_ERROR_ILLEGAL_VALUE;
+  }
+
+  NetAddr addr;
+  PRNetAddrToNetAddr(&prAddr, &addr);
 
   return InitWithAddress(&addr, aPrincipal, aAddressReuse, aOptionalArgc);
 }
@@ -596,8 +622,11 @@ nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
 {
   NS_ENSURE_TRUE(mFD == nullptr, NS_ERROR_ALREADY_INITIALIZED);
 
-  if (gIOService->IsNetTearingDown()) {
-    return NS_ERROR_FAILURE;
+  nsresult rv;
+
+  rv = CheckIOStatus(aAddr);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   bool addressReuse = (aOptionalArgc == 1) ? aAddressReuse : true;
@@ -634,7 +663,8 @@ nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
   PR_SetSocketOption(mFD, &opt);
 
   PRNetAddr addr;
-  PR_InitializeNetAddr(PR_IpAddrAny, 0, &addr);
+  // Temporary work around for IPv6 until bug 1330490 is fixed
+  memset(&addr, 0, sizeof(addr));
   NetAddrToPRNetAddr(aAddr, &addr);
 
   if (PR_Bind(mFD, &addr) != PR_SUCCESS)
@@ -672,6 +702,17 @@ nsUDPSocket::Connect(const NetAddr *aAddr)
 
   NS_ENSURE_ARG(aAddr);
 
+  if (NS_WARN_IF(!mFD)) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  nsresult rv;
+
+  rv = CheckIOStatus(aAddr);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   bool onSTSThread = false;
   mSts->IsOnCurrentThread(&onSTSThread);
   NS_ASSERTION(onSTSThread, "NOT ON STS THREAD");
@@ -680,6 +721,7 @@ nsUDPSocket::Connect(const NetAddr *aAddr)
   }
 
   PRNetAddr prAddr;
+  memset(&prAddr, 0, sizeof(prAddr));
   NetAddrToPRNetAddr(aAddr, &prAddr);
 
   if (PR_Connect(mFD, &prAddr, PR_INTERVAL_NO_WAIT) != PR_SUCCESS) {

@@ -11,8 +11,8 @@ var tabPreviews = {
       return;
     this._selectedTab = gBrowser.selectedTab;
 
-    gBrowser.tabContainer.addEventListener("TabSelect", this, false);
-    gBrowser.tabContainer.addEventListener("SSTabRestored", this, false);
+    gBrowser.tabContainer.addEventListener("TabSelect", this);
+    gBrowser.tabContainer.addEventListener("SSTabRestored", this);
 
     let screenManager = Cc["@mozilla.org/gfx/screenmanager;1"]
                           .getService(Ci.nsIScreenManager);
@@ -96,29 +96,29 @@ var tabPreviews = {
 };
 
 var tabPreviewPanelHelper = {
-  opening: function(host) {
+  opening(host) {
     host.panel.hidden = false;
 
     var handler = this._generateHandler(host);
-    host.panel.addEventListener("popupshown", handler, false);
-    host.panel.addEventListener("popuphiding", handler, false);
+    host.panel.addEventListener("popupshown", handler);
+    host.panel.addEventListener("popuphiding", handler);
 
     host._prevFocus = document.commandDispatcher.focusedElement;
   },
-  _generateHandler: function(host) {
+  _generateHandler(host) {
     var self = this;
     return function(event) {
       if (event.target == host.panel) {
-        host.panel.removeEventListener(event.type, arguments.callee, false);
+        host.panel.removeEventListener(event.type, arguments.callee);
         self["_" + event.type](host);
       }
     };
   },
-  _popupshown: function(host) {
+  _popupshown(host) {
     if ("setupGUI" in host)
       host.setupGUI();
   },
-  _popuphiding: function(host) {
+  _popuphiding(host) {
     if ("suspendGUI" in host)
       host.suspendGUI();
 
@@ -219,7 +219,7 @@ var ctrlTab = {
     else
       this.uninit();
   },
-  observe: function(aSubject, aTopic, aPrefName) {
+  observe(aSubject, aTopic, aPrefName) {
     this.readPref();
   },
 
@@ -507,7 +507,7 @@ var ctrlTab = {
     }
   },
 
-  filterForThumbnailExpiration: function(aCallback) {
+  filterForThumbnailExpiration(aCallback) {
     // Save a few more thumbnails than we actually display, so that when tabs
     // are closed, the previews we add instead still get thumbnails.
     const extraThumbnails = 3;
@@ -521,7 +521,7 @@ var ctrlTab = {
     aCallback(urls);
   },
 
-  _initRecentlyUsedTabs: function() {
+  _initRecentlyUsedTabs() {
     this._recentlyUsedTabs =
       Array.filter(gBrowser.tabs, tab => !tab.closing)
            .sort((tab1, tab2) => tab2.lastAccessed - tab1.lastAccessed);

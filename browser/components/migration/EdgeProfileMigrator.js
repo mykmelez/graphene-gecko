@@ -107,13 +107,13 @@ EdgeTypedURLMigrator.prototype = {
     return this._typedURLs.size > 0;
   },
 
-  migrate: function(aCallback) {
+  migrate(aCallback) {
     let typedURLs = this._typedURLs;
     let places = [];
     for (let [urlString, time] of typedURLs) {
       let uri;
       try {
-        uri = Services.io.newURI(urlString, null, null);
+        uri = Services.io.newURI(urlString);
         if (["http", "https", "ftp"].indexOf(uri.scheme) == -1) {
           continue;
         }
@@ -140,12 +140,12 @@ EdgeTypedURLMigrator.prototype = {
 
     MigrationUtils.insertVisitsWrapper(places, {
       _success: false,
-      handleResult: function() {
+      handleResult() {
         // Importing any entry is considered a successful import.
         this._success = true;
       },
-      handleError: function() {},
-      handleCompletion: function() {
+      handleError() {},
+      handleCompletion() {
         aCallback(this._success);
       }
     });

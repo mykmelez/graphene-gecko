@@ -26,10 +26,12 @@ class Element;
 class CSSStyleSheet;
 class ServoRestyleManager;
 class ServoStyleSheet;
+struct Keyframe;
 } // namespace mozilla
 class nsIDocument;
 class nsStyleContext;
 class nsPresContext;
+struct nsTimingFunction;
 struct TreeMatchContext;
 
 namespace mozilla {
@@ -57,13 +59,11 @@ public:
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
                   nsStyleContext* aParentContext,
-                  ConsumeStyleBehavior aConsume,
                   LazyComputeBehavior aMayCompute);
 
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
                   nsStyleContext* aParentContext,
-                  ConsumeStyleBehavior aConsume,
                   LazyComputeBehavior aMayCompute,
                   TreeMatchContext& aTreeMatchContext);
 
@@ -75,10 +75,17 @@ public:
   ResolveStyleForOtherNonElement(nsStyleContext* aParentContext);
 
   already_AddRefed<nsStyleContext>
-  ResolvePseudoElementStyle(dom::Element* aParentElement,
+  ResolvePseudoElementStyle(dom::Element* aOriginatingElement,
                             mozilla::CSSPseudoElementType aType,
                             nsStyleContext* aParentContext,
                             dom::Element* aPseudoElement);
+
+  // Resolves style for a (possibly-pseudo) Element without assuming that the
+  // style has been resolved, and without worrying about setting the style
+  // context up to live in the style context tree (a null parent is used).
+  already_AddRefed<nsStyleContext>
+  ResolveTransientStyle(dom::Element* aElement,
+                        mozilla::CSSPseudoElementType aPseudoType);
 
   // aFlags is an nsStyleSet flags bitfield
   already_AddRefed<nsStyleContext>
@@ -103,12 +110,12 @@ public:
 
   // check whether there is ::before/::after style for an element
   already_AddRefed<nsStyleContext>
-  ProbePseudoElementStyle(dom::Element* aParentElement,
+  ProbePseudoElementStyle(dom::Element* aOriginatingElement,
                           mozilla::CSSPseudoElementType aType,
                           nsStyleContext* aParentContext);
 
   already_AddRefed<nsStyleContext>
-  ProbePseudoElementStyle(dom::Element* aParentElement,
+  ProbePseudoElementStyle(dom::Element* aOriginatingElement,
                           mozilla::CSSPseudoElementType aType,
                           nsStyleContext* aParentContext,
                           TreeMatchContext& aTreeMatchContext,
@@ -142,23 +149,54 @@ public:
    */
   void StyleNewChildren(Element* aParent);
 
+  /**
+   * Records that the contents of style sheets have changed since the last
+   * restyle.  Calling this will ensure that the Stylist rebuilds its
+   * selector maps.
+   */
+  void NoteStyleSheetsChanged();
+
 #ifdef DEBUG
   void AssertTreeIsClean();
 #else
   void AssertTreeIsClean() {}
 #endif
 
+  /**
+   * Rebuild the style data. This will force a stylesheet flush, and also
+   * recompute the default computed styles.
+   */
+  void RebuildData();
+
+  /**
+   * Resolve style for the given element, and return it as a
+   * ServoComputedValues, not an nsStyleContext.
+   */
+  already_AddRefed<ServoComputedValues> ResolveServoStyle(dom::Element* aElement);
+
+  /**
+   * Restyle with added declaration, for use in animations.
+   */
+  ServoComputedValuesStrong RestyleWithAddedDeclaration(
+    RawServoDeclarationBlock* aDeclarations,
+    const ServoComputedValues* aPreviousStyle);
+
+  bool FillKeyframesForName(const nsString& aName,
+                            const nsTimingFunction& aTimingFunction,
+                            const ServoComputedValues* aComputedValues,
+                            nsTArray<Keyframe>& aKeyframes);
+
 private:
   already_AddRefed<nsStyleContext> GetContext(already_AddRefed<ServoComputedValues>,
                                               nsStyleContext* aParentContext,
                                               nsIAtom* aPseudoTag,
-                                              CSSPseudoElementType aPseudoType);
+                                              CSSPseudoElementType aPseudoType,
+                                              dom::Element* aElementForAnimation);
 
   already_AddRefed<nsStyleContext> GetContext(nsIContent* aContent,
                                               nsStyleContext* aParentContext,
                                               nsIAtom* aPseudoTag,
                                               CSSPseudoElementType aPseudoType,
-                                              ConsumeStyleBehavior aConsume,
                                               LazyComputeBehavior aMayCompute);
 
   nsPresContext* mPresContext;

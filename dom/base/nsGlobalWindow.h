@@ -35,8 +35,9 @@
 #include "mozilla/EventListenerManager.h"
 #include "nsIPrincipal.h"
 #include "nsSize.h"
-#include "mozFlushType.h"
+#include "mozilla/FlushType.h"
 #include "prclist.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/StorageEvent.h"
 #include "mozilla/dom/StorageEventBinding.h"
 #include "mozilla/dom/UnionTypes.h"
@@ -102,6 +103,7 @@ struct nsRect;
 class nsWindowSizes;
 
 namespace mozilla {
+class AbstractThread;
 class DOMEventTargetHelper;
 class ThrottledEventQueue;
 namespace dom {
@@ -114,7 +116,7 @@ class DocGroup;
 class External;
 class Function;
 class Gamepad;
-enum class ImageBitmapFormat : uint32_t;
+enum class ImageBitmapFormat : uint8_t;
 class IdleRequest;
 class IdleRequestCallback;
 class Location;
@@ -337,8 +339,6 @@ public:
   void ReleaseEvents();
   void Dump(const nsAString& aStr);
   void SetResizable(bool aResizable) const;
-  nsresult GetScriptableContent(JSContext* aCx,
-                                JS::MutableHandle<JS::Value> aVal);
 
   // nsIDOMEventTarget
   NS_DECL_NSIDOMEVENTTARGET
@@ -729,7 +729,6 @@ public:
   };
   SlowScriptResponse ShowSlowScriptDialog();
 
-#ifdef MOZ_GAMEPAD
   // Inner windows only.
   void AddGamepad(uint32_t aIndex, mozilla::dom::Gamepad* aGamepad);
   void RemoveGamepad(uint32_t aIndex);
@@ -738,7 +737,6 @@ public:
   void SetHasSeenGamepadInput(bool aHasSeen);
   bool HasSeenGamepadInput();
   void SyncGamepadState();
-#endif
 
   // Inner windows only.
   // Enable/disable updates for gamepad input.
@@ -906,13 +904,14 @@ public:
   already_AddRefed<nsIDOMOfflineResourceList> GetApplicationCache() override;
 
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
-  int16_t Orientation() const;
+  int16_t Orientation(mozilla::dom::CallerType aCallerType) const;
 #endif
 
   mozilla::dom::Console* GetConsole(mozilla::ErrorResult& aRv);
 
   // https://w3c.github.io/webappsec-secure-contexts/#dom-window-issecurecontext
   bool IsSecureContext() const;
+  bool IsSecureContextIfOpenerIgnored() const;
 
   void GetSidebar(mozilla::dom::OwningExternalOrWindowProxy& aResult,
                   mozilla::ErrorResult& aRv);
@@ -927,6 +926,9 @@ public:
 
   mozilla::dom::Worklet*
   GetAudioWorklet(mozilla::ErrorResult& aRv);
+
+  mozilla::dom::Worklet*
+  GetPaintWorklet(mozilla::ErrorResult& aRv);
 
 protected:
   bool AlertOrConfirm(bool aAlert, const nsAString& aMessage,
@@ -995,8 +997,8 @@ public:
             mozilla::ErrorResult& aError);
   void Btoa(const nsAString& aBinaryData, nsAString& aAsciiBase64String,
             mozilla::ErrorResult& aError);
-  mozilla::dom::DOMStorage* GetSessionStorage(mozilla::ErrorResult& aError);
-  mozilla::dom::DOMStorage*
+  mozilla::dom::Storage* GetSessionStorage(mozilla::ErrorResult& aError);
+  mozilla::dom::Storage*
   GetLocalStorage(mozilla::ErrorResult& aError);
   mozilla::dom::Selection* GetSelectionOuter();
   mozilla::dom::Selection* GetSelection(mozilla::ErrorResult& aError);
@@ -1010,16 +1012,30 @@ public:
                                                             mozilla::ErrorResult& aError);
   nsScreen* GetScreen(mozilla::ErrorResult& aError);
   nsIDOMScreen* GetScreen() override;
-  void MoveToOuter(int32_t aXPos, int32_t aYPos, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void MoveTo(int32_t aXPos, int32_t aYPos, mozilla::ErrorResult& aError);
-  void MoveByOuter(int32_t aXDif, int32_t aYDif, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void MoveBy(int32_t aXDif, int32_t aYDif, mozilla::ErrorResult& aError);
+  void MoveToOuter(int32_t aXPos, int32_t aYPos,
+                   mozilla::dom::CallerType aCallerType,
+                   mozilla::ErrorResult& aError);
+  void MoveTo(int32_t aXPos, int32_t aYPos,
+              mozilla::dom::CallerType aCallerType,
+              mozilla::ErrorResult& aError);
+  void MoveByOuter(int32_t aXDif, int32_t aYDif,
+                   mozilla::dom::CallerType aCallerType,
+                   mozilla::ErrorResult& aError);
+  void MoveBy(int32_t aXDif, int32_t aYDif,
+              mozilla::dom::CallerType aCallerType,
+              mozilla::ErrorResult& aError);
   nsresult MoveBy(int32_t aXDif, int32_t aYDif) override;
-  void ResizeToOuter(int32_t aWidth, int32_t aHeight, mozilla::ErrorResult& aError, bool aCallerIsChrome);
+  void ResizeToOuter(int32_t aWidth, int32_t aHeight,
+                     mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
   void ResizeTo(int32_t aWidth, int32_t aHeight,
+                mozilla::dom::CallerType aCallerType,
                 mozilla::ErrorResult& aError);
-  void ResizeByOuter(int32_t aWidthDif, int32_t aHeightDif, mozilla::ErrorResult& aError, bool aCallerIsChrome);
+  void ResizeByOuter(int32_t aWidthDif, int32_t aHeightDif,
+                     mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
   void ResizeBy(int32_t aWidthDif, int32_t aHeightDif,
+                mozilla::dom::CallerType aCallerType,
                 mozilla::ErrorResult& aError);
   void Scroll(double aXScroll, double aYScroll);
   void Scroll(const mozilla::dom::ScrollToOptions& aOptions);
@@ -1033,12 +1049,16 @@ public:
                      const mozilla::dom::ScrollOptions& aOptions);
   void MozScrollSnap();
   void GetInnerWidth(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
+                     mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
   void SetInnerWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                     mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
   void GetInnerHeight(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
-                     mozilla::ErrorResult& aError);
+                      mozilla::dom::CallerType aCallerType,
+                      mozilla::ErrorResult& aError);
   void SetInnerHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                      mozilla::dom::CallerType aCallerType,
                       mozilla::ErrorResult& aError);
   int32_t GetScrollXOuter();
   int32_t GetScrollX(mozilla::ErrorResult& aError);
@@ -1052,22 +1072,29 @@ public:
   {
     return GetScrollY(aError);
   }
-  void MozRequestOverfill(mozilla::dom::OverfillCallback& aCallback, mozilla::ErrorResult& aError);
   void GetScreenX(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
+                  mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   void SetScreenX(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                  mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   void GetScreenY(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
+                  mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   void SetScreenY(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                  mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   void GetOuterWidth(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
+                     mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
   void SetOuterWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                     mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
   void GetOuterHeight(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
+                      mozilla::dom::CallerType aCallerType,
                       mozilla::ErrorResult& aError);
   void SetOuterHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                      mozilla::dom::CallerType aCallerType,
                       mozilla::ErrorResult& aError);
   int32_t RequestAnimationFrame(mozilla::dom::FrameRequestCallback& aCallback,
                                 mozilla::ErrorResult& aError);
@@ -1089,8 +1116,10 @@ public:
     GetDefaultComputedStyle(mozilla::dom::Element& aElt,
                             const nsAString& aPseudoElt,
                             mozilla::ErrorResult& aError);
-  void SizeToContentOuter(mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SizeToContent(mozilla::ErrorResult& aError);
+  void SizeToContentOuter(mozilla::dom::CallerType aCallerType,
+                          mozilla::ErrorResult& aError);
+  void SizeToContent(mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
   mozilla::dom::Crypto* GetCrypto(mozilla::ErrorResult& aError);
   mozilla::dom::U2F* GetU2f(mozilla::ErrorResult& aError);
   nsIControllers* GetControllersOuter(mozilla::ErrorResult& aError);
@@ -1098,13 +1127,15 @@ public:
   nsresult GetControllers(nsIControllers** aControllers) override;
   mozilla::dom::Element* GetRealFrameElementOuter();
   mozilla::dom::Element* GetRealFrameElement(mozilla::ErrorResult& aError);
-  float GetMozInnerScreenXOuter();
-  float GetMozInnerScreenX(mozilla::ErrorResult& aError);
-  float GetMozInnerScreenYOuter();
-  float GetMozInnerScreenY(mozilla::ErrorResult& aError);
-  float GetDevicePixelRatioOuter();
-  float GetDevicePixelRatio(mozilla::ErrorResult& aError);
-  nsresult GetDevicePixelRatio(float* aRatio) override;
+  float GetMozInnerScreenXOuter(mozilla::dom::CallerType aCallerType);
+  float GetMozInnerScreenX(mozilla::dom::CallerType aCallerType,
+                           mozilla::ErrorResult& aError);
+  float GetMozInnerScreenYOuter(mozilla::dom::CallerType aCallerType);
+  float GetMozInnerScreenY(mozilla::dom::CallerType aCallerType,
+                           mozilla::ErrorResult& aError);
+  float GetDevicePixelRatioOuter(mozilla::dom::CallerType aCallerType);
+  float GetDevicePixelRatio(mozilla::dom::CallerType aCallerType,
+                            mozilla::ErrorResult& aError);
   int32_t GetScrollMinX(mozilla::ErrorResult& aError);
   int32_t GetScrollMinY(mozilla::ErrorResult& aError);
   int32_t GetScrollMaxX(mozilla::ErrorResult& aError);
@@ -1154,34 +1185,35 @@ public:
                       nsPIDOMWindowOuter** _retval) override;
   nsresult UpdateCommands(const nsAString& anAction, nsISelection* aSel, int16_t aReason) override;
 
-  mozilla::ThrottledEventQueue* GetThrottledEventQueue() override;
-
   already_AddRefed<nsPIDOMWindowOuter>
-    GetContentInternal(mozilla::ErrorResult& aError, bool aUnprivilegedCaller);
+  GetContentInternal(mozilla::ErrorResult& aError,
+                     mozilla::dom::CallerType aCallerType);
   void GetContentOuter(JSContext* aCx,
                        JS::MutableHandle<JSObject*> aRetval,
+                       mozilla::dom::CallerType aCallerType,
                        mozilla::ErrorResult& aError);
   void GetContent(JSContext* aCx,
                   JS::MutableHandle<JSObject*> aRetval,
+                  mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   already_AddRefed<nsPIDOMWindowOuter> GetContent()
   {
     MOZ_ASSERT(IsOuterWindow());
-    mozilla::ErrorResult ignored;
+    mozilla::IgnoredErrorResult ignored;
     nsCOMPtr<nsPIDOMWindowOuter> win =
-      GetContentInternal(ignored, /* aUnprivilegedCaller = */ false);
-    ignored.SuppressException();
+      GetContentInternal(ignored, mozilla::dom::CallerType::System);
     return win.forget();
   }
 
   void Get_content(JSContext* aCx,
                    JS::MutableHandle<JSObject*> aRetval,
+                   mozilla::dom::CallerType aCallerType,
                    mozilla::ErrorResult& aError)
   {
     if (mDoc) {
       mDoc->WarnOnceAbout(nsIDocument::eWindow_Content);
     }
-    GetContent(aCx, aRetval, aError);
+    GetContent(aCx, aRetval, aCallerType, aError);
   }
 
   already_AddRefed<mozilla::dom::Promise>
@@ -1266,47 +1298,87 @@ protected:
 
   // Implementation guts for our writable IDL attributes that are really
   // supposed to be readonly replaceable.
-  typedef int32_t (nsGlobalWindow::*WindowCoordGetter)(mozilla::ErrorResult&);
-  typedef void (nsGlobalWindow::*WindowCoordSetter)(int32_t,
-                                                    mozilla::ErrorResult&);
+  typedef int32_t
+    (nsGlobalWindow::*WindowCoordGetter)(mozilla::dom::CallerType aCallerType,
+                                         mozilla::ErrorResult&);
+  typedef void
+    (nsGlobalWindow::*WindowCoordSetter)(int32_t,
+                                         mozilla::dom::CallerType aCallerType,
+                                         mozilla::ErrorResult&);
   void GetReplaceableWindowCoord(JSContext* aCx, WindowCoordGetter aGetter,
                                  JS::MutableHandle<JS::Value> aRetval,
+                                 mozilla::dom::CallerType aCallerType,
                                  mozilla::ErrorResult& aError);
   void SetReplaceableWindowCoord(JSContext* aCx, WindowCoordSetter aSetter,
                                  JS::Handle<JS::Value> aValue,
                                  const char* aPropName,
+                                 mozilla::dom::CallerType aCallerType,
                                  mozilla::ErrorResult& aError);
   // And the implementations of WindowCoordGetter/WindowCoordSetter.
 public:
   int32_t GetInnerWidthOuter(mozilla::ErrorResult& aError);
 protected:
-  int32_t GetInnerWidth(mozilla::ErrorResult& aError);
+  int32_t GetInnerWidth(mozilla::dom::CallerType aCallerType,
+                        mozilla::ErrorResult& aError);
   nsresult GetInnerWidth(int32_t* aWidth) override;
-  void SetInnerWidthOuter(int32_t aInnerWidth, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetInnerWidth(int32_t aInnerWidth, mozilla::ErrorResult& aError);
+  void SetInnerWidthOuter(int32_t aInnerWidth,
+                          mozilla::dom::CallerType aCallerType,
+                          mozilla::ErrorResult& aError);
+  void SetInnerWidth(int32_t aInnerWidth,
+                     mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
 public:
   int32_t GetInnerHeightOuter(mozilla::ErrorResult& aError);
 protected:
-  int32_t GetInnerHeight(mozilla::ErrorResult& aError);
+  int32_t GetInnerHeight(mozilla::dom::CallerType aCallerType,
+                         mozilla::ErrorResult& aError);
   nsresult GetInnerHeight(int32_t* aHeight) override;
-  void SetInnerHeightOuter(int32_t aInnerHeight, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetInnerHeight(int32_t aInnerHeight, mozilla::ErrorResult& aError);
-  int32_t GetScreenXOuter(mozilla::ErrorResult& aError);
-  int32_t GetScreenX(mozilla::ErrorResult& aError);
-  void SetScreenXOuter(int32_t aScreenX, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetScreenX(int32_t aScreenX, mozilla::ErrorResult& aError);
-  int32_t GetScreenYOuter(mozilla::ErrorResult& aError);
-  int32_t GetScreenY(mozilla::ErrorResult& aError);
-  void SetScreenYOuter(int32_t aScreenY, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetScreenY(int32_t aScreenY, mozilla::ErrorResult& aError);
-  int32_t GetOuterWidthOuter(mozilla::ErrorResult& aError);
-  int32_t GetOuterWidth(mozilla::ErrorResult& aError);
-  void SetOuterWidthOuter(int32_t aOuterWidth, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetOuterWidth(int32_t aOuterWidth, mozilla::ErrorResult& aError);
-  int32_t GetOuterHeightOuter(mozilla::ErrorResult& aError);
-  int32_t GetOuterHeight(mozilla::ErrorResult& aError);
-  void SetOuterHeightOuter(int32_t aOuterHeight, mozilla::ErrorResult& aError, bool aCallerIsChrome);
-  void SetOuterHeight(int32_t aOuterHeight, mozilla::ErrorResult& aError);
+  void SetInnerHeightOuter(int32_t aInnerHeight,
+                           mozilla::dom::CallerType aCallerType,
+                           mozilla::ErrorResult& aError);
+  void SetInnerHeight(int32_t aInnerHeight,
+                      mozilla::dom::CallerType aCallerType,
+                      mozilla::ErrorResult& aError);
+  int32_t GetScreenXOuter(mozilla::dom::CallerType aCallerType,
+                          mozilla::ErrorResult& aError);
+  int32_t GetScreenX(mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
+  void SetScreenXOuter(int32_t aScreenX,
+                       mozilla::dom::CallerType aCallerType,
+                       mozilla::ErrorResult& aError);
+  void SetScreenX(int32_t aScreenX,
+                  mozilla::dom::CallerType aCallerType,
+                  mozilla::ErrorResult& aError);
+  int32_t GetScreenYOuter(mozilla::dom::CallerType aCallerType,
+                          mozilla::ErrorResult& aError);
+  int32_t GetScreenY(mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
+  void SetScreenYOuter(int32_t aScreenY,
+                       mozilla::dom::CallerType aCallerType,
+                       mozilla::ErrorResult& aError);
+  void SetScreenY(int32_t aScreenY,
+                  mozilla::dom::CallerType aCallerType,
+                  mozilla::ErrorResult& aError);
+  int32_t GetOuterWidthOuter(mozilla::dom::CallerType aCallerType,
+                             mozilla::ErrorResult& aError);
+  int32_t GetOuterWidth(mozilla::dom::CallerType aCallerType,
+                        mozilla::ErrorResult& aError);
+  void SetOuterWidthOuter(int32_t aOuterWidth,
+                          mozilla::dom::CallerType aCallerType,
+                          mozilla::ErrorResult& aError);
+  void SetOuterWidth(int32_t aOuterWidth,
+                     mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
+  int32_t GetOuterHeightOuter(mozilla::dom::CallerType aCallerType,
+                              mozilla::ErrorResult& aError);
+  int32_t GetOuterHeight(mozilla::dom::CallerType aCallerType,
+                         mozilla::ErrorResult& aError);
+  void SetOuterHeightOuter(int32_t aOuterHeight,
+                           mozilla::dom::CallerType aCallerType,
+                           mozilla::ErrorResult& aError);
+  void SetOuterHeight(int32_t aOuterHeight,
+                      mozilla::dom::CallerType aCallerType,
+                      mozilla::ErrorResult& aError);
 
   // Array of idle observers that are notified of idle events.
   nsTObserverArray<IdleObserverHolder> mIdleObservers;
@@ -1491,6 +1563,10 @@ public:
 
   bool GetIsPrerendered();
 
+private:
+  void ReportLargeAllocStatus();
+
+public:
   // Inner windows only.
   nsresult ScheduleNextIdleObserverCallback();
   uint32_t GetFuzzTimeMS();
@@ -1504,12 +1580,14 @@ public:
   // Inner windows only.
   nsresult FireHashchange(const nsAString &aOldURL, const nsAString &aNewURL);
 
-  void FlushPendingNotifications(mozFlushType aType);
+  void FlushPendingNotifications(mozilla::FlushType aType);
 
   // Outer windows only.
   void EnsureReflowFlushAndPaint();
-  void CheckSecurityWidthAndHeight(int32_t* width, int32_t* height, bool aCallerIsChrome);
-  void CheckSecurityLeftAndTop(int32_t* left, int32_t* top, bool aCallerIsChrome);
+  void CheckSecurityWidthAndHeight(int32_t* width, int32_t* height,
+                                   mozilla::dom::CallerType aCallerType);
+  void CheckSecurityLeftAndTop(int32_t* left, int32_t* top,
+                               mozilla::dom::CallerType aCallerType);
 
   // Outer windows only.
   // Arguments to this function should have values in app units
@@ -1523,7 +1601,7 @@ public:
                                     nsIPrincipal* aSubjectPrincipal);
 
   // Outer windows only.
-  bool CanMoveResizeWindows(bool aCallerIsChrome);
+  bool CanMoveResizeWindows(mozilla::dom::CallerType aCallerType);
 
   // If aDoFlush is true, we'll flush our own layout; otherwise we'll try to
   // just flush our parent and only flush ourselves if we think we need to.
@@ -1534,9 +1612,11 @@ public:
 
   // Outer windows only.
   nsresult GetInnerSize(mozilla::CSSIntSize& aSize);
-  nsIntSize GetOuterSize(mozilla::ErrorResult& aError);
+  nsIntSize GetOuterSize(mozilla::dom::CallerType aCallerType,
+                         mozilla::ErrorResult& aError);
   void SetOuterSize(int32_t aLengthCSSPixels, bool aIsWidth,
-                    mozilla::ErrorResult& aError, bool aCallerIsChrome);
+                    mozilla::dom::CallerType aCallerType,
+                    mozilla::ErrorResult& aError);
   nsRect GetInnerScreenRect();
 
   void ScrollTo(const mozilla::CSSIntPoint& aScroll,
@@ -1630,7 +1710,8 @@ protected:
   void PreloadLocalStorage();
 
   // Returns CSS pixels based on primary screen.  Outer windows only.
-  mozilla::CSSIntPoint GetScreenXY(mozilla::ErrorResult& aError);
+  mozilla::CSSIntPoint GetScreenXY(mozilla::dom::CallerType aCallerType,
+                                   mozilla::ErrorResult& aError);
 
   nsGlobalWindow* InnerForSetTimeoutOrInterval(mozilla::ErrorResult& aError);
 
@@ -1672,9 +1753,16 @@ private:
 
   void DisconnectEventTargetObjects();
 
+
+  enum class SecureContextFlags {
+    eDefault,
+    eIgnoreOpener
+  };
   // Called only on outer windows to compute the value that will be returned by
   // IsSecureContext() for the inner window that corresponds to aDocument.
-  bool ComputeIsSecureContext(nsIDocument* aDocument);
+  bool ComputeIsSecureContext(nsIDocument* aDocument,
+                              SecureContextFlags aFlags =
+                                SecureContextFlags::eDefault);
 
   // nsPIDOMWindow<T> should be able to see these helper methods.
   friend class nsPIDOMWindow<mozIDOMWindowProxy>;
@@ -1689,11 +1777,14 @@ private:
 public:
   // Dispatch a runnable related to the global.
   virtual nsresult Dispatch(const char* aName,
-                            mozilla::dom::TaskCategory aCategory,
+                            mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
-  virtual already_AddRefed<nsIEventTarget>
-  EventTargetFor(mozilla::dom::TaskCategory aCategory) const override;
+  virtual nsIEventTarget*
+  EventTargetFor(mozilla::TaskCategory aCategory) const override;
+
+  virtual mozilla::AbstractThread*
+  AbstractMainThreadFor(mozilla::TaskCategory aCategory) override;
 
 protected:
   // These members are only used on outer window objects. Make sure
@@ -1708,6 +1799,7 @@ protected:
   bool                          mHavePendingClose : 1;
   bool                          mHadOriginalOpener : 1;
   bool                          mOriginalOpenerWasSecureContext : 1;
+  bool                          mIsSecureContextIfOpenerIgnored : 1;
   bool                          mIsPopupSpam : 1;
 
   // Indicates whether scripts are allowed to close this window.
@@ -1757,11 +1849,9 @@ protected:
   // Inner windows only.
   // Indicates whether this window wants VR events
   bool                   mHasVREvents : 1;
-#ifdef MOZ_GAMEPAD
   nsCheapSet<nsUint32HashKey> mGamepadIndexSet;
   nsRefPtrHashtable<nsUint32HashKey, mozilla::dom::Gamepad> mGamepads;
   bool mHasSeenGamepadInput;
-#endif
 
   // whether we've sent the destroy notification for our window id
   bool                   mNotifiedIDDestroyed : 1;
@@ -1801,6 +1891,7 @@ protected:
   RefPtr<mozilla::dom::cache::CacheStorage> mCacheStorage;
   RefPtr<mozilla::dom::Console> mConsole;
   RefPtr<mozilla::dom::Worklet> mAudioWorklet;
+  RefPtr<mozilla::dom::Worklet> mPaintWorklet;
   // We need to store an nsISupports pointer to this object because the
   // mozilla::dom::External class doesn't exist on b2g and using the type
   // forward declared here means that ~nsGlobalWindow wouldn't compile because
@@ -1809,8 +1900,8 @@ protected:
 
   RefPtr<mozilla::dom::MozSelfSupport> mMozSelfSupport;
 
-  RefPtr<mozilla::dom::DOMStorage> mLocalStorage;
-  RefPtr<mozilla::dom::DOMStorage> mSessionStorage;
+  RefPtr<mozilla::dom::Storage> mLocalStorage;
+  RefPtr<mozilla::dom::Storage> mSessionStorage;
 
   // These member variable are used only on inner windows.
   RefPtr<mozilla::EventListenerManager> mListenerManager;
@@ -1821,9 +1912,8 @@ protected:
   // These member variables are used on both inner and the outer windows.
   nsCOMPtr<nsIPrincipal> mDocumentPrincipal;
 
-  typedef nsTArray<RefPtr<mozilla::dom::StorageEvent>> nsDOMStorageEventArray;
-  nsDOMStorageEventArray mPendingStorageEvents;
-
+  typedef nsTArray<RefPtr<mozilla::dom::StorageEvent>> nsStorageEventArray;
+  nsStorageEventArray mPendingStorageEvents;
 
   uint32_t mSuspendDepth;
   uint32_t mFreezeDepth;

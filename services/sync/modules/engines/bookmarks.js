@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = ['BookmarksEngine', "PlacesItem", "Bookmark",
+this.EXPORTED_SYMBOLS = ["BookmarksEngine", "PlacesItem", "Bookmark",
                          "BookmarkFolder", "BookmarkQuery",
                          "Livemark", "BookmarkSeparator"];
 
@@ -312,7 +312,7 @@ BookmarksEngine.prototype = {
     let guidMap = {};
     let tree = Async.promiseSpinningly(PlacesUtils.promiseBookmarksTree(""));
 
-    function* walkBookmarksTree(tree, parent=null) {
+    function* walkBookmarksTree(tree, parent = null) {
       if (tree) {
         // Skip root node
         if (parent) {
@@ -336,7 +336,7 @@ BookmarksEngine.prototype = {
     }
 
     for (let [node, parent] of walkBookmarksRoots(tree)) {
-      let {guid, id, type: placeType} = node;
+      let {guid, type: placeType} = node;
       guid = PlacesSyncUtils.bookmarks.guidToSyncId(guid);
       let key;
       switch (placeType) {
@@ -362,7 +362,7 @@ BookmarksEngine.prototype = {
           key = "s" + node.index;
           break;
         default:
-          this._log.error("Unknown place type: '"+placeType+"'");
+          this._log.error("Unknown place type: '" + placeType + "'");
           continue;
       }
 
@@ -522,7 +522,7 @@ BookmarksEngine.prototype = {
     return false;
   },
 
-  _processIncoming: function (newitems) {
+  _processIncoming(newitems) {
     try {
       SyncEngine.prototype._processIncoming.call(this, newitems);
     } finally {
@@ -785,7 +785,7 @@ BookmarksStore.prototype = {
   },
 
   _stmts: {},
-  _getStmt: function(query) {
+  _getStmt(query) {
     if (query in this._stmts) {
       return this._stmts[query];
     }
@@ -861,14 +861,12 @@ function BookmarksTracker(name, engine) {
   this._migratedOldEntries = false;
   Tracker.call(this, name, engine);
 
-  delete this.changedIDs; // so our getter/setter takes effect.
-
   Svc.Obs.add("places-shutdown", this);
 }
 BookmarksTracker.prototype = {
   __proto__: Tracker.prototype,
 
-  //`_ignore` checks the change source for each observer notification, so we
+  // `_ignore` checks the change source for each observer notification, so we
   // don't want to let the engine ignore all changes during a sync.
   get ignoreAll() {
     return false;
@@ -882,14 +880,14 @@ BookmarksTracker.prototype = {
   // in Places.
   persistChangedIDs: false,
 
-  startTracking: function() {
+  startTracking() {
     PlacesUtils.bookmarks.addObserver(this, true);
     Svc.Obs.add("bookmarks-restore-begin", this);
     Svc.Obs.add("bookmarks-restore-success", this);
     Svc.Obs.add("bookmarks-restore-failed", this);
   },
 
-  stopTracking: function() {
+  stopTracking() {
     PlacesUtils.bookmarks.removeObserver(this);
     Svc.Obs.remove("bookmarks-restore-begin", this);
     Svc.Obs.remove("bookmarks-restore-success", this);
@@ -909,18 +907,6 @@ BookmarksTracker.prototype = {
   // instead of throwing.
   clearChangedIDs() {},
 
-  saveChangedIDs(cb) {
-    if (cb) {
-      cb();
-    }
-  },
-
-  loadChangedIDs(cb) {
-    if (cb) {
-      cb();
-    }
-  },
-
   promiseChangedIDs() {
     return PlacesSyncUtils.bookmarks.pullChanges();
   },
@@ -930,10 +916,7 @@ BookmarksTracker.prototype = {
   },
 
   set changedIDs(obj) {
-    // let engine init set it to nothing.
-    if (Object.keys(obj).length != 0) {
-      throw new Error("Don't set initial changed bookmark IDs");
-    }
+    throw new Error("Don't set initial changed bookmark IDs");
   },
 
   // Migrates tracker entries from the old JSON-based tracker to Places. This
@@ -1035,7 +1018,7 @@ BookmarksTracker.prototype = {
     this._upScore();
   },
 
-  onItemRemoved: function (itemId, parentId, index, type, uri,
+  onItemRemoved(itemId, parentId, index, type, uri,
                            guid, parentGuid, source) {
     if (IGNORED_SOURCES.includes(source)) {
       return;
@@ -1046,6 +1029,7 @@ BookmarksTracker.prototype = {
   },
 
   _ensureMobileQuery: function _ensureMobileQuery() {
+    Services.prefs.setBoolPref("browser.bookmarks.showMobileBookmarks", true);
     let find = val =>
       PlacesUtils.annotations.getItemsWithAnnotation(ORGANIZERQUERY_ANNO, {}).filter(
         id => PlacesUtils.annotations.getItemAnnotation(id, ORGANIZERQUERY_ANNO) == val
@@ -1064,17 +1048,15 @@ BookmarksTracker.prototype = {
     if (PlacesUtils.bookmarks.getIdForItemAt(PlacesUtils.mobileFolderId, 0) == -1) {
       if (mobile.length != 0)
         PlacesUtils.bookmarks.removeItem(mobile[0], SOURCE_SYNC);
-    }
-    // Add the mobile bookmarks query if it doesn't exist
-    else if (mobile.length == 0) {
+    } else if (mobile.length == 0) {
+      // Add the mobile bookmarks query if it doesn't exist
       let query = PlacesUtils.bookmarks.insertBookmark(all[0], queryURI, -1, title, /* guid */ null, SOURCE_SYNC);
       PlacesUtils.annotations.setItemAnnotation(query, ORGANIZERQUERY_ANNO, MOBILE_ANNO, 0,
                                   PlacesUtils.annotations.EXPIRE_NEVER, SOURCE_SYNC);
       PlacesUtils.annotations.setItemAnnotation(query, PlacesUtils.EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
                                   PlacesUtils.annotations.EXPIRE_NEVER, SOURCE_SYNC);
-    }
-    // Make sure the existing query URL and title are correct
-    else {
+    } else {
+      // Make sure the existing query URL and title are correct
       if (!PlacesUtils.bookmarks.getBookmarkURI(mobile[0]).equals(queryURI)) {
         PlacesUtils.bookmarks.changeBookmarkURI(mobile[0], queryURI,
                                                 SOURCE_SYNC);
@@ -1112,7 +1094,7 @@ BookmarksTracker.prototype = {
       return;
 
     this._log.trace("onItemChanged: " + itemId +
-                    (", " + property + (isAnno? " (anno)" : "")) +
+                    (", " + property + (isAnno ? " (anno)" : "")) +
                     (value ? (" = \"" + value + "\"") : ""));
     this._upScore();
   },
@@ -1129,16 +1111,16 @@ BookmarksTracker.prototype = {
     this._upScore();
   },
 
-  onBeginUpdateBatch: function () {
+  onBeginUpdateBatch() {
     ++this._batchDepth;
   },
-  onEndUpdateBatch: function () {
+  onEndUpdateBatch() {
     if (--this._batchDepth === 0 && this._batchSawScoreIncrement) {
       this.score += SCORE_INCREMENT_XLARGE;
       this._batchSawScoreIncrement = false;
     }
   },
-  onItemVisited: function () {}
+  onItemVisited() {}
 };
 
 class BookmarksChangeset extends Changeset {

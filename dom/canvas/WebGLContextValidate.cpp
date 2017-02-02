@@ -362,6 +362,16 @@ WebGLContext::ValidateAttribPointer(bool integerMode, GLuint index, GLint size, 
         return false;
     }
 
+    switch (type) {
+    case LOCAL_GL_INT_2_10_10_10_REV:
+    case LOCAL_GL_UNSIGNED_INT_2_10_10_10_REV:
+        if (size != 4) {
+            ErrorInvalidOperation("%s: size must be 4 for this type.", info);
+            return false;
+        }
+        break;
+    }
+
     // see WebGL spec section 6.6 "Vertex Attribute Data Stride"
     if (stride < 0 || stride > 255) {
         ErrorInvalidValue("%s: negative or too large stride", info);
@@ -501,6 +511,7 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mDitherEnabled = true;
     mRasterizerDiscardEnabled = false;
     mScissorTestEnabled = false;
+    mGenerateMipmapHint = LOCAL_GL_DONT_CARE;
 
     // Bindings, etc.
     mActiveTexture = 0;
@@ -525,14 +536,10 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
 
     MakeContextCurrent();
 
-    // For OpenGL compat. profiles, we always keep vertex attrib 0 array enabled.
-    if (gl->IsCompatibilityProfile())
-        gl->fEnableVertexAttribArray(0);
-
     if (MinCapabilityMode())
         mGLMaxVertexAttribs = MINVALUE_GL_MAX_VERTEX_ATTRIBS;
     else
-        gl->fGetIntegerv(LOCAL_GL_MAX_VERTEX_ATTRIBS, &mGLMaxVertexAttribs);
+        gl->GetUIntegerv(LOCAL_GL_MAX_VERTEX_ATTRIBS, &mGLMaxVertexAttribs);
 
     if (mGLMaxVertexAttribs < 8) {
         const nsPrintfCString reason("GL_MAX_VERTEX_ATTRIBS: %d is < 8!",
@@ -561,6 +568,8 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
     mBound3DTextures.SetLength(mGLMaxTextureUnits);
     mBound2DArrayTextures.SetLength(mGLMaxTextureUnits);
     mBoundSamplers.SetLength(mGLMaxTextureUnits);
+
+    gl->fGetIntegerv(LOCAL_GL_MAX_VIEWPORT_DIMS, (GLint*)mImplMaxViewportDims);
 
     ////////////////
 
@@ -729,13 +738,6 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
         return false;
     }
 
-    // Default value for all disabled vertex attributes is [0, 0, 0, 1]
-    mVertexAttribType = MakeUnique<GLenum[]>(mGLMaxVertexAttribs);
-    for (int32_t index = 0; index < mGLMaxVertexAttribs; ++index) {
-        mVertexAttribType[index] = LOCAL_GL_FLOAT;
-        VertexAttrib4f(index, 0, 0, 0, 1);
-    }
-
     mDefaultVertexArray = WebGLVertexArray::Create(this);
     mDefaultVertexArray->mAttribs.SetLength(mGLMaxVertexAttribs);
     mBoundVertexArray = mDefaultVertexArray;
@@ -772,6 +774,15 @@ WebGLContext::InitAndValidateGL(FailureReason* const out_failReason)
 
     mPrimRestartTypeBytes = 0;
 
+    mGenericVertexAttribTypes.reset(new GLenum[mGLMaxVertexAttribs]);
+    std::fill_n(mGenericVertexAttribTypes.get(), mGLMaxVertexAttribs, LOCAL_GL_FLOAT);
+
+    static const float kDefaultGenericVertexAttribData[4] = { 0, 0, 0, 1 };
+    memcpy(mGenericVertexAttrib0Data, kDefaultGenericVertexAttribData,
+           sizeof(mGenericVertexAttrib0Data));
+
+    mFakeVertexAttrib0BufferObject = 0;
+
     return true;
 }
 
@@ -798,8 +809,7 @@ WebGLContext::ValidateFramebufferTarget(GLenum target,
         return true;
     }
 
-    ErrorInvalidEnum("%s: Invalid target: %s (0x%04x).", info, EnumName(target),
-                     target);
+    ErrorInvalidEnumArg(info, "target", target);
     return false;
 }
 

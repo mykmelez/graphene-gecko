@@ -189,6 +189,7 @@
 #include "nsReferencedElement.h"
 #include "nsSandboxFlags.h"
 #include "nsScriptSecurityManager.h"
+#include "nsSerializationHelper.h"
 #include "nsStreamUtils.h"
 #include "nsTextEditorState.h"
 #include "nsTextFragment.h"
@@ -1796,7 +1797,8 @@ nsContentUtils::ParseLegacyFontSize(const nsAString& aValue)
 bool
 nsContentUtils::IsControlledByServiceWorker(nsIDocument* aDocument)
 {
-  if (nsContentUtils::IsInPrivateBrowsing(aDocument)) {
+  if (aDocument &&
+      aDocument->NodePrincipal()->OriginAttributesRef().mPrivateBrowsingId) {
     return false;
   }
 
@@ -2636,7 +2638,7 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
     // If this becomes unnecessary and the following line is removed,
     // please also remove the corresponding flush operation from
     // nsHtml5TreeBuilderCppSupplement.h. (Look for "See bug 497861." there.)
-    aContent->GetUncomposedDoc()->FlushPendingNotifications(Flush_Content);
+    aContent->GetUncomposedDoc()->FlushPendingNotifications(FlushType::Content);
 
     nsContentList *htmlForms = htmlDocument->GetForms();
     nsContentList *htmlFormControls = htmlDocument->GetFormControls();
@@ -3145,11 +3147,11 @@ nsContentUtils::CanLoadImage(nsIURI* aURI, nsISupports* aContext,
 }
 
 // static
-mozilla::PrincipalOriginAttributes
+mozilla::OriginAttributes
 nsContentUtils::GetOriginAttributes(nsIDocument* aDocument)
 {
   if (!aDocument) {
-    return mozilla::PrincipalOriginAttributes();
+    return mozilla::OriginAttributes();
   }
 
   nsCOMPtr<nsILoadGroup> loadGroup = aDocument->GetDocumentLoadGroup();
@@ -3157,67 +3159,31 @@ nsContentUtils::GetOriginAttributes(nsIDocument* aDocument)
     return GetOriginAttributes(loadGroup);
   }
 
-  mozilla::PrincipalOriginAttributes attrs;
-  mozilla::NeckoOriginAttributes nattrs;
+  mozilla::OriginAttributes attrs;
   nsCOMPtr<nsIChannel> channel = aDocument->GetChannel();
-  if (channel && NS_GetOriginAttributes(channel, nattrs)) {
-    attrs.InheritFromNecko(nattrs);
+  if (channel && NS_GetOriginAttributes(channel, attrs)) {
+    attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
   }
   return attrs;
 }
 
 // static
-mozilla::PrincipalOriginAttributes
+mozilla::OriginAttributes
 nsContentUtils::GetOriginAttributes(nsILoadGroup* aLoadGroup)
 {
   if (!aLoadGroup) {
-    return mozilla::PrincipalOriginAttributes();
+    return mozilla::OriginAttributes();
   }
-  mozilla::PrincipalOriginAttributes attrs;
-  mozilla::DocShellOriginAttributes dsattrs;
+  mozilla::OriginAttributes attrs;
   nsCOMPtr<nsIInterfaceRequestor> callbacks;
   aLoadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
   if (callbacks) {
     nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
-    if (loadContext && loadContext->GetOriginAttributes(dsattrs)) {
-      attrs.InheritFromDocShellToDoc(dsattrs, nullptr);
+    if (loadContext && loadContext->GetOriginAttributes(attrs)) {
+      attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
     }
   }
   return attrs;
-}
-
-// static
-bool
-nsContentUtils::IsInPrivateBrowsing(nsIDocument* aDoc)
-{
-  if (!aDoc) {
-    return false;
-  }
-
-  nsCOMPtr<nsILoadGroup> loadGroup = aDoc->GetDocumentLoadGroup();
-  if (loadGroup) {
-    return IsInPrivateBrowsing(loadGroup);
-  }
-
-  nsCOMPtr<nsIChannel> channel = aDoc->GetChannel();
-  return channel && NS_UsePrivateBrowsing(channel);
-}
-
-// static
-bool
-nsContentUtils::IsInPrivateBrowsing(nsILoadGroup* aLoadGroup)
-{
-  if (!aLoadGroup) {
-    return false;
-  }
-  bool isPrivate = false;
-  nsCOMPtr<nsIInterfaceRequestor> callbacks;
-  aLoadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
-  if (callbacks) {
-    nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
-    isPrivate = loadContext && loadContext->UsePrivateBrowsing();
-  }
-  return isPrivate;
 }
 
 bool
@@ -3239,9 +3205,26 @@ nsContentUtils::GetImgLoaderForDocument(nsIDocument* aDoc)
   if (!aDoc) {
     return imgLoader::NormalLoader();
   }
-  bool isPrivate = IsInPrivateBrowsing(aDoc);
-  return isPrivate ? imgLoader::PrivateBrowsingLoader()
-                   : imgLoader::NormalLoader();
+
+  nsCOMPtr<nsILoadGroup> loadGroup = aDoc->GetDocumentLoadGroup();
+  if (loadGroup) {
+    nsCOMPtr<nsIInterfaceRequestor> callbacks;
+    loadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
+    if (callbacks) {
+      nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
+      if (loadContext && loadContext->UsePrivateBrowsing()) {
+        return imgLoader::PrivateBrowsingLoader();
+      }
+    }
+    return imgLoader::NormalLoader();
+  }
+
+  nsCOMPtr<nsIChannel> channel = aDoc->GetChannel();
+  if (channel && NS_UsePrivateBrowsing(channel)) {
+    return imgLoader::PrivateBrowsingLoader();
+  }
+
+  return imgLoader::NormalLoader();
 }
 
 // static
@@ -3569,6 +3552,11 @@ nsresult nsContentUtils::FormatLocalizedString(PropertiesFile aFile,
   nsresult rv = EnsureStringBundle(aFile);
   NS_ENSURE_SUCCESS(rv, rv);
   nsIStringBundle *bundle = sStringBundles[aFile];
+
+  if (!aParams || !aParamsLength) {
+    return bundle->GetStringFromName(NS_ConvertASCIItoUTF16(aKey).get(),
+                                     getter_Copies(aResult));
+  }
 
   return bundle->FormatStringFromName(NS_ConvertASCIItoUTF16(aKey).get(),
                                       aParams, aParamsLength,
@@ -5128,7 +5116,7 @@ nsContentUtils::TriggerLink(nsIContent *aContent, nsPresContext *aPresContext,
 
     handler->OnLinkClick(aContent, aLinkURI,
                          fileName.IsVoid() ? aTargetSpec.get() : EmptyString().get(),
-                         fileName, nullptr, nullptr, aIsTrusted);
+                         fileName, nullptr, nullptr, aIsTrusted, aContent->NodePrincipal());
   }
 }
 
@@ -6456,7 +6444,7 @@ nsContentUtils::FlushLayoutForTree(nsPIDOMWindowOuter* aWindow)
   // usually pretty shallow.
 
   if (nsCOMPtr<nsIDocument> doc = aWindow->GetDoc()) {
-    doc->FlushPendingNotifications(Flush_Layout);
+    doc->FlushPendingNotifications(FlushType::Layout);
   }
 
   if (nsCOMPtr<nsIDocShell> docShell = aWindow->GetDocShell()) {
@@ -7822,7 +7810,7 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
               continue;
             }
 
-            blobImpl = new BlobImplFile(file, false);
+            blobImpl = new BlobImplFile(file);
             ErrorResult rv;
             // Ensure that file data is cached no that the content process
             // has this data available to it when passed over:
@@ -8233,6 +8221,7 @@ nsContentUtils::SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
                                bool aIgnoreRootScrollFrame,
                                float aPressure,
                                unsigned short aInputSourceArg,
+                               uint32_t aIdentifier,
                                bool aToWindow,
                                bool *aPreventDefault,
                                bool aIsDOMEventSynthesized,
@@ -8280,6 +8269,7 @@ nsContentUtils::SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
                            WidgetMouseEvent::eReal,
                          contextMenuKey ? WidgetMouseEvent::eContextMenuKey :
                                           WidgetMouseEvent::eNormal);
+  event.pointerId = aIdentifier;
   event.mModifiers = GetWidgetModifiers(aModifiers);
   event.button = aButton;
   event.buttons = aButtons != nsIDOMWindowUtils::MOUSE_BUTTONS_NOT_SPECIFIED ?
@@ -8505,9 +8495,7 @@ nsContentUtils::SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
     referrerURI = principalURI;
   }
 
-  net::ReferrerPolicy referrerPolicy = (aReferrerPolicy != net::RP_Unset) ?
-                                       aReferrerPolicy : net::RP_Default;
-  return aChannel->SetReferrerWithPolicy(referrerURI, referrerPolicy);
+  return aChannel->SetReferrerWithPolicy(referrerURI, aReferrerPolicy);
 }
 
 // static
@@ -8521,6 +8509,9 @@ nsContentUtils::GetReferrerPolicyFromHeader(const nsAString& aHeader)
   net::ReferrerPolicy referrerPolicy = mozilla::net::RP_Unset;
   while (tokenizer.hasMoreTokens()) {
     token = tokenizer.nextToken();
+    if (token.IsEmpty()) {
+      continue;
+    }
     net::ReferrerPolicy policy = net::ReferrerPolicyFromString(token);
     if (policy != net::RP_Unset) {
       referrerPolicy = policy;
@@ -8612,7 +8603,7 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
     }
 
     // Check if we are in private browsing, and record that fact
-    if (IsInPrivateBrowsing(document)) {
+    if (document->NodePrincipal()->OriginAttributesRef().mPrivateBrowsingId) {
       access = StorageAccess::ePrivateBrowsing;
     }
   }
@@ -9693,39 +9684,14 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
     return false;
   }
 
-  nsIDocShell* docShell = outer->GetDocShell();
-  nsIDocument* doc = outer->GetExtantDoc();
-
-  // If the docshell is not allowed to change process, report an error based on
-  // the reason
-  const char* errorName = nullptr;
-  switch (docShell->GetProcessLockReason()) {
-    case nsIDocShell::PROCESS_LOCK_NON_CONTENT:
-      errorName = "LargeAllocationNonE10S";
-      break;
-    case nsIDocShell::PROCESS_LOCK_IFRAME:
-      errorName = "LargeAllocationIFrame";
-      break;
-    case nsIDocShell::PROCESS_LOCK_RELATED_CONTEXTS:
-      errorName = "LargeAllocationRelatedBrowsingContexts";
-      break;
-    case nsIDocShell::PROCESS_LOCK_NONE:
-      // Don't print a warning, we're allowed to change processes!
-      break;
-    default:
-      MOZ_ASSERT(false, "Should be unreachable!");
-      return false;
+  if (!XRE_IsContentProcess()) {
+    outer->SetLargeAllocStatus(LargeAllocStatus::NON_E10S);
+    return false;
   }
 
-  if (errorName) {
-    if (doc) {
-      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                      NS_LITERAL_CSTRING("DOM"),
-                                      doc,
-                                      nsContentUtils::eDOM_PROPERTIES,
-                                      errorName);
-    }
-
+  nsIDocShell* docShell = outer->GetDocShell();
+  if (!docShell->GetIsOnlyToplevelInTabGroup()) {
+    outer->SetLargeAllocStatus(LargeAllocStatus::NOT_ONLY_TOPLEVEL_IN_TABGROUP);
     return false;
   }
 
@@ -9736,28 +9702,47 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
   NS_ENSURE_SUCCESS(rv, false);
 
   if (NS_WARN_IF(!requestMethod.LowerCaseEqualsLiteral("get"))) {
-    if (doc) {
-      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                      NS_LITERAL_CSTRING("DOM"),
-                                      doc,
-                                      nsContentUtils::eDOM_PROPERTIES,
-                                      "LargeAllocationNonGetRequest");
-    }
+    outer->SetLargeAllocStatus(LargeAllocStatus::NON_GET);
     return false;
   }
 
-  TabChild* tabChild = TabChild::GetFrom(outer);
+  TabChild* tabChild = TabChild::GetFrom(outer->AsOuter());
   NS_ENSURE_TRUE(tabChild, false);
 
-  if (tabChild->TakeIsFreshProcess())  {
-    NS_WARNING("Already in a fresh process, ignoring Large-Allocation header!");
-    if (doc) {
-      nsContentUtils::ReportToConsole(nsIScriptError::infoFlag,
-                                      NS_LITERAL_CSTRING("DOM"),
-                                      doc,
-                                      nsContentUtils::eDOM_PROPERTIES,
-                                      "LargeAllocationSuccess");
-    }
+  if (tabChild->TakeAwaitingLargeAlloc())  {
+    NS_WARNING("In a Large-Allocation TabChild, ignoring Large-Allocation header!");
+    outer->SetLargeAllocStatus(LargeAllocStatus::SUCCESS);
+    return false;
+  }
+
+  // On Win32 systems, we want to behave differently, so set the isWin32 bool to
+  // be true iff we are on win32.
+#if defined(XP_WIN) && defined(_X86_)
+  const bool isWin32 = true;
+#else
+  const bool isWin32 = false;
+#endif
+
+  static bool sLargeAllocForceEnable = false;
+  static bool sCachedLargeAllocForceEnable = false;
+  if (!sCachedLargeAllocForceEnable) {
+    sCachedLargeAllocForceEnable = true;
+    mozilla::Preferences::AddBoolVarCache(&sLargeAllocForceEnable,
+                                          "dom.largeAllocation.forceEnable");
+  }
+
+  // We want to enable the large allocation header on 32-bit windows machines,
+  // and disable it on other machines, while still printing diagnostic messages.
+  // dom.largeAllocation.forceEnable can allow you to enable the process
+  // switching behavior of the Large-Allocation header on non 32-bit windows
+  // machines.
+  bool largeAllocEnabled = isWin32 || sLargeAllocForceEnable;
+  if (!largeAllocEnabled) {
+    NS_WARNING("dom.largeAllocation.forceEnable not set - "
+               "ignoring otherwise successful Large-Allocation header.");
+    // On platforms which aren't WIN32, we don't activate the largeAllocation
+    // header, instead we simply emit diagnostics into the console.
+    outer->SetLargeAllocStatus(LargeAllocStatus::NON_WIN32);
     return false;
   }
 
@@ -9781,9 +9766,28 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
   rv = aChannel->GetReferrer(getter_AddRefs(referrer));
   NS_ENSURE_SUCCESS(rv, false);
 
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  nsCOMPtr<nsIPrincipal> triggeringPrincipal = loadInfo->TriggeringPrincipal();
+
+  // Get the channel's load flags, and use them to generate nsIWebNavigation
+  // load flags. We want to make sure to propagate the refresh and cache busting
+  // flags.
+  nsLoadFlags channelLoadFlags;
+  aChannel->GetLoadFlags(&channelLoadFlags);
+
+  uint32_t webnavLoadFlags = nsIWebNavigation::LOAD_FLAGS_NONE;
+  if (channelLoadFlags & nsIRequest::LOAD_BYPASS_CACHE) {
+    webnavLoadFlags |= nsIWebNavigation::LOAD_FLAGS_BYPASS_CACHE;
+    webnavLoadFlags |= nsIWebNavigation::LOAD_FLAGS_BYPASS_PROXY;
+  } else if (channelLoadFlags & nsIRequest::VALIDATE_ALWAYS) {
+    webnavLoadFlags |= nsIWebNavigation::LOAD_FLAGS_IS_REFRESH;
+  }
+
   // Actually perform the cross process load
   bool reloadSucceeded = false;
-  rv = wbc3->ReloadInFreshProcess(docShell, uri, referrer, &reloadSucceeded);
+  rv = wbc3->ReloadInFreshProcess(docShell, uri, referrer,
+                                  triggeringPrincipal, webnavLoadFlags,
+                                  &reloadSucceeded);
   NS_ENSURE_SUCCESS(rv, false);
 
   return reloadSucceeded;
@@ -9805,4 +9809,34 @@ nsContentUtils::AppendDocumentLevelNativeAnonymousContentTo(
       creator->AppendAnonymousContentTo(aElements, 0);
     }
   }
+}
+
+/* static */ void
+nsContentUtils::GetContentPolicyTypeForUIImageLoading(nsIContent* aLoadingNode,
+                                                      nsIPrincipal** aLoadingPrincipal,
+                                                      nsContentPolicyType& aContentPolicyType)
+{
+  // Use the serialized loadingPrincipal from the image element. Fall back
+  // to mContent's principal (SystemPrincipal) if not available.
+  aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE;
+  nsCOMPtr<nsIPrincipal> loadingPrincipal = aLoadingNode->NodePrincipal();
+  nsAutoString imageLoadingPrincipal;
+  aLoadingNode->GetAttr(kNameSpaceID_None, nsGkAtoms::loadingprincipal,
+                        imageLoadingPrincipal);
+  if (!imageLoadingPrincipal.IsEmpty()) {
+    nsCOMPtr<nsISupports> serializedPrincipal;
+    NS_DeserializeObject(NS_ConvertUTF16toUTF8(imageLoadingPrincipal),
+                         getter_AddRefs(serializedPrincipal));
+    loadingPrincipal = do_QueryInterface(serializedPrincipal);
+
+    if (loadingPrincipal) {
+      // Set the content policy type to TYPE_INTERNAL_IMAGE_FAVICON for
+      // indicating it's a favicon loading.
+      aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON;
+    } else {
+      // Fallback if the deserialization is failed.
+      loadingPrincipal = aLoadingNode->NodePrincipal();
+    }
+  }
+  loadingPrincipal.forget(aLoadingPrincipal);
 }

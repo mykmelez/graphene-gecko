@@ -22,6 +22,7 @@
 
 #include "mozilla/ArenaObjectID.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/FlushType.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StyleSetHandle.h"
@@ -39,7 +40,6 @@
 #include "nsFrameManagerBase.h"
 #include "nsRect.h"
 #include "nsRegionFwd.h"
-#include "mozFlushType.h"
 #include "nsWeakReference.h"
 #include <stdio.h> // for FILE definition
 #include "nsChangeHint.h"
@@ -194,6 +194,8 @@ protected:
   typedef uint8_t RenderFlags; // for storing the above flags
 
 public:
+  nsIPresShell();
+
   /**
    * All callers are responsible for calling |Destroy| after calling
    * |EndObservingDocument|.  It needs to be separate only because form
@@ -580,7 +582,7 @@ public:
    *
    * @param aType the type of notifications to flush
    */
-  virtual void FlushPendingNotifications(mozFlushType aType) = 0;
+  virtual void FlushPendingNotifications(mozilla::FlushType aType) = 0;
   virtual void FlushPendingNotifications(mozilla::ChangesToFlush aType) = 0;
 
   /**
@@ -867,13 +869,6 @@ public:
                                                         nsEventStatus* aStatus) = 0;
 
   /**
-   * Dispatch AfterKeyboardEvent with specific target.
-   */
-  virtual void DispatchAfterKeyboardEvent(nsINode* aTarget,
-                                          const mozilla::WidgetKeyboardEvent& aEvent,
-                                          bool aEmbeddedCancelled) = 0;
-
-  /**
    * Return whether or not the event is valid to be dispatched
    */
   virtual bool CanDispatchEvent(
@@ -1005,8 +1000,7 @@ public:
 
 #ifdef DEBUG
   // Debugging hooks
-  virtual void ListStyleContexts(nsIFrame *aRootFrame, FILE *out,
-                                 int32_t aIndent = 0) = 0;
+  virtual void ListStyleContexts(FILE *out, int32_t aIndent = 0) = 0;
 
   virtual void ListStyleSheets(FILE *out, int32_t aIndent = 0) = 0;
   virtual void VerifyStyleTree() = 0;
@@ -1625,13 +1619,13 @@ public:
    */
 protected:
   virtual bool AddRefreshObserverExternal(nsARefreshObserver* aObserver,
-                                          mozFlushType aFlushType);
+                                          mozilla::FlushType aFlushType);
   bool AddRefreshObserverInternal(nsARefreshObserver* aObserver,
-                                  mozFlushType aFlushType);
+                                  mozilla::FlushType aFlushType);
   virtual bool RemoveRefreshObserverExternal(nsARefreshObserver* aObserver,
-                                             mozFlushType aFlushType);
+                                             mozilla::FlushType aFlushType);
   bool RemoveRefreshObserverInternal(nsARefreshObserver* aObserver,
-                                     mozFlushType aFlushType);
+                                     mozilla::FlushType aFlushType);
 
   /**
    * Do computations necessary to determine if font size inflation is enabled.
@@ -1656,7 +1650,7 @@ protected:
 
 public:
   bool AddRefreshObserver(nsARefreshObserver* aObserver,
-                          mozFlushType aFlushType) {
+                          mozilla::FlushType aFlushType) {
 #ifdef MOZILLA_INTERNAL_API
     return AddRefreshObserverInternal(aObserver, aFlushType);
 #else
@@ -1665,7 +1659,7 @@ public:
   }
 
   bool RemoveRefreshObserver(nsARefreshObserver* aObserver,
-                             mozFlushType aFlushType) {
+                             mozilla::FlushType aFlushType) {
 #ifdef MOZILLA_INTERNAL_API
     return RemoveRefreshObserverInternal(aObserver, aFlushType);
 #else
@@ -1753,11 +1747,6 @@ protected:
   // posted messages are processed before other messages when the modal
   // moving/sizing loop is running, see bug 491700 for details.
   nsCOMPtr<nsITimer>        mReflowContinueTimer;
-
-#ifdef MOZ_B2G
-  // Forward hardware key events to the input-method-app
-  nsCOMPtr<nsIHardwareKeyHandler> mHardwareKeyHandler;
-#endif // MOZ_B2G
 
 #ifdef DEBUG
   nsIFrame*                 mDrawEventTargetFrame;

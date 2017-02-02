@@ -73,7 +73,7 @@
 #include "mozilla/DebugOnly.h"
 #include "ProfileEntry.h"
 #include "nsThreadUtils.h"
-#include "GeckoSampler.h"
+#include "ThreadProfile.h"
 #include "ThreadResponsiveness.h"
 
 #if defined(__ARM_EABI__) && defined(ANDROID)
@@ -138,9 +138,10 @@ static bool was_paused = false;
 // In the parent, just before the fork, record the pausedness state,
 // and then pause.
 static void paf_prepare(void) {
-  if (Sampler::GetActiveSampler()) {
-    was_paused = Sampler::GetActiveSampler()->IsPaused();
-    Sampler::GetActiveSampler()->SetPaused(true);
+  // XXX: this is an off-main-thread(?) use of gSampler
+  if (gSampler) {
+    was_paused = gSampler->IsPaused();
+    gSampler->SetPaused(true);
   } else {
     was_paused = false;
   }
@@ -149,8 +150,10 @@ static void paf_prepare(void) {
 // In the parent, just after the fork, return pausedness to the
 // pre-fork state.
 static void paf_parent(void) {
-  if (Sampler::GetActiveSampler())
-    Sampler::GetActiveSampler()->SetPaused(was_paused);
+  // XXX: this is an off-main-thread(?) use of gSampler
+  if (gSampler) {
+    gSampler->SetPaused(was_paused);
+  }
 }
 
 // Set up the fork handlers.
@@ -177,7 +180,8 @@ static mozilla::Atomic<ThreadProfile*> sCurrentThreadProfile;
 static sem_t sSignalHandlingDone;
 
 static void ProfilerSaveSignalHandler(int signal, siginfo_t* info, void* context) {
-  Sampler::GetActiveSampler()->RequestSave();
+  // XXX: this is an off-main-thread(?) use of gSampler
+  gSampler->RequestSave();
 }
 
 static void SetSampleContext(TickSample* sample, void* context)
@@ -230,7 +234,8 @@ void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   // Avoid TSan warning about clobbering errno.
   int savedErrno = errno;
 
-  if (!Sampler::GetActiveSampler()) {
+  // XXX: this is an off-main-thread(?) use of gSampler
+  if (!gSampler) {
     sem_post(&sSignalHandlingDone);
     errno = savedErrno;
     return;
@@ -240,16 +245,15 @@ void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   TickSample* sample = &sample_obj;
   sample->context = context;
 
-  // If profiling, we extract the current pc and sp.
-  if (Sampler::GetActiveSampler()->IsProfiling()) {
-    SetSampleContext(sample, context);
-  }
+  // Extract the current pc and sp.
+  SetSampleContext(sample, context);
   sample->threadProfile = sCurrentThreadProfile;
   sample->timestamp = mozilla::TimeStamp::Now();
   sample->rssMemory = sample->threadProfile->mRssMemory;
   sample->ussMemory = sample->threadProfile->mUssMemory;
 
-  Sampler::GetActiveSampler()->Tick(sample);
+  // XXX: this is an off-main-thread(?) use of gSampler
+  gSampler->Tick(sample);
 
   sCurrentThreadProfile = NULL;
   sem_post(&sSignalHandlingDone);
@@ -261,7 +265,8 @@ void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
 static void ProfilerSignalThread(ThreadProfile *profile,
                                  bool isFirstProfiledThread)
 {
-  if (isFirstProfiledThread && Sampler::GetActiveSampler()->ProfileMemory()) {
+  // XXX: this is an off-main-thread(?) use of gSampler
+  if (isFirstProfiledThread && gSampler->ProfileMemory()) {
     profile->mRssMemory = nsMemoryReporterManager::ResidentFast();
     profile->mUssMemory = nsMemoryReporterManager::ResidentUnique();
   } else {
@@ -287,14 +292,14 @@ class PlatformData {
   }
 };
 
-/* static */ PlatformData*
-Sampler::AllocPlatformData(int aThreadId)
+/* static */ auto
+Sampler::AllocPlatformData(int aThreadId) -> UniquePlatformData
 {
-  return new PlatformData;
+  return UniquePlatformData(new PlatformData);
 }
 
-/* static */ void
-Sampler::FreePlatformData(PlatformData* aData)
+void
+Sampler::PlatformDataDestructor::operator()(PlatformData* aData)
 {
   delete aData;
 }
@@ -316,8 +321,8 @@ static void* SignalSender(void* arg) {
     SamplerRegistry::sampler->DeleteExpiredMarkers();
 
     if (!SamplerRegistry::sampler->IsPaused()) {
-      ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-      std::vector<ThreadInfo*> threads =
+      MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
+      const std::vector<ThreadInfo*>& threads =
         SamplerRegistry::sampler->GetRegisteredThreads();
 
       bool isFirstProfiledThread = true;
@@ -387,21 +392,6 @@ static void* SignalSender(void* arg) {
   }
   return 0;
 }
-
-Sampler::Sampler(double interval, bool profiling, int entrySize)
-    : interval_(interval),
-      profiling_(profiling),
-      paused_(false),
-      active_(false),
-      entrySize_(entrySize) {
-  MOZ_COUNT_CTOR(Sampler);
-}
-
-Sampler::~Sampler() {
-  MOZ_COUNT_DTOR(Sampler);
-  ASSERT(!signal_sender_launched_);
-}
-
 
 void Sampler::Start() {
   LOG("Sampler started");
@@ -490,69 +480,6 @@ void Sampler::Stop() {
     sigaction(SIGNAL_SAVE_PROFILE, &old_sigsave_signal_handler_, 0);
     sigaction(SIGPROF, &old_sigprof_signal_handler_, 0);
     signal_handler_installed_ = false;
-  }
-}
-
-bool Sampler::RegisterCurrentThread(const char* aName,
-                                    PseudoStack* aPseudoStack,
-                                    bool aIsMainThread, void* stackTop)
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return false;
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = gettid();
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      // Thread already registered. This means the first unregister will be
-      // too early.
-      ASSERT(false);
-      return false;
-    }
-  }
-
-  set_tls_stack_top(stackTop);
-
-  ThreadInfo* info = new StackOwningThreadInfo(aName, id,
-    aIsMainThread, aPseudoStack, stackTop);
-
-  if (sActiveSampler) {
-    sActiveSampler->RegisterThread(info);
-  }
-
-  sRegisteredThreads->push_back(info);
-
-  return true;
-}
-
-void Sampler::UnregisterCurrentThread()
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return;
-
-  tlsStackTop.set(nullptr);
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = gettid();
-
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      if (profiler_is_active()) {
-        // We still want to show the results of this thread if you
-        // save the profile shortly after a thread is terminated.
-        // For now we will defer the delete to profile stop.
-        info->SetPendingDelete();
-        break;
-      } else {
-        delete info;
-        sRegisteredThreads->erase(sRegisteredThreads->begin() + i);
-        break;
-      }
-    }
   }
 }
 

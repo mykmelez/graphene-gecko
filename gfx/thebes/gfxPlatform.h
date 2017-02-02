@@ -39,6 +39,7 @@ class nsIAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
 class gfxTextPerfMetrics;
+typedef struct FT_LibraryRec_ *FT_Library;
 
 namespace mozilla {
 namespace gl {
@@ -281,12 +282,7 @@ public:
 
     static bool AsyncPanZoomEnabled();
 
-    virtual void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
-      aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
-      aObj.DefineProperty("AzureCanvasAccelerated", AllowOpenGLCanvas());
-      aObj.DefineProperty("AzureFallbackCanvasBackend", GetBackendName(mFallbackCanvasBackend));
-      aObj.DefineProperty("AzureContentBackend", GetBackendName(mContentBackend));
-    }
+    virtual void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj);
     void GetApzSupportInfo(mozilla::widget::InfoObject& aObj);
     void GetTilesSupportInfo(mozilla::widget::InfoObject& aObj);
 
@@ -674,10 +670,6 @@ public:
       return false;
     }
 
-    uint64_t GetDeviceCounter() const {
-      return mDeviceCounter;
-    }
-
     /**
      * Check the blocklist for a feature. Returns false if the feature is blocked
      * with an appropriate message and failure ID.
@@ -698,6 +690,10 @@ public:
      * GPUProcessManager, in the UI process.
      */
     virtual void ImportGPUDeviceData(const mozilla::gfx::GPUDeviceData& aData);
+
+    virtual FT_Library GetFTLibrary() {
+      return nullptr;
+    }
 
 protected:
     gfxPlatform();
@@ -856,9 +852,6 @@ private:
 
     int32_t mScreenDepth;
     mozilla::gfx::IntSize mScreenSize;
-
-    // Generation number for devices that ClientLayerManagers might depend on.
-    uint64_t mDeviceCounter;
 
     // An instance of gfxSkipChars which is empty. It is used as the
     // basis for error-case iterators.

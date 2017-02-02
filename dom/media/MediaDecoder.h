@@ -42,8 +42,10 @@ namespace mozilla {
 
 namespace dom {
 class Promise;
+class HTMLMediaElement;
 }
 
+class AbstractThread;
 class VideoFrameContainer;
 class MediaDecoderStateMachine;
 
@@ -66,6 +68,7 @@ public:
     static const uint32_t sDelay = 500;
 
   public:
+    explicit ResourceCallback(AbstractThread* aMainThread);
     // Start to receive notifications from ResourceCallback.
     void Connect(MediaDecoder* aDecoder);
     // Called upon shutdown to stop receiving notifications.
@@ -90,6 +93,7 @@ public:
     MediaDecoder* mDecoder = nullptr;
     nsCOMPtr<nsITimer> mTimer;
     bool mTimerArmed = false;
+    const RefPtr<AbstractThread> mAbstractMainThread;
   };
 
   typedef MozPromise<bool /* aIgnored */, bool /* aIgnored */, /* IsExclusive = */ true> SeekPromise;
@@ -190,6 +194,8 @@ public:
   // played. This reduces the memory overhead of media elements that may
   // not be played. Note that seeking also doesn't cause us start prerolling.
   void SetMinimizePrerollUntilPlaybackStarts();
+
+  bool GetMinimizePreroll() const { return mMinimizePreroll; }
 
   // All MediaStream-related data is protected by mReentrantMonitor.
   // We have at most one DecodedStreamData per MediaDecoder. Its stream
@@ -399,7 +405,7 @@ private:
   void UpdateLogicalPosition()
   {
     MOZ_ASSERT(NS_IsMainThread());
-    MOZ_ASSERT(!IsShutdown());
+    MOZ_DIAGNOSTIC_ASSERT(!IsShutdown());
     // Per spec, offical position remains stable during pause and seek.
     if (mPlayState == PLAY_STATE_PAUSED || IsSeeking()) {
       return;
@@ -418,6 +424,11 @@ private:
   void UpdateSameOriginStatus(bool aSameOrigin);
 
   MediaDecoderOwner* GetOwner() const override;
+
+  AbstractThread* AbstractMainThread() const final override
+  {
+    return mAbstractMainThread;
+  }
 
   typedef MozPromise<RefPtr<CDMProxy>, bool /* aIgnored */, /* IsExclusive = */ true> CDMProxyPromise;
 
@@ -461,8 +472,8 @@ private:
   void UpdateReadyState()
   {
     MOZ_ASSERT(NS_IsMainThread());
-    MOZ_ASSERT(!IsShutdown());
-    mOwner->UpdateReadyState();
+    MOZ_DIAGNOSTIC_ASSERT(!IsShutdown());
+    GetOwner()->UpdateReadyState();
   }
 
   virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus() { return mNextFrameStatus; }
@@ -470,9 +481,12 @@ private:
 
   // Returns a string describing the state of the media player internal
   // data. Used for debugging purposes.
-  virtual void GetMozDebugReaderData(nsAString& aString) {}
+  virtual void GetMozDebugReaderData(nsACString& aString) {}
 
   virtual void DumpDebugInfo();
+
+  using DebugInfoPromise = MozPromise<nsCString, bool, true>;
+  RefPtr<DebugInfoPromise> RequestDebugInfo();
 
 protected:
   virtual ~MediaDecoder();
@@ -500,7 +514,7 @@ protected:
 
   void SetExplicitDuration(double aValue)
   {
-    MOZ_ASSERT(!IsShutdown());
+    MOZ_DIAGNOSTIC_ASSERT(!IsShutdown());
     mExplicitDuration.Set(Some(aValue));
 
     // We Invoke DurationChanged explicitly, rather than using a watcher, so
@@ -541,6 +555,8 @@ protected:
   static const int DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED = 250000;
 
 private:
+  nsCString GetDebugInfo();
+
   // Called when the metadata from the media file has been loaded by the
   // state machine. Call on the main thread only.
   void MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
@@ -625,6 +641,9 @@ protected:
   // It is set in the constructor and cleared in Shutdown when the element goes
   // away. The decoder does not add a reference the element.
   MediaDecoderOwner* mOwner;
+
+  // The AbstractThread from mOwner.
+  const RefPtr<AbstractThread> mAbstractMainThread;
 
   // Counters related to decode and presentation of frames.
   const RefPtr<FrameStatistics> mFrameStats;
@@ -845,6 +864,10 @@ private:
   void NotifyDownloadEnded(nsresult aStatus);
 
   bool mTelemetryReported;
+
+  // Used to debug how mOwner becomes a dangling pointer in bug 1326294.
+  bool mIsMediaElement;
+  WeakPtr<dom::HTMLMediaElement> mElement;
 };
 
 } // namespace mozilla

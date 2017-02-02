@@ -108,6 +108,8 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
 
+    PROFILER_LABEL("HTMLCanvasElement", "FrameCapture", js::ProfileEntry::Category::OTHER);
+
     if (!mOwningElement) {
       return;
     }
@@ -126,18 +128,29 @@ public:
       return;
     }
 
-    RefPtr<SourceSurface> snapshot = mOwningElement->GetSurfaceSnapshot(nullptr);
-    if (!snapshot) {
-      return;
+    RefPtr<SourceSurface> snapshot;
+    {
+      PROFILER_LABEL("HTMLCanvasElement", "GetSnapshot", js::ProfileEntry::Category::OTHER);
+      snapshot = mOwningElement->GetSurfaceSnapshot(nullptr);
+      if (!snapshot) {
+        return;
+      }
     }
 
-    RefPtr<DataSourceSurface> copy = CopySurface(snapshot);
-    if (!copy) {
-      return;
+    RefPtr<DataSourceSurface> copy;
+    {
+      PROFILER_LABEL("HTMLCanvasElement", "CopySnapshot", js::ProfileEntry::Category::OTHER);
+      copy = CopySurface(snapshot);
+      if (!copy) {
+        return;
+      }
     }
 
-    mOwningElement->SetFrameCapture(copy.forget());
-    mOwningElement->MarkContextCleanForFrameCapture();
+    {
+      PROFILER_LABEL("HTMLCanvasElement", "SetFrame", js::ProfileEntry::Category::OTHER);
+      mOwningElement->SetFrameCapture(copy.forget(), aTime);
+      mOwningElement->MarkContextCleanForFrameCapture();
+    }
   }
 
   void DetachFromRefreshDriver()
@@ -157,7 +170,7 @@ public:
 
     MOZ_ASSERT(mRefreshDriver);
     if (mRefreshDriver) {
-      mRefreshDriver->AddRefreshObserver(this, Flush_Display);
+      mRefreshDriver->AddRefreshObserver(this, FlushType::Display);
       mRegistered = true;
     }
   }
@@ -170,7 +183,7 @@ public:
 
     MOZ_ASSERT(mRefreshDriver);
     if (mRefreshDriver) {
-      mRefreshDriver->RemoveRefreshObserver(this, Flush_Display);
+      mRefreshDriver->RemoveRefreshObserver(this, FlushType::Display);
       mRegistered = false;
     }
   }
@@ -1261,7 +1274,8 @@ HTMLCanvasElement::ProcessDestroyedFrameListeners()
 }
 
 void
-HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface)
+HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface,
+                                   const TimeStamp& aTime)
 {
   RefPtr<SourceSurface> surface = aSurface;
   RefPtr<SourceSurfaceImage> image = new SourceSurfaceImage(surface->GetSize(), surface);
@@ -1272,7 +1286,7 @@ HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface)
     }
 
     RefPtr<Image> imageRefCopy = image.get();
-    listener->NewFrame(imageRefCopy.forget());
+    listener->NewFrame(imageRefCopy.forget(), aTime);
   }
 }
 

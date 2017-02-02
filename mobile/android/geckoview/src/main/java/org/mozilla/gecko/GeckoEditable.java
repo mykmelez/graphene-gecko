@@ -14,7 +14,6 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.json.JSONObject;
-import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.annotation.WrapForJNI;
 import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.mozglue.JNIObject;
@@ -1136,7 +1135,7 @@ final class GeckoEditable extends JNIObject
         });
     }
 
-    @WrapForJNI(calledFrom = "gecko")
+    @WrapForJNI(calledFrom = "gecko", exceptionMode = "ignore")
     private void onSelectionChange(final int start, final int end) {
         if (DEBUG) {
             // GeckoEditableListener methods should all be called from the Gecko thread
@@ -1165,7 +1164,7 @@ final class GeckoEditable extends JNIObject
                TextUtils.regionMatches(mText.getCurrentText(), start, newText, 0, oldEnd - start);
     }
 
-    @WrapForJNI(calledFrom = "gecko")
+    @WrapForJNI(calledFrom = "gecko", exceptionMode = "ignore")
     private void onTextChange(final CharSequence text, final int start,
                               final int unboundedOldEnd, final int unboundedNewEnd) {
         if (DEBUG) {
@@ -1231,8 +1230,9 @@ final class GeckoEditable extends JNIObject
                 // with Gecko here.
                 mIgnoreSelectionChange = false;
 
-            } else if (indexInText == 0 && text.length() == action.mSequence.length()) {
-                // The new text exactly matches our sequence, so do a direct replace.
+            } else if (indexInText == 0 && text.length() == action.mSequence.length() &&
+                    oldEnd - start == action.mEnd - action.mStart) {
+                // The new change exactly matches our saved change, so do a direct replace.
                 mText.currentReplace(start, oldEnd, action.mSequence);
 
                 // Ignore the next selection change because the selection change is a

@@ -4,7 +4,7 @@
 const testState = {
   windows: [{
     tabs: [
-      { entries: [{ url: "about:blank" }] },
+      { entries: [{ url: "about:blank", triggeringPrincipal_base64 }] },
     ]
   }],
   scratchpads: [
@@ -38,9 +38,7 @@ function test() {
 function windowObserver(aSubject, aTopic, aData) {
   if (aTopic == "domwindowopened") {
     let win = aSubject.QueryInterface(Ci.nsIDOMWindow);
-    win.addEventListener("load", function onLoad() {
-      win.removeEventListener("load", onLoad, false);
-
+    win.addEventListener("load", function() {
       if (win.Scratchpad) {
         win.Scratchpad.addObserver({
           onReady: function() {
@@ -53,7 +51,7 @@ function windowObserver(aSubject, aTopic, aData) {
           },
         });
       }
-    }, false);
+    }, {once: true});
   }
 }
 

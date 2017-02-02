@@ -12,19 +12,20 @@ const Actions = require("../actions/index");
 const { button, div } = DOM;
 
 function FilterButtons({
-  filterTypes,
-  triggerFilterType,
+  requestFilterTypes,
+  toggleRequestFilterType,
 }) {
-  const buttons = filterTypes.entrySeq().map(([type, checked]) => {
+  const buttons = requestFilterTypes.entrySeq().map(([type, checked]) => {
     let classList = ["menu-filter-button"];
     checked && classList.push("checked");
 
     return button({
       id: `requests-menu-filter-${type}-button`,
+      key: type,
       className: classList.join(" "),
       "data-key": type,
-      onClick: triggerFilterType,
-      onKeyDown: triggerFilterType,
+      onClick: toggleRequestFilterType,
+      onKeyDown: toggleRequestFilterType,
     }, L10N.getStr(`netmonitor.toolbar.filter.${type}`));
   }).toArray();
 
@@ -32,18 +33,18 @@ function FilterButtons({
 }
 
 FilterButtons.propTypes = {
-  state: PropTypes.object.isRequired,
-  triggerFilterType: PropTypes.func.iRequired,
+  requestFilterTypes: PropTypes.object.isRequired,
+  toggleRequestFilterType: PropTypes.func.isRequired,
 };
 
 module.exports = connect(
-  (state) => ({ filterTypes: state.filters.types }),
+  (state) => ({ requestFilterTypes: state.filters.requestFilterTypes }),
   (dispatch) => ({
-    triggerFilterType: (evt) => {
+    toggleRequestFilterType: (evt) => {
       if (evt.type === "keydown" && (evt.key !== "" || evt.key !== "Enter")) {
         return;
       }
-      dispatch(Actions.toggleFilterType(evt.target.dataset.key));
+      dispatch(Actions.toggleRequestFilterType(evt.target.dataset.key));
     },
   })
 )(FilterButtons);

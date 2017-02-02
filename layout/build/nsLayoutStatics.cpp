@@ -7,6 +7,7 @@
 #include "nsLayoutStatics.h"
 #include "nscore.h"
 
+#include "DateTimeFormat.h"
 #include "nsAttrValue.h"
 #include "nsAutoCopyListener.h"
 #include "nsColorNames.h"
@@ -49,7 +50,10 @@
 #include "nsCSSRuleProcessor.h"
 #include "nsCORSListenerProxy.h"
 #include "nsHTMLDNSPrefetch.h"
+#include "nsHtml5Atoms.h"
 #include "nsHtml5Module.h"
+#include "nsHTMLTags.h"
+#include "nsIRDFContentSink.h"	// for RDF atom initialization
 #include "mozilla/dom/FallbackEncoding.h"
 #include "nsFocusManager.h"
 #include "nsListControlFrame.h"
@@ -59,7 +63,7 @@
 #include "nsMathMLAtoms.h"
 #include "nsMathMLOperators.h"
 #include "Navigator.h"
-#include "DOMStorageObserver.h"
+#include "StorageObserver.h"
 #include "CacheObserver.h"
 #include "DisplayItemClip.h"
 #include "ActiveLayerTracker.h"
@@ -158,6 +162,12 @@ nsLayoutStatics::Initialize()
   nsCSSProps::AddRefTable();
   nsColorNames::AddRefTable();
   nsGkAtoms::AddRefAtoms();
+  nsHtml5Atoms::AddRefAtoms();
+  nsTextServicesDocument::RegisterAtoms();
+  nsHTMLTags::RegisterAtoms();
+  nsRDFAtoms::RegisterAtoms();
+
+  NS_SealStaticAtomTable();
 
   StartupJSEnvironment();
   rv = nsRegion::InitStatic();
@@ -210,8 +220,6 @@ nsLayoutStatics::Initialize()
 
   nsMathMLOperators::AddRefTable();
 
-  nsTextServicesDocument::RegisterAtoms();
-
 #ifdef DEBUG
   nsFrame::DisplayReflowStartup();
 #endif
@@ -223,9 +231,9 @@ nsLayoutStatics::Initialize()
     return rv;
   }
 
-  rv = DOMStorageObserver::Init();
+  rv = StorageObserver::Init();
   if (NS_FAILED(rv)) {
-    NS_ERROR("Could not initialize DOMStorageObserver");
+    NS_ERROR("Could not initialize StorageObserver");
     return rv;
   }
 
@@ -266,8 +274,6 @@ nsLayoutStatics::Initialize()
 
   nsCORSListenerProxy::Startup();
 
-  NS_SealStaticAtomTable();
-
   nsWindowMemoryReporter::Init();
 
   SVGElementFactory::Init();
@@ -306,9 +312,9 @@ nsLayoutStatics::Initialize()
 
   mozilla::dom::WebCryptoThreadPool::Initialize();
 
-  // NB: We initialize servo in nsAppRunner.cpp, because we need to do it after
-  // creating the hidden DOM window to support some current stylo hacks. We
-  // should move initialization back here once those go away.
+#ifdef MOZ_STYLO
+  Servo_Initialize();
+#endif
 
 #ifndef MOZ_WIDGET_ANDROID
   // On Android, we instantiate it when constructing AndroidBridge.
@@ -324,12 +330,16 @@ nsLayoutStatics::Shutdown()
   // Don't need to shutdown nsWindowMemoryReporter, that will be done by the
   // memory reporter manager.
 
+#ifdef MOZ_STYLO
+  Servo_Shutdown();
+#endif
+
   nsMessageManagerScriptExecutor::Shutdown();
   nsFocusManager::Shutdown();
 #ifdef MOZ_XUL
   nsXULPopupManager::Shutdown();
 #endif
-  DOMStorageObserver::Shutdown();
+  StorageObserver::Shutdown();
   txMozillaXSLTProcessor::Shutdown();
   Attr::Shutdown();
   EventListenerManager::Shutdown();
@@ -422,6 +432,8 @@ nsLayoutStatics::Shutdown()
 
   nsHyphenationManager::Shutdown();
   nsDOMMutationObserver::Shutdown();
+
+  DateTimeFormat::Shutdown();
 
   ContentParent::ShutDown();
 

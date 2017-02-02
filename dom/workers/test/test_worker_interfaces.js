@@ -25,6 +25,7 @@ var ecmaGlobals =
   [
     "Array",
     "ArrayBuffer",
+    "Atomics",
     "Boolean",
     "DataView",
     "Date",
@@ -53,9 +54,8 @@ var ecmaGlobals =
     "Reflect",
     "RegExp",
     "Set",
-    {name: "SharedArrayBuffer", release: false},
+    "SharedArrayBuffer",
     {name: "SIMD", nightly: true},
-    {name: "Atomics", release: false},
     "StopIteration",
     "String",
     "Symbol",
@@ -85,6 +85,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CacheStorage",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "CloseEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "Crypto",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CustomEvent",
@@ -103,11 +105,17 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DOMStringList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "ErrorEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "Event",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "EventSource",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "EventTarget",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "File",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "FileList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "FileReader",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -168,6 +176,8 @@ var interfaceNamesInGlobalScope =
     { name: "PerformanceObserver", nightly: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "PerformanceObserverEntryList", nightly: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "ProgressEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PushManager",
 // IMPORTANT: Do not change this list without review from a DOM peer!

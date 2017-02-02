@@ -7,9 +7,9 @@ add_task(function* () {
 
   checkTabs(4);
 
-  yield ctrlTabTest([2],       1, 0);
+  yield ctrlTabTest([2], 1, 0);
   yield ctrlTabTest([2, 3, 1], 2, 2);
-  yield ctrlTabTest([],        4, 2);
+  yield ctrlTabTest([], 4, 2);
 
   {
     let selectedIndex = gBrowser.tabContainer.selectedIndex;
@@ -88,9 +88,9 @@ add_task(function* () {
     let detectKeyEvent = function(event) {
       eventConsumed = event.defaultPrevented;
     };
-    document.addEventListener("keypress", detectKeyEvent, false);
+    document.addEventListener("keypress", detectKeyEvent);
     yield pressCtrlTab();
-    document.removeEventListener("keypress", detectKeyEvent, false);
+    document.removeEventListener("keypress", detectKeyEvent);
     ok(eventConsumed, "Ctrl+Tab consumed by the tabbed browser if one tab is open");
     is(focusedWindow, document.commandDispatcher.focusedWindow,
        "Ctrl+Tab doesn't change focus if one tab is open");

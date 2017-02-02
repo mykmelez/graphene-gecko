@@ -7,7 +7,7 @@ Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Schemas.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-const {Subprocess, SubprocessImpl} = Cu.import("resource://gre/modules/Subprocess.jsm");
+const {Subprocess, SubprocessImpl} = Cu.import("resource://gre/modules/Subprocess.jsm", {});
 Cu.import("resource://gre/modules/NativeMessaging.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 
@@ -256,7 +256,7 @@ while True:
     yield OS.File.writeAtomic(scriptPath, SCRIPT);
 
     let batPath = OS.Path.join(userDir.path, "wontdie.bat");
-    let batBody = `@ECHO OFF\n${PYTHON} -u ${scriptPath} %*\n`;
+    let batBody = `@ECHO OFF\n${PYTHON} -u "${scriptPath}" %*\n`;
     yield OS.File.writeAtomic(batPath, batBody);
     yield OS.File.setPermissions(batPath, {unixMode: 0o755});
 

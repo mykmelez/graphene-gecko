@@ -8,6 +8,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/Move.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/TypedEnumBits.h"
@@ -51,6 +52,7 @@
 #include "CSSCalc.h"
 #include "nsMediaFeatures.h"
 #include "nsLayoutUtils.h"
+#include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 #include "nsRuleData.h"
 #include "mozilla/CSSVariableValues.h"
@@ -1648,7 +1650,7 @@ CSSParserImpl::GetDocument()
   if (!mSheet) {
     return nullptr;
   }
-  return mSheet->GetDocument();
+  return mSheet->GetAssociatedDocument();
 }
 
 nsresult
@@ -3796,8 +3798,8 @@ CSSParserImpl::ProcessImport(const nsString& aURLSpec,
                              uint32_t aColumnNumber)
 {
   RefPtr<css::ImportRule> rule = new css::ImportRule(aMedia, aURLSpec,
-                                                       aLineNumber,
-                                                       aColumnNumber);
+                                                     aLineNumber,
+                                                     aColumnNumber);
   (*aAppendFunc)(rule, aData);
 
   // Diagnose bad URIs even if we don't have a child loader.
@@ -3815,7 +3817,9 @@ CSSParserImpl::ProcessImport(const nsString& aURLSpec,
   }
 
   if (mChildLoader) {
-    mChildLoader->LoadChildSheet(mSheet, url, aMedia, rule, mReusableSheets);
+    mChildLoader->LoadChildSheet(mSheet, url, aMedia, rule,
+                                 /* aServoParentRule = */ nullptr,
+                                 mReusableSheets);
   }
 }
 
@@ -4226,8 +4230,7 @@ CSSParserImpl::ParseFontFeatureValueSet(nsCSSFontFeatureValuesRule
   // which font-specific variant of font-variant-alternates
   int32_t whichVariant;
   nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(mToken.mIdent);
-  if (keyword == eCSSKeyword_UNKNOWN ||
-      !nsCSSProps::FindKeyword(keyword,
+  if (!nsCSSProps::FindKeyword(keyword,
                                nsCSSProps::kFontVariantAlternatesFuncsKTable,
                                whichVariant))
   {
@@ -6689,6 +6692,31 @@ CSSParserImpl::ParseDeclarationBlock(uint32_t aFlags, nsCSSContextType aContext)
   return declaration.forget();
 }
 
+static Maybe<int32_t>
+GetEnumColorValue(nsCSSKeyword aKeyword, bool aIsChrome)
+{
+  int32_t value;
+  if (!nsCSSProps::FindKeyword(aKeyword, nsCSSProps::kColorKTable, value)) {
+    // Unknown color keyword.
+    return Nothing();
+  }
+  if (value < 0) {
+    // Known special color keyword handled by style system,
+    // e.g. NS_COLOR_CURRENTCOLOR. See nsStyleConsts.h.
+    return Some(value);
+  }
+  nscolor color;
+  auto colorID = static_cast<LookAndFeel::ColorID>(value);
+  if (NS_FAILED(LookAndFeel::GetColor(colorID, !aIsChrome, &color))) {
+    // Known LookAndFeel::ColorID, but this platform's LookAndFeel impl
+    // doesn't map it to a color. (This might be a platform-specific
+    // ColorID, which only makes sense on another platform.)
+    return Nothing();
+  }
+  // Known color provided by LookAndFeel.
+  return Some(value);
+}
+
 CSSParseResult
 CSSParserImpl::ParseColor(nsCSSValue& aValue)
 {
@@ -6726,22 +6754,18 @@ CSSParserImpl::ParseColor(nsCSSValue& aValue)
       }
       break;
 
-    case eCSSToken_Ident:
+    case eCSSToken_Ident: {
       if (NS_ColorNameToRGB(tk->mIdent, &rgba)) {
         aValue.SetStringValue(tk->mIdent, eCSSUnit_Ident);
         return CSSParseResult::Ok;
       }
-      else {
-        nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(tk->mIdent);
-        if (eCSSKeyword_UNKNOWN < keyword) { // known keyword
-          int32_t value;
-          if (nsCSSProps::FindKeyword(keyword, nsCSSProps::kColorKTable, value)) {
-            aValue.SetIntValue(value, eCSSUnit_EnumColor);
-            return CSSParseResult::Ok;
-          }
-        }
+      nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(tk->mIdent);
+      if (Maybe<int32_t> value = GetEnumColorValue(keyword, mIsChrome)) {
+        aValue.SetIntValue(value.value(), eCSSUnit_EnumColor);
+        return CSSParseResult::Ok;
       }
       break;
+    }
     case eCSSToken_Function: {
       bool isRGB;
       bool isHSL;
@@ -7556,12 +7580,10 @@ CSSParserImpl::ParseEnum(nsCSSValue& aValue,
     return false;
   }
   nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(*ident);
-  if (eCSSKeyword_UNKNOWN < keyword) {
-    int32_t value;
-    if (nsCSSProps::FindKeyword(keyword, aKeywordTable, value)) {
-      aValue.SetIntValue(value, eCSSUnit_Enumerated);
-      return true;
-    }
+  int32_t value;
+  if (nsCSSProps::FindKeyword(keyword, aKeywordTable, value)) {
+    aValue.SetIntValue(value, eCSSUnit_Enumerated);
+    return true;
   }
 
   // Put the unknown identifier back and return
@@ -7591,16 +7613,14 @@ CSSParserImpl::ParseAlignEnum(nsCSSValue& aValue,
     }
     keyword = nsCSSKeywords::LookupKeyword(*ident);
   }
-  if (eCSSKeyword_UNKNOWN < keyword) {
-    int32_t value;
-    if (nsCSSProps::FindKeyword(keyword, aKeywordTable, value)) {
-      if (baselinePrefix == eCSSKeyword_last &&
-          keyword == eCSSKeyword_baseline) {
-        value = NS_STYLE_ALIGN_LAST_BASELINE;
-      }
-      aValue.SetIntValue(value, eCSSUnit_Enumerated);
-      return true;
+  int32_t value;
+  if (nsCSSProps::FindKeyword(keyword, aKeywordTable, value)) {
+    if (baselinePrefix == eCSSKeyword_last &&
+        keyword == eCSSKeyword_baseline) {
+      value = NS_STYLE_ALIGN_LAST_BASELINE;
     }
+    aValue.SetIntValue(value, eCSSUnit_Enumerated);
+    return true;
   }
 
   // Put the unknown identifier back and return
@@ -7832,8 +7852,7 @@ static bool
 IsCSSTokenCalcFunction(const nsCSSToken& aToken)
 {
   return aToken.mType == eCSSToken_Function &&
-         (aToken.mIdent.LowerCaseEqualsLiteral("calc") ||
-          aToken.mIdent.LowerCaseEqualsLiteral("-moz-calc"));
+         aToken.mIdent.LowerCaseEqualsLiteral("calc");
 }
 
 // Assigns to aValue iff it returns CSSParseResult::Ok.
@@ -10644,8 +10663,7 @@ CSSParserImpl::IsLegacyGradientLine(const nsCSSTokenType& aType,
     break;
 
   case eCSSToken_Function:
-    if (aId.LowerCaseEqualsLiteral("calc") ||
-        aId.LowerCaseEqualsLiteral("-moz-calc")) {
+    if (aId.LowerCaseEqualsLiteral("calc")) {
       haveGradientLine = true;
       break;
     }
@@ -10659,8 +10677,7 @@ CSSParserImpl::IsLegacyGradientLine(const nsCSSTokenType& aType,
     // This is only a gradient line if it's a box position keyword.
     nsCSSKeyword kw = nsCSSKeywords::LookupKeyword(aId);
     int32_t junk;
-    if (kw != eCSSKeyword_UNKNOWN &&
-        nsCSSProps::FindKeyword(kw, nsCSSProps::kImageLayerPositionKTable,
+    if (nsCSSProps::FindKeyword(kw, nsCSSProps::kImageLayerPositionKTable,
                                 junk)) {
       haveGradientLine = true;
     }
@@ -11553,10 +11570,10 @@ static const nsCSSPropertyID kBorderRadiusIDs[] = {
   eCSSProperty_border_bottom_left_radius
 };
 static const nsCSSPropertyID kOutlineRadiusIDs[] = {
-  eCSSProperty__moz_outline_radius_topLeft,
-  eCSSProperty__moz_outline_radius_topRight,
-  eCSSProperty__moz_outline_radius_bottomRight,
-  eCSSProperty__moz_outline_radius_bottomLeft
+  eCSSProperty__moz_outline_radius_topleft,
+  eCSSProperty__moz_outline_radius_topright,
+  eCSSProperty__moz_outline_radius_bottomright,
+  eCSSProperty__moz_outline_radius_bottomleft
 };
 
 void
@@ -11835,10 +11852,10 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
     return ParseBorderSide(kBorderRightIDs, false);
   case eCSSProperty_border_top:
     return ParseBorderSide(kBorderTopIDs, false);
-  case eCSSProperty_border_bottom_colors:
-  case eCSSProperty_border_left_colors:
-  case eCSSProperty_border_right_colors:
-  case eCSSProperty_border_top_colors:
+  case eCSSProperty__moz_border_bottom_colors:
+  case eCSSProperty__moz_border_left_colors:
+  case eCSSProperty__moz_border_right_colors:
+  case eCSSProperty__moz_border_top_colors:
     return ParseBorderColors(aPropID);
   case eCSSProperty_border_image_slice:
     return ParseBorderImageSlice(true, nullptr);
@@ -11861,10 +11878,10 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
   case eCSSProperty_border_top_right_radius:
   case eCSSProperty_border_bottom_right_radius:
   case eCSSProperty_border_bottom_left_radius:
-  case eCSSProperty__moz_outline_radius_topLeft:
-  case eCSSProperty__moz_outline_radius_topRight:
-  case eCSSProperty__moz_outline_radius_bottomRight:
-  case eCSSProperty__moz_outline_radius_bottomLeft:
+  case eCSSProperty__moz_outline_radius_topleft:
+  case eCSSProperty__moz_outline_radius_topright:
+  case eCSSProperty__moz_outline_radius_bottomright:
+  case eCSSProperty__moz_outline_radius_bottomleft:
     return ParseBoxCornerRadius(aPropID);
 
   case eCSSProperty_box_shadow:
@@ -11923,8 +11940,8 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
     return ParseGridArea();
   case eCSSProperty_grid_gap:
     return ParseGridGap();
-  case eCSSProperty_image_region:
-    return ParseRect(eCSSProperty_image_region);
+  case eCSSProperty__moz_image_region:
+    return ParseRect(eCSSProperty__moz_image_region);
   case eCSSProperty_align_content:
   case eCSSProperty_justify_content:
     return ParseAlignJustifyContent(aPropID);
@@ -12403,8 +12420,7 @@ CSSParserImpl::ParseImageLayersItem(
   aState.mImage->mValue.SetNoneValue();
   aState.mAttachment->mValue.SetIntValue(NS_STYLE_IMAGELAYER_ATTACHMENT_SCROLL,
                                          eCSSUnit_Enumerated);
-  aState.mClip->mValue.SetIntValue(NS_STYLE_IMAGELAYER_CLIP_BORDER,
-                                   eCSSUnit_Enumerated);
+  aState.mClip->mValue.SetEnumValue(StyleGeometryBox::Border);
 
   aState.mRepeat->mXValue.SetIntValue(NS_STYLE_IMAGELAYER_REPEAT_REPEAT,
                                       eCSSUnit_Enumerated);
@@ -12416,11 +12432,9 @@ CSSParserImpl::ParseImageLayersItem(
   aState.mPositionY->mValue.SetArrayValue(positionYArr, eCSSUnit_Array);
 
   if (eCSSProperty_mask == aTable[nsStyleImageLayers::shorthand]) {
-    aState.mOrigin->mValue.SetIntValue(NS_STYLE_IMAGELAYER_ORIGIN_BORDER,
-                                       eCSSUnit_Enumerated);
+    aState.mOrigin->mValue.SetEnumValue(StyleGeometryBox::Border);
   } else {
-    aState.mOrigin->mValue.SetIntValue(NS_STYLE_IMAGELAYER_ORIGIN_PADDING,
-                                       eCSSUnit_Enumerated);
+    aState.mOrigin->mValue.SetEnumValue(StyleGeometryBox::Padding);
   }
   positionXArr->Item(1).SetPercentValue(0.0f);
   positionYArr->Item(1).SetPercentValue(0.0f);
@@ -12441,6 +12455,7 @@ CSSParserImpl::ParseImageLayersItem(
        haveMode = false,
        haveSomething = false;
 
+  const KTableEntry* originTable = nsCSSProps::kKeywordTableTable[aTable[nsStyleImageLayers::origin]];
   while (GetToken(true)) {
     nsCSSTokenType tt = mToken.mType;
     UngetToken(); // ...but we'll still cheat and use mToken
@@ -12510,8 +12525,7 @@ CSSParserImpl::ParseImageLayersItem(
           aState.mSize->mXValue = scratch.mXValue;
           aState.mSize->mYValue = scratch.mYValue;
         }
-      } else if (nsCSSProps::FindKeyword(keyword,
-                   nsCSSProps::kImageLayerOriginKTable, dummy)) {
+      } else if (nsCSSProps::FindKeyword(keyword, originTable, dummy)) {
         if (haveOrigin)
           return false;
         haveOrigin = true;
@@ -12526,23 +12540,14 @@ CSSParserImpl::ParseImageLayersItem(
         // immediately following the first one (for background-origin).
 
 #ifdef DEBUG
-        for (size_t i = 0; nsCSSProps::kImageLayerOriginKTable[i].mValue != -1; i++) {
+        const KTableEntry* clipTable = nsCSSProps::kKeywordTableTable[aTable[nsStyleImageLayers::clip]];
+        for (size_t i = 0; originTable[i].mValue != -1; i++) {
           // For each keyword & value in kOriginKTable, ensure that
           // kBackgroundKTable has a matching entry at the same position.
-          MOZ_ASSERT(nsCSSProps::kImageLayerOriginKTable[i].mKeyword ==
-                     nsCSSProps::kBackgroundClipKTable[i].mKeyword);
-          MOZ_ASSERT(nsCSSProps::kImageLayerOriginKTable[i].mValue ==
-                     nsCSSProps::kBackgroundClipKTable[i].mValue);
+          MOZ_ASSERT(originTable[i].mKeyword == clipTable[i].mKeyword);
+          MOZ_ASSERT(originTable[i].mValue == clipTable[i].mValue);
         }
 #endif
-        static_assert(NS_STYLE_IMAGELAYER_CLIP_BORDER ==
-                      NS_STYLE_IMAGELAYER_ORIGIN_BORDER &&
-                      NS_STYLE_IMAGELAYER_CLIP_PADDING ==
-                      NS_STYLE_IMAGELAYER_ORIGIN_PADDING &&
-                      NS_STYLE_IMAGELAYER_CLIP_CONTENT ==
-                      NS_STYLE_IMAGELAYER_ORIGIN_CONTENT,
-                      "bg-clip and bg-origin style constants must agree");
-
         CSSParseResult result =
           ParseSingleValueProperty(aState.mClip->mValue,
                                    aTable[nsStyleImageLayers::clip]);
@@ -12606,8 +12611,7 @@ CSSParserImpl::ParseImageLayersItem(
                tt == eCSSToken_Number ||
                tt == eCSSToken_Percentage ||
                (tt == eCSSToken_Function &&
-                (mToken.mIdent.LowerCaseEqualsLiteral("calc") ||
-                 mToken.mIdent.LowerCaseEqualsLiteral("-moz-calc")))) {
+                mToken.mIdent.LowerCaseEqualsLiteral("calc"))) {
       if (havePositionAndSize)
         return false;
       havePositionAndSize = true;
@@ -13637,10 +13641,10 @@ CSSParserImpl::ParseBorderSide(const nsCSSPropertyID aPropIDs[],
     }
 
     static const nsCSSPropertyID kBorderColorsProps[] = {
-      eCSSProperty_border_top_colors,
-      eCSSProperty_border_right_colors,
-      eCSSProperty_border_bottom_colors,
-      eCSSProperty_border_left_colors
+      eCSSProperty__moz_border_top_colors,
+      eCSSProperty__moz_border_right_colors,
+      eCSSProperty__moz_border_bottom_colors,
+      eCSSProperty__moz_border_left_colors
     };
 
     // Set the other properties that the border shorthand sets to their
@@ -14481,12 +14485,11 @@ CSSParserImpl::ParseSingleAlternate(int32_t& aWhichFeature,
   // function ==> e.g. swash(flowing) styleset(alt-g, alt-m)
 
   nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(mToken.mIdent);
-  if (!(eCSSKeyword_UNKNOWN < keyword &&
-        nsCSSProps::FindKeyword(keyword,
-                                (isIdent ?
-                                 nsCSSProps::kFontVariantAlternatesKTable :
-                                 nsCSSProps::kFontVariantAlternatesFuncsKTable),
-                                aWhichFeature)))
+  if (!nsCSSProps::FindKeyword(keyword,
+                               (isIdent ?
+                                nsCSSProps::kFontVariantAlternatesKTable :
+                                nsCSSProps::kFontVariantAlternatesFuncsKTable),
+                               aWhichFeature))
   {
     // failed, pop token
     UngetToken();
@@ -17228,9 +17231,9 @@ CSSParserImpl::ParseAnimation()
   initialValues[1].SetIntValue(NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE,
                                eCSSUnit_Enumerated);
   initialValues[2].SetFloatValue(0.0, eCSSUnit_Seconds);
-  initialValues[3].SetIntValue(static_cast<uint32_t>(mozilla::dom::PlaybackDirection::Normal),
+  initialValues[3].SetIntValue(static_cast<int32_t>(dom::PlaybackDirection::Normal),
                                eCSSUnit_Enumerated);
-  initialValues[4].SetIntValue(static_cast<uint32_t>(mozilla::dom::FillMode::None),
+  initialValues[4].SetIntValue(static_cast<int32_t>(dom::FillMode::None),
                                eCSSUnit_Enumerated);
   initialValues[5].SetFloatValue(1.0f, eCSSUnit_Number);
   initialValues[6].SetIntValue(NS_STYLE_ANIMATION_PLAY_STATE_RUNNING, eCSSUnit_Enumerated);

@@ -19,7 +19,7 @@ function triggerSave(aWindow, aCallback) {
                   .then(() => {
     waitForFocus(function() {
       info("register to handle popupshown");
-      aWindow.document.addEventListener("popupshown", contextMenuOpened, false);
+      aWindow.document.addEventListener("popupshown", contextMenuOpened);
 
       BrowserTestUtils.synthesizeMouseAtCenter("#fff", {type: "contextmenu", button: 2}, testBrowser);
       info("right clicked!");
@@ -180,6 +180,7 @@ function test() {
   });
 }
 
+/* import-globals-from ../../../../../toolkit/content/tests/browser/common/mockTransfer.js */
 Cc["@mozilla.org/moz/jssubscript-loader;1"]
   .getService(Ci.mozIJSSubScriptLoader)
   .loadSubScript("chrome://mochitests/content/browser/toolkit/content/tests/browser/common/mockTransfer.js",

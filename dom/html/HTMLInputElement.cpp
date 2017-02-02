@@ -338,8 +338,9 @@ class HTMLInputElementState final : public nsISupports
           MOZ_ASSERT(mBlobImplsOrDirectoryPaths[i].mType == BlobImplOrDirectoryPath::eDirectoryPath);
 
           nsCOMPtr<nsIFile> file;
-          NS_ConvertUTF16toUTF8 path(mBlobImplsOrDirectoryPaths[i].mDirectoryPath);
-          nsresult rv = NS_NewNativeLocalFile(path, true, getter_AddRefs(file));
+          nsresult rv =
+            NS_NewLocalFile(mBlobImplsOrDirectoryPaths[i].mDirectoryPath,
+                            true, getter_AddRefs(file));
           if (NS_WARN_IF(NS_FAILED(rv))) {
             continue;
           }
@@ -486,8 +487,7 @@ LastUsedDirectory(const OwningFileOrDirectory& aData)
     }
 
     nsCOMPtr<nsIFile> localFile;
-    nsresult rv = NS_NewNativeLocalFile(NS_ConvertUTF16toUTF8(path), true,
-                                        getter_AddRefs(localFile));
+    nsresult rv = NS_NewLocalFile(path, true, getter_AddRefs(localFile));
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return nullptr;
     }
@@ -1772,14 +1772,23 @@ HTMLInputElement::GetValueInternal(nsAString& aValue,
 
   if (aCallerType == CallerType::System) {
     aValue.Assign(mFirstFilePath);
-  } else {
-    // Just return the leaf name
-    if (mFilesOrDirectories.IsEmpty()) {
-      aValue.Truncate();
-    } else {
-      GetDOMFileOrDirectoryName(mFilesOrDirectories[0], aValue);
-    }
+    return;
   }
+
+  if (mFilesOrDirectories.IsEmpty()) {
+    aValue.Truncate();
+    return;
+  }
+
+  nsAutoString file;
+  GetDOMFileOrDirectoryName(mFilesOrDirectories[0], file);
+  if (file.IsEmpty()) {
+    aValue.Truncate();
+    return;
+  }
+
+  aValue.AssignLiteral("C:\\fakepath\\");
+  aValue.Append(file);
 }
 
 void
@@ -1925,6 +1934,22 @@ HTMLInputElement::ConvertStringToNumber(nsAString& aValue,
 
         double days = DaysSinceEpochFromWeek(year, week);
         aResultValue = Decimal::fromDouble(days * kMsPerDay);
+        return true;
+      }
+    case NS_FORM_INPUT_DATETIME_LOCAL:
+      {
+        uint32_t year, month, day, timeInMs;
+        if (!ParseDateTimeLocal(aValue, &year, &month, &day, &timeInMs)) {
+          return false;
+        }
+
+        JS::ClippedTime time = JS::TimeClip(JS::MakeDate(year, month - 1, day,
+                                                         timeInMs));
+        if (!time.isValid()) {
+          return false;
+        }
+
+        aResultValue = Decimal::fromDouble(time.toDouble());
         return true;
       }
     default:
@@ -2102,21 +2127,17 @@ HTMLInputElement::ConvertNumberToString(Decimal aValue,
       }
     case NS_FORM_INPUT_TIME:
       {
+        aValue = aValue.floor();
         // Per spec, we need to truncate |aValue| and we should only represent
         // times inside a day [00:00, 24:00[, which means that we should do a
         // modulo on |aValue| using the number of milliseconds in a day (86400000).
-        uint32_t value = NS_floorModulo(aValue.floor(), Decimal(86400000)).toDouble();
+        uint32_t value =
+          NS_floorModulo(aValue, Decimal::fromDouble(kMsPerDay)).toDouble();
 
-        uint16_t milliseconds = value % 1000;
-        value /= 1000;
-
-        uint8_t seconds = value % 60;
-        value /= 60;
-
-        uint8_t minutes = value % 60;
-        value /= 60;
-
-        uint8_t hours = value;
+        uint16_t milliseconds, seconds, minutes, hours;
+        if (!GetTimeFromMs(value, &hours, &minutes, &seconds, &milliseconds)) {
+          return false;
+        }
 
         if (milliseconds != 0) {
           aResultString.AppendPrintf("%02d:%02d:%02d.%03d",
@@ -2186,6 +2207,42 @@ HTMLInputElement::ConvertNumberToString(Decimal aValue,
         aResultString.AppendPrintf("%04.0f-W%02d", year, week);
         return true;
       }
+    case NS_FORM_INPUT_DATETIME_LOCAL:
+      {
+        aValue = aValue.floor();
+
+        uint32_t timeValue =
+          NS_floorModulo(aValue, Decimal::fromDouble(kMsPerDay)).toDouble();
+
+        uint16_t milliseconds, seconds, minutes, hours;
+        if (!GetTimeFromMs(timeValue,
+                           &hours, &minutes, &seconds, &milliseconds)) {
+          return false;
+        }
+
+        double year = JS::YearFromTime(aValue.toDouble());
+        double month = JS::MonthFromTime(aValue.toDouble());
+        double day = JS::DayFromTime(aValue.toDouble());
+
+        if (IsNaN(year) || IsNaN(month) || IsNaN(day)) {
+          return false;
+        }
+
+        if (milliseconds != 0) {
+          aResultString.AppendPrintf("%04.0f-%02.0f-%02.0fT%02d:%02d:%02d.%03d",
+                                     year, month + 1, day, hours, minutes,
+                                     seconds, milliseconds);
+        } else if (seconds != 0) {
+          aResultString.AppendPrintf("%04.0f-%02.0f-%02.0fT%02d:%02d:%02d",
+                                     year, month + 1, day, hours, minutes,
+                                     seconds);
+        } else {
+          aResultString.AppendPrintf("%04.0f-%02.0f-%02.0fT%02d:%02d",
+                                     year, month + 1, day, hours, minutes);
+        }
+
+        return true;
+      }
     default:
       MOZ_ASSERT(false, "Unrecognized input type");
       return false;
@@ -2196,8 +2253,7 @@ HTMLInputElement::ConvertNumberToString(Decimal aValue,
 Nullable<Date>
 HTMLInputElement::GetValueAsDate(ErrorResult& aRv)
 {
-  // TODO: this is temporary until bug 888331 is fixed.
-  if (!IsDateTimeInputType(mType) || mType == NS_FORM_INPUT_DATETIME_LOCAL) {
+  if (!IsDateTimeInputType(mType)) {
     return Nullable<Date>();
   }
 
@@ -2255,6 +2311,19 @@ HTMLInputElement::GetValueAsDate(ErrorResult& aRv)
 
       return Nullable<Date>(Date(time));
     }
+    case NS_FORM_INPUT_DATETIME_LOCAL:
+    {
+      uint32_t year, month, day, timeInMs;
+      nsAutoString value;
+      GetNonFileValueInternal(value);
+      if (!ParseDateTimeLocal(value, &year, &month, &day, &timeInMs)) {
+        return Nullable<Date>();
+      }
+
+      JS::ClippedTime time = JS::TimeClip(JS::MakeDate(year, month - 1, day,
+                                                       timeInMs));
+      return Nullable<Date>(Date(time));
+    }
   }
 
   MOZ_ASSERT(false, "Unrecognized input type");
@@ -2265,8 +2334,7 @@ HTMLInputElement::GetValueAsDate(ErrorResult& aRv)
 void
 HTMLInputElement::SetValueAsDate(Nullable<Date> aDate, ErrorResult& aRv)
 {
-  // TODO: this is temporary until bug 888331 is fixed.
-  if (!IsDateTimeInputType(mType) || mType == NS_FORM_INPUT_DATETIME_LOCAL) {
+  if (!IsDateTimeInputType(mType)) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
@@ -2535,7 +2603,7 @@ void
 HTMLInputElement::FlushFrames()
 {
   if (GetComposedDoc()) {
-    GetComposedDoc()->FlushPendingNotifications(Flush_Frames);
+    GetComposedDoc()->FlushPendingNotifications(FlushType::Frames);
   }
 }
 
@@ -2625,8 +2693,7 @@ HTMLInputElement::MozSetDirectory(const nsAString& aDirectoryPath,
                                   ErrorResult& aRv)
 {
   nsCOMPtr<nsIFile> file;
-  NS_ConvertUTF16toUTF8 path(aDirectoryPath);
-  aRv = NS_NewNativeLocalFile(path, true, getter_AddRefs(file));
+  aRv = NS_NewLocalFile(aDirectoryPath, true, getter_AddRefs(file));
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
@@ -2763,7 +2830,8 @@ HTMLInputElement::GetOwnerDateTimeControl()
       HTMLInputElement::FromContentOrNull(
         GetParent()->GetParent()->GetParent()->GetParent());
     if (ownerDateTimeControl &&
-        ownerDateTimeControl->mType == NS_FORM_INPUT_TIME) {
+        (ownerDateTimeControl->mType == NS_FORM_INPUT_TIME ||
+         ownerDateTimeControl->mType == NS_FORM_INPUT_DATE)) {
       return ownerDateTimeControl;
     }
   }
@@ -3215,7 +3283,8 @@ HTMLInputElement::SetValueInternal(const nsAString& aValue, uint32_t aFlags)
           if (frame) {
             frame->UpdateForValueChange();
           }
-        } else if (mType == NS_FORM_INPUT_TIME &&
+        } else if ((mType == NS_FORM_INPUT_TIME ||
+                    mType == NS_FORM_INPUT_DATE) &&
                    !IsExperimentalMobileType(mType)) {
           nsDateTimeControlFrame* frame = do_QueryFrame(GetPrimaryFrame());
           if (frame) {
@@ -3524,7 +3593,8 @@ HTMLInputElement::Blur(ErrorResult& aError)
     }
   }
 
-  if (mType == NS_FORM_INPUT_TIME && !IsExperimentalMobileType(mType)) {
+  if ((mType == NS_FORM_INPUT_TIME || mType == NS_FORM_INPUT_DATE) &&
+      !IsExperimentalMobileType(mType)) {
     nsDateTimeControlFrame* frame = do_QueryFrame(GetPrimaryFrame());
     if (frame) {
       frame->HandleBlurEvent();
@@ -3551,7 +3621,8 @@ HTMLInputElement::Focus(ErrorResult& aError)
     }
   }
 
-  if (mType == NS_FORM_INPUT_TIME && !IsExperimentalMobileType(mType)) {
+  if ((mType == NS_FORM_INPUT_TIME || mType == NS_FORM_INPUT_DATE) &&
+      !IsExperimentalMobileType(mType)) {
     nsDateTimeControlFrame* frame = do_QueryFrame(GetPrimaryFrame());
     if (frame) {
       frame->HandleFocusEvent();
@@ -3882,7 +3953,7 @@ HTMLInputElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     }
   }
 
-  if (mType == NS_FORM_INPUT_TIME &&
+  if ((mType == NS_FORM_INPUT_TIME || mType == NS_FORM_INPUT_DATE) &&
       !IsExperimentalMobileType(mType) &&
       aVisitor.mEvent->mMessage == eFocus &&
       aVisitor.mEvent->mOriginalTarget == this) {
@@ -4002,7 +4073,8 @@ HTMLInputElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
   // Stop the event if the related target's first non-native ancestor is the
   // same as the original target's first non-native ancestor (we are moving
   // inside of the same element).
-  if (mType == NS_FORM_INPUT_TIME && !IsExperimentalMobileType(mType) &&
+  if ((mType == NS_FORM_INPUT_TIME || mType == NS_FORM_INPUT_DATE) &&
+      !IsExperimentalMobileType(mType) &&
       (aVisitor.mEvent->mMessage == eFocus ||
        aVisitor.mEvent->mMessage == eFocusIn ||
        aVisitor.mEvent->mMessage == eFocusOut ||
@@ -5347,6 +5419,29 @@ HTMLInputElement::MaximumWeekInYear(uint32_t aYear) const
 }
 
 bool
+HTMLInputElement::GetTimeFromMs(double aValue, uint16_t* aHours,
+                                uint16_t* aMinutes, uint16_t* aSeconds,
+                                uint16_t* aMilliseconds) const {
+  MOZ_ASSERT(aValue >= 0 && aValue < kMsPerDay,
+             "aValue must be milliseconds within a day!");
+
+  uint32_t value = floor(aValue);
+
+  *aMilliseconds = value % 1000;
+  value /= 1000;
+
+  *aSeconds = value % 60;
+  value /= 60;
+
+  *aMinutes = value % 60;
+  value /= 60;
+
+  *aHours = value;
+
+  return true;
+}
+
+bool
 HTMLInputElement::IsValidWeek(const nsAString& aValue) const
 {
   uint32_t year, week;
@@ -5479,9 +5574,13 @@ HTMLInputElement::ParseDateTimeLocal(const nsAString& aValue, uint32_t* aYear,
     return false;
   }
 
-  const uint32_t sepIndex = 10;
-  if (aValue[sepIndex] != 'T' && aValue[sepIndex] != ' ') {
-    return false;
+  int32_t sepIndex = aValue.FindChar('T');
+  if (sepIndex == -1) {
+    sepIndex = aValue.FindChar(' ');
+
+    if (sepIndex == -1) {
+      return false;
+    }
   }
 
   const nsAString& dateStr = Substring(aValue, 0, sepIndex);
@@ -5506,20 +5605,24 @@ HTMLInputElement::NormalizeDateTimeLocal(nsAString& aValue) const
   }
 
   // Use 'T' as the separator between date string and time string.
-  const uint32_t sepIndex = 10;
-  if (aValue[sepIndex] == ' ') {
+  int32_t sepIndex = aValue.FindChar(' ');
+  if (sepIndex != -1) {
     aValue.Replace(sepIndex, 1, NS_LITERAL_STRING("T"));
+  } else {
+    sepIndex = aValue.FindChar('T');
   }
 
-  // Time expressed as the shortest possible string.
-  if (aValue.Length() == 16) {
+  // Time expressed as the shortest possible string, which is hh:mm.
+  if ((aValue.Length() - sepIndex) == 6) {
     return;
   }
 
   // Fractions of seconds part is optional, ommit it if it's 0.
-  if (aValue.Length() > 19) {
+  if ((aValue.Length() - sepIndex) > 9) {
+    const uint32_t millisecSepIndex = sepIndex + 9;
     uint32_t milliseconds;
-    if (!DigitSubStringToNumber(aValue, 20, aValue.Length() - 20,
+    if (!DigitSubStringToNumber(aValue, millisecSepIndex + 1,
+                                aValue.Length() - (millisecSepIndex + 1),
                                 &milliseconds)) {
       return;
     }
@@ -5528,12 +5631,15 @@ HTMLInputElement::NormalizeDateTimeLocal(nsAString& aValue) const
       return;
     }
 
-    aValue.Cut(19, aValue.Length() - 19);
+    aValue.Cut(millisecSepIndex, aValue.Length() - millisecSepIndex);
   }
 
   // Seconds part is optional, ommit it if it's 0.
+  const uint32_t secondSepIndex = sepIndex + 6;
   uint32_t seconds;
-  if (!DigitSubStringToNumber(aValue, 17, aValue.Length() - 17, &seconds)) {
+  if (!DigitSubStringToNumber(aValue, secondSepIndex + 1,
+                              aValue.Length() - (secondSepIndex + 1),
+                              &seconds)) {
     return;
   }
 
@@ -5541,7 +5647,7 @@ HTMLInputElement::NormalizeDateTimeLocal(nsAString& aValue) const
     return;
   }
 
-  aValue.Cut(16, aValue.Length() - 16);
+  aValue.Cut(secondSepIndex, aValue.Length() - secondSepIndex);
 }
 
 double
@@ -6983,8 +7089,8 @@ HTMLInputElement::RestoreState(nsPresState* aState)
     }
   }
 
-  if (aState->IsDisabledSet()) {
-    SetDisabled(aState->GetDisabled());
+  if (aState->IsDisabledSet() && !aState->GetDisabled()) {
+    SetDisabled(false);
   }
 
   return restoredCheckedState;
@@ -7112,13 +7218,15 @@ HTMLInputElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable, int32_t* 
 
   if (mType == NS_FORM_INPUT_FILE ||
       mType == NS_FORM_INPUT_NUMBER ||
-      mType == NS_FORM_INPUT_TIME) {
+      mType == NS_FORM_INPUT_TIME ||
+      mType == NS_FORM_INPUT_DATE) {
     if (aTabIndex) {
       // We only want our native anonymous child to be tabable to, not ourself.
       *aTabIndex = -1;
     }
     if (mType == NS_FORM_INPUT_NUMBER ||
-        mType == NS_FORM_INPUT_TIME) {
+        mType == NS_FORM_INPUT_TIME ||
+        mType == NS_FORM_INPUT_DATE) {
       *aIsFocusable = true;
     } else {
       *aIsFocusable = defaultFocusable;
@@ -7597,8 +7705,7 @@ HTMLInputElement::HasPatternMismatch() const
 bool
 HTMLInputElement::IsRangeOverflow() const
 {
-  // TODO: this is temporary until bug 888331 is fixed.
-  if (!DoesMinMaxApply() || mType == NS_FORM_INPUT_DATETIME_LOCAL) {
+  if (!DoesMinMaxApply()) {
     return false;
   }
 
@@ -7618,8 +7725,7 @@ HTMLInputElement::IsRangeOverflow() const
 bool
 HTMLInputElement::IsRangeUnderflow() const
 {
-  // TODO: this is temporary until bug 888331 is fixed.
-  if (!DoesMinMaxApply() || mType == NS_FORM_INPUT_DATETIME_LOCAL) {
+  if (!DoesMinMaxApply()) {
     return false;
   }
 
@@ -8623,8 +8729,7 @@ HTMLInputElement::UpdateHasRange()
 
   mHasRange = false;
 
-  // TODO: this is temporary until bug 888331 is fixed.
-  if (!DoesMinMaxApply() || mType == NS_FORM_INPUT_DATETIME_LOCAL) {
+  if (!DoesMinMaxApply()) {
     return;
   }
 

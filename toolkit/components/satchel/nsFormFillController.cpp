@@ -206,6 +206,7 @@ void
 nsFormFillController::NodeWillBeDestroyed(const nsINode* aNode)
 {
   mPwmgrInputs.Remove(aNode);
+  mAutofillInputs.Remove(aNode);
   if (aNode == mListNode) {
     mListNode = nullptr;
     RevalidateDataList();
@@ -220,7 +221,7 @@ nsFormFillController::MaybeRemoveMutationObserver(nsINode* aNode)
 {
   // Nodes being tracked in mPwmgrInputs will have their observers removed when
   // they stop being tracked.
-  if (!mPwmgrInputs.Get(aNode)) {
+  if (!mPwmgrInputs.Get(aNode) && !mAutofillInputs.Get(aNode)) {
     aNode->RemoveMutationObserver(this);
   }
 }
@@ -273,6 +274,12 @@ nsFormFillController::MarkAsLoginManagerField(nsIDOMHTMLInputElement *aInput)
    */
   nsCOMPtr<nsINode> node = do_QueryInterface(aInput);
   NS_ENSURE_STATE(node);
+
+  // If the field was already marked, we don't want to show the popup again.
+  if (mPwmgrInputs.Get(node)) {
+    return NS_OK;
+  }
+
   mPwmgrInputs.Put(node, true);
   node->AddMutationObserverUnlessExists(this);
 
@@ -294,6 +301,29 @@ nsFormFillController::MarkAsLoginManagerField(nsIDOMHTMLInputElement *aInput)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFormFillController::MarkAsAutofillField(nsIDOMHTMLInputElement *aInput)
+{
+  /*
+   * Support other components implementing form autofill and handle autocomplete
+   * for the field.
+   */
+  nsCOMPtr<nsINode> node = do_QueryInterface(aInput);
+  NS_ENSURE_STATE(node);
+  mAutofillInputs.Put(node, true);
+  node->AddMutationObserverUnlessExists(this);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFormFillController::GetFocusedInput(nsIDOMHTMLInputElement** aRetVal) {
+  if (!aRetVal) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+  *aRetVal = mFocusedInput;
+  return NS_OK;
+}
 
 ////////////////////////////////////////////////////////////////////////
 //// nsIAutoCompleteInput
@@ -509,6 +539,14 @@ nsFormFillController::GetSearchCount(uint32_t *aSearchCount)
 NS_IMETHODIMP
 nsFormFillController::GetSearchAt(uint32_t index, nsACString & _retval)
 {
+  if (mAutofillInputs.Get(mFocusedInputNode)) {
+    nsCOMPtr<nsIAutoCompleteSearch> profileSearch = do_GetService("@mozilla.org/autocomplete/search;1?name=autofill-profiles");
+    if (profileSearch) {
+      _retval.AssignLiteral("autofill-profiles");
+      return NS_OK;
+    }
+  }
+
   _retval.AssignLiteral("form-history");
   return NS_OK;
 }
@@ -664,10 +702,19 @@ nsFormFillController::StartSearch(const nsAString &aSearchString, const nsAStrin
                                   nsIAutoCompleteResult *aPreviousResult, nsIAutoCompleteObserver *aListener)
 {
   nsresult rv;
+  nsCOMPtr<nsIFormControl> formControl = do_QueryInterface(mFocusedInputNode);
 
   // If the login manager has indicated it's responsible for this field, let it
   // handle the autocomplete. Otherwise, handle with form history.
-  if (mPwmgrInputs.Get(mFocusedInputNode)) {
+  if (mFocusedInputNode && (mPwmgrInputs.Get(mFocusedInputNode) ||
+                            formControl->GetType() == NS_FORM_INPUT_PASSWORD)) {
+
+    // Handle the case where a password field is focused but
+    // MarkAsLoginManagerField wasn't called because password manager is disabled.
+    if (!mLoginManager) {
+      mLoginManager = do_GetService("@mozilla.org/login-manager;1");
+    }
+
     // XXX aPreviousResult shouldn't ever be a historyResult type, since we're not letting
     // satchel manage the field?
     mLastListener = aListener;
@@ -908,6 +955,18 @@ nsFormFillController::RemoveForDocument(nsIDocument* aDoc)
       iter.Remove();
     }
   }
+
+  for (auto iter = mAutofillInputs.Iter(); !iter.Done(); iter.Next()) {
+    const nsINode* key = iter.Key();
+    if (key && (!aDoc || key->OwnerDoc() == aDoc)) {
+      // mFocusedInputNode's observer is tracked separately, so don't remove it
+      // here.
+      if (key != mFocusedInputNode) {
+        const_cast<nsINode*>(key)->RemoveMutationObserver(this);
+      }
+      iter.Remove();
+    }
+  }
 }
 
 void
@@ -948,9 +1007,23 @@ nsFormFillController::Focus(nsIDOMEvent* aEvent)
     aEvent->InternalDOMEvent()->GetTarget());
   MaybeStartControllingInput(input);
 
+  // Bail if we didn't start controlling the input.
+  if (!mFocusedInputNode) {
+    mContextMenuFiredBeforeFocus = false;
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIFormControl> formControl = do_QueryInterface(mFocusedInputNode);
+  MOZ_ASSERT(formControl);
+
   // If this focus doesn't immediately follow a contextmenu event then show
   // the autocomplete popup
-  if (!mContextMenuFiredBeforeFocus && mPwmgrInputs.Get(mFocusedInputNode)) {
+  if (!mContextMenuFiredBeforeFocus &&
+      (mPwmgrInputs.Get(mFocusedInputNode)
+#ifndef ANDROID
+       || formControl->GetType() == NS_FORM_INPUT_PASSWORD
+#endif
+       )) {
     ShowPopup();
   }
 

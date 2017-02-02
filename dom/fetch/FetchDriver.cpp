@@ -108,6 +108,8 @@ FetchDriver::Fetch(FetchDriverObserver* aObserver)
 nsresult
 FetchDriver::HttpFetch()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   // Step 1. "Let response be null."
   mResponse = nullptr;
   nsresult rv;
@@ -277,7 +279,9 @@ FetchDriver::HttpFetch()
     // If request’s referrer policy is the empty string,
     // then set request’s referrer policy to "no-referrer-when-downgrade".
     if (mRequest->ReferrerPolicy_() == ReferrerPolicy::_empty) {
-      mRequest->SetReferrerPolicy(net::RP_No_Referrer_When_Downgrade);
+      net::ReferrerPolicy referrerPolicy =
+        static_cast<net::ReferrerPolicy>(NS_GetDefaultReferrerPolicy());
+      mRequest->SetReferrerPolicy(referrerPolicy);
     }
 
     rv = FetchUtil::SetRequestReferrer(mPrincipal,
@@ -310,11 +314,21 @@ FetchDriver::HttpFetch()
     nsAutoCString contentType;
     ErrorResult result;
     mRequest->Headers()->GetFirst(NS_LITERAL_CSTRING("content-type"), contentType, result);
-    // This is an error because the Request constructor explicitly extracts and
-    // sets a content-type per spec.
+    // We don't actually expect "result" to have failed here: that only happens
+    // for invalid header names.  But if for some reason it did, just propagate
+    // it out.
     if (result.Failed()) {
       return result.StealNSResult();
     }
+
+    // Now contentType is the header that was set in mRequest->Headers(), or a
+    // void string if no header was set.
+#ifdef DEBUG
+    bool hasContentTypeHeader =
+      mRequest->Headers()->Has(NS_LITERAL_CSTRING("content-type"), result);
+    MOZ_ASSERT(!result.Failed());
+    MOZ_ASSERT_IF(!hasContentTypeHeader, contentType.IsVoid());
+#endif // DEBUG
 
     nsCOMPtr<nsIInputStream> bodyStream;
     mRequest->GetBody(getter_AddRefs(bodyStream));

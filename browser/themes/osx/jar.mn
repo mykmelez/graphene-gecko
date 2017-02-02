@@ -10,7 +10,7 @@ browser.jar:
   skin/classic/browser/aboutSyncTabs.css
 * skin/classic/browser/syncedtabs/sidebar.css          (syncedtabs/sidebar.css)
 * skin/classic/browser/browser.css
-* skin/classic/browser/devedition.css
+* skin/classic/browser/compacttheme.css
 * skin/classic/browser/browser-lightweightTheme.css
   skin/classic/browser/click-to-play-warning-stripes.png
   skin/classic/browser/Info.png
@@ -162,10 +162,6 @@ browser.jar:
   skin/classic/browser/sync-horizontalbar.png
   skin/classic/browser/sync-horizontalbar@2x.png
   skin/classic/browser/sync-mobileIcon.svg  (../shared/sync-mobileIcon.svg)
-  skin/classic/browser/sync-notification-24.png
-  skin/classic/browser/syncSetup.css
-  skin/classic/browser/syncCommon.css
-  skin/classic/browser/syncQuota.css
   skin/classic/browser/syncProgress-horizontalbar.png
   skin/classic/browser/syncProgress-horizontalbar@2x.png
   skin/classic/browser/Toolbar-background-noise.png         (Toolbar-background-noise.png)

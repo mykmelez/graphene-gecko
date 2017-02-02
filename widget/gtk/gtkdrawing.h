@@ -145,7 +145,7 @@ typedef enum {
   MOZ_GTK_ENTRY,
   /* Paints a GtkExpander. */
   MOZ_GTK_EXPANDER,
-  /* Paints the text window or gets the style context corresponding to the
+  /* Paints a GtkTextView or gets the style context corresponding to the
      root node of a GtkTextView. */
   MOZ_GTK_TEXT_VIEW,
   /* The "text" window or node of a GtkTextView */

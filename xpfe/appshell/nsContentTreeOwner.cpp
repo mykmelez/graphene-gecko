@@ -391,6 +391,7 @@ NS_IMETHODIMP nsContentTreeOwner::OnBeforeLinkTraversal(const nsAString &origina
 NS_IMETHODIMP nsContentTreeOwner::ShouldLoadURI(nsIDocShell *aDocShell,
                                                 nsIURI *aURI,
                                                 nsIURI *aReferrer,
+                                                nsIPrincipal* aTriggeringPrincipal,
                                                 bool *_retval)
 {
   NS_ENSURE_STATE(mXULWindow);
@@ -399,7 +400,8 @@ NS_IMETHODIMP nsContentTreeOwner::ShouldLoadURI(nsIDocShell *aDocShell,
   mXULWindow->GetXULBrowserWindow(getter_AddRefs(xulBrowserWindow));
 
   if (xulBrowserWindow)
-    return xulBrowserWindow->ShouldLoadURI(aDocShell, aURI, aReferrer, _retval);
+    return xulBrowserWindow->ShouldLoadURI(aDocShell, aURI, aReferrer,
+                                           aTriggeringPrincipal, _retval);
 
   *_retval = true;
   return NS_OK;
@@ -416,10 +418,30 @@ NS_IMETHODIMP nsContentTreeOwner::ShouldLoadURIInThisProcess(nsIURI* aURI,
 NS_IMETHODIMP nsContentTreeOwner::ReloadInFreshProcess(nsIDocShell* aDocShell,
                                                        nsIURI* aURI,
                                                        nsIURI* aReferrer,
+                                                       nsIPrincipal* aTriggeringPrincipal,
+                                                       uint32_t aLoadFlags,
                                                        bool* aRetVal)
 {
   NS_WARNING("Cannot reload in fresh process from a nsContentTreeOwner!");
   *aRetVal = false;
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsContentTreeOwner::StartPrerenderingDocument(nsIURI* aHref,
+                                                            nsIURI* aReferrer)
+{
+  NS_WARNING("Cannot prerender a document in the parent process");
+  return NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP nsContentTreeOwner::ShouldSwitchToPrerenderedDocument(nsIURI* aHref,
+                                                                    nsIURI* aReferrer,
+                                                                    nsIRunnable* aSuccess,
+                                                                    nsIRunnable* aFailure,
+                                                                    bool* aRetval)
+{
+  NS_WARNING("Cannot switch to prerendered document in the parent process");
+  *aRetval = false;
   return NS_OK;
 }
 

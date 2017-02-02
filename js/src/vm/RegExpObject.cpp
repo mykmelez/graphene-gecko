@@ -197,7 +197,7 @@ RegExpObject::trace(JSTracer* trc, JSObject* obj)
 static JSObject*
 CreateRegExpPrototype(JSContext* cx, JSProtoKey key)
 {
-    return cx->global()->createBlankPrototype(cx, &RegExpObject::protoClass_);
+    return GlobalObject::createBlankPrototype(cx, cx->global(), &RegExpObject::protoClass_);
 }
 
 static const ClassOps RegExpObjectClassOps = {
@@ -298,7 +298,8 @@ RegExpObject::assignInitialShape(ExclusiveContext* cx, Handle<RegExpObject*> sel
     JS_STATIC_ASSERT(LAST_INDEX_SLOT == 0);
 
     /* The lastIndex property alone is writable but non-configurable. */
-    return self->addDataProperty(cx, cx->names().lastIndex, LAST_INDEX_SLOT, JSPROP_PERMANENT);
+    return NativeObject::addDataProperty(cx, self, cx->names().lastIndex, LAST_INDEX_SLOT,
+                                         JSPROP_PERMANENT);
 }
 
 void
@@ -1275,7 +1276,7 @@ RegExpShared::needsSweep(JSRuntime* rt)
     // Because of this we only treat the marked_ bit as a hint, and destroy the
     // RegExpShared if it was accidentally marked earlier but wasn't marked by
     // the current trace.
-    bool keep = marked() && IsMarked(&source);
+    bool keep = marked() && IsMarked(rt, &source);
     for (size_t i = 0; i < ArrayLength(compilationArray); i++) {
         RegExpShared::RegExpCompilation& compilation = compilationArray[i];
         if (compilation.jitCode && gc::IsAboutToBeFinalized(&compilation.jitCode))
@@ -1292,6 +1293,13 @@ RegExpShared::needsSweep(JSRuntime* rt)
 }
 
 void
+RegExpShared::discardJitCode()
+{
+    for (size_t i = 0; i < ArrayLength(compilationArray); i++)
+        compilationArray[i].jitCode = nullptr;
+}
+
+void
 RegExpCompartment::sweep(JSRuntime* rt)
 {
     if (!set_.initialized())
@@ -1302,6 +1310,10 @@ RegExpCompartment::sweep(JSRuntime* rt)
         if (shared->needsSweep(rt)) {
             js_delete(shared);
             e.removeFront();
+        } else {
+            // Discard code to avoid holding onto ExecutablePools.
+            if (rt->gc.isHeapCompacting())
+                shared->discardJitCode();
         }
     }
 
@@ -1504,7 +1516,7 @@ js::XDRScriptRegExpObject(XDRState<mode>* xdr, MutableHandle<RegExpObject*> objp
     if (mode == XDR_DECODE) {
         RegExpFlag flags = RegExpFlag(flagsword);
         RegExpObject* reobj = RegExpObject::create(xdr->cx(), source, flags, nullptr,
-                                                   xdr->cx()->tempLifoAlloc());
+                                                   xdr->lifoAlloc());
         if (!reobj)
             return false;
 
@@ -1525,6 +1537,8 @@ js::CloneScriptRegExpObject(JSContext* cx, RegExpObject& reobj)
     /* NB: Keep this in sync with XDRScriptRegExpObject. */
 
     RootedAtom source(cx, reobj.getSource());
+    cx->markAtom(source);
+
     return RegExpObject::create(cx, source, reobj.getFlags(), nullptr, cx->tempLifoAlloc());
 }
 

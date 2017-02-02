@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 package org.mozilla.gecko.home.activitystream.menu;
 
+import android.app.Activity;
 import android.content.Context;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -18,7 +19,9 @@ import android.widget.TextView;
 
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.activitystream.ActivityStream;
+import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
 import org.mozilla.gecko.home.HomePager;
+import org.mozilla.gecko.home.activitystream.model.Item;
 import org.mozilla.gecko.icons.IconCallback;
 import org.mozilla.gecko.icons.IconResponse;
 import org.mozilla.gecko.icons.Icons;
@@ -34,32 +37,36 @@ import static org.mozilla.gecko.activitystream.ActivityStream.extractLabel;
 
     private final NavigationView navigationView;
 
+    final View content;
+    final View activityView;
+
     public BottomSheetContextMenu(final Context context,
+                                  final ActivityStreamTelemetry.Extras.Builder telemetryExtraBuilder,
                                   final MenuMode mode,
-                                  final String title, @NonNull final String url,
-                                  @Nullable final Boolean isBookmarked, @Nullable final Boolean isPinned,
+                                  final Item item,
                                   HomePager.OnUrlOpenListener onUrlOpenListener,
                                   HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener,
                                   final int tilesWidth, final int tilesHeight) {
 
         super(context,
+                telemetryExtraBuilder,
                 mode,
-                title,
-                url,
-                isBookmarked,
-                isPinned,
+                item,
                 onUrlOpenListener,
                 onUrlOpenInBackgroundListener);
 
-        final LayoutInflater inflater = LayoutInflater.from(context);
-        final View content = inflater.inflate(R.layout.activity_stream_contextmenu_bottomsheet, null);
+        // The View encompassing the activity area
+        this.activityView = ((Activity) context).findViewById(android.R.id.content);
 
         bottomSheetDialog = new BottomSheetDialog(context);
+        final LayoutInflater inflater = LayoutInflater.from(context);
+        this.content = inflater.inflate(R.layout.activity_stream_contextmenu_bottomsheet, (ViewGroup) activityView, false);
+
         bottomSheetDialog.setContentView(content);
 
-        ((TextView) content.findViewById(R.id.title)).setText(title);
+        ((TextView) content.findViewById(R.id.title)).setText(item.getTitle());
 
-        extractLabel(context, url, false, new ActivityStream.LabelCallback() {
+        extractLabel(context, item.getUrl(), false, new ActivityStream.LabelCallback() {
                 public void onLabelExtracted(String label) {
                     ((TextView) content.findViewById(R.id.url)).setText(label);
                 }
@@ -73,7 +80,7 @@ import static org.mozilla.gecko.activitystream.ActivityStream.extractLabel;
         faviconView.setLayoutParams(layoutParams);
 
         Icons.with(context)
-                .pageUrl(url)
+                .pageUrl(item.getUrl())
                 .skipNetwork()
                 .build()
                 .execute(new IconCallback() {
@@ -96,6 +103,19 @@ import static org.mozilla.gecko.activitystream.ActivityStream.extractLabel;
 
     @Override
     public void show() {
+        // Try to use a 16:9 "keyline", i.e. we leave a 16:9 window of activity content visible
+        // above the menu. We only do this in portrait mode - in landscape mode, 16:9 is likely
+        // to be similar to the size of the display, so we'd only show very little, or even none of,
+        // the menu.
+        // Note that newer versions of the support library (possibly 25+) will do this automatically,
+        // so we can remove that code then.
+        if (activityView.getHeight() > activityView.getWidth()) {
+            final int peekHeight = activityView.getHeight() - (activityView.getWidth() * 9 / 16);
+
+            BottomSheetBehavior<View> bsBehaviour = BottomSheetBehavior.from((View) content.getParent());
+            bsBehaviour.setPeekHeight(peekHeight);
+        }
+
         bottomSheetDialog.show();
     }
 

@@ -14,12 +14,6 @@
  * The collector can collect all zones at once, or a subset. These types of
  * collection are referred to as a full GC and a zone GC respectively.
  *
- * The atoms zone is only collected in a full GC since objects in any zone may
- * have pointers to atoms, and these are not recorded in the cross compartment
- * pointer map. Also, the atoms zone is not collected if any thread has an
- * AutoKeepAtoms instance on the stack, or there are any exclusive threads using
- * the runtime.
- *
  * It is possible for an incremental collection that started out as a full GC to
  * become a zone GC if new zones are created during the course of the
  * collection.
@@ -179,6 +173,16 @@
  *  - Arenas are selected for compaction.
  *  - The contents of those arenas are moved to new arenas.
  *  - All references to moved things are updated.
+ *
+ * Collecting Atoms
+ * ----------------
+ *
+ * Atoms are collected differently from other GC things. They are contained in
+ * a special zone and things in other zones may have pointers to them that are
+ * not recorded in the cross compartment pointer map. Each zone holds a bitmap
+ * with the atoms it might be keeping alive, and atoms are only collected if
+ * they are not included in any zone's atom bitmap. See AtomMarking.cpp for how
+ * this bitmap is managed.
  */
 
 #include "jsgcinlines.h"
@@ -189,6 +193,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/TimeStamp.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -225,9 +230,9 @@
 #include "js/SliceBudget.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/Debugger.h"
+#include "vm/GeckoProfiler.h"
 #include "vm/ProxyObject.h"
 #include "vm/Shape.h"
-#include "vm/SPSProfiler.h"
 #include "vm/String.h"
 #include "vm/Symbol.h"
 #include "vm/Time.h"
@@ -237,6 +242,7 @@
 #include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
+#include "gc/Heap-inl.h"
 #include "vm/Stack-inl.h"
 #include "vm/String-inl.h"
 
@@ -245,6 +251,7 @@ using namespace js::gc;
 
 using mozilla::ArrayLength;
 using mozilla::Get;
+using mozilla::HashCodeScrambler;
 using mozilla::Maybe;
 using mozilla::Swap;
 
@@ -509,8 +516,6 @@ FinalizeTypedArenas(FreeOp* fop,
     size_t thingSize = Arena::thingSize(thingKind);
     size_t thingsPerArena = Arena::thingsPerArena(thingKind);
 
-    JSContext* cx = fop->onMainThread() ? fop->runtime()->contextFromMainThread() : nullptr;
-
     while (Arena* arena = *src) {
         *src = arena->next;
         size_t nmarked = arena->finalize<T>(fop, thingKind, thingSize);
@@ -524,7 +529,7 @@ FinalizeTypedArenas(FreeOp* fop,
             fop->runtime()->gc.releaseArena(arena, maybeLock.ref());
 
         budget.step(thingsPerArena);
-        if (budget.isOverBudget(cx))
+        if (budget.isOverBudget())
             return false;
     }
 
@@ -722,7 +727,7 @@ Chunk::releaseArena(JSRuntime* rt, Arena* arena, const AutoLockGC& lock)
     MOZ_ASSERT(arena->allocated());
     MOZ_ASSERT(!arena->hasDelayedMarking);
 
-    arena->setAsNotAllocated();
+    arena->release();
     addArenaToFreeList(rt, arena);
     updateChunkListAfterFree(rt, lock);
 }
@@ -813,15 +818,12 @@ GCRuntime::GCRuntime(JSRuntime* rt) :
     nextCellUniqueId_(LargestTaggedNullCellPointer + 1), // Ensure disjoint from null tagged pointers.
     numArenasFreeCommitted(0),
     verifyPreData(nullptr),
-    interruptCallbackRequested(false),
-    currentBudget(nullptr),
     chunkAllocationSinceLastGC(false),
     lastGCTime(PRMJ_Now()),
     mode(JSGC_MODE_INCREMENTAL),
     numActiveZoneIters(0),
     cleanUpEverything(false),
     grayBufferState(GCRuntime::GrayBufferState::Unused),
-    grayBitsValid(false),
     majorGCTriggerReason(JS::gcreason::NO_REASON),
     minorGCTriggerReason(JS::gcreason::NO_REASON),
     fullGCForAtomsRequested_(false),
@@ -1382,16 +1384,12 @@ namespace {
 class AutoNotifyGCActivity {
   public:
     explicit AutoNotifyGCActivity(GCRuntime& gc) : gc_(gc) {
-        if (!gc_.isIncrementalGCInProgress()) {
-            gcstats::AutoPhase ap(gc_.stats, gcstats::PHASE_GC_BEGIN);
+        if (!gc_.isIncrementalGCInProgress())
             gc_.callGCCallback(JSGC_BEGIN);
-        }
     }
     ~AutoNotifyGCActivity() {
-        if (!gc_.isIncrementalGCInProgress()) {
-            gcstats::AutoPhase ap(gc_.stats, gcstats::PHASE_GC_END);
+        if (!gc_.isIncrementalGCInProgress())
             gc_.callGCCallback(JSGC_END);
-        }
     }
 
   private:
@@ -1947,7 +1945,7 @@ RelocateArena(Arena* arena, SliceBudget& sliceBudget)
     MOZ_ASSERT(!arena->hasDelayedMarking);
     MOZ_ASSERT(!arena->markOverflow);
     MOZ_ASSERT(!arena->allocatedDuringIncremental);
-    MOZ_ASSERT(arena->bufferedCells->isEmpty());
+    MOZ_ASSERT(arena->bufferedCells()->isEmpty());
 
     Zone* zone = arena->zone;
 
@@ -2101,7 +2099,7 @@ void
 MovingTracer::onObjectEdge(JSObject** objp)
 {
     JSObject* obj = *objp;
-    if (IsForwarded(obj))
+    if (obj->runtimeFromAnyThread() == runtime() && IsForwarded(obj))
         *objp = Forwarded(obj);
 }
 
@@ -2109,7 +2107,7 @@ void
 MovingTracer::onShapeEdge(Shape** shapep)
 {
     Shape* shape = *shapep;
-    if (IsForwarded(shape))
+    if (shape->runtimeFromAnyThread() == runtime() && IsForwarded(shape))
         *shapep = Forwarded(shape);
 }
 
@@ -2117,7 +2115,7 @@ void
 MovingTracer::onStringEdge(JSString** stringp)
 {
     JSString* string = *stringp;
-    if (IsForwarded(string))
+    if (string->runtimeFromAnyThread() == runtime() && IsForwarded(string))
         *stringp = Forwarded(string);
 }
 
@@ -2125,7 +2123,7 @@ void
 MovingTracer::onScriptEdge(JSScript** scriptp)
 {
     JSScript* script = *scriptp;
-    if (IsForwarded(script))
+    if (script->runtimeFromAnyThread() == runtime() && IsForwarded(script))
         *scriptp = Forwarded(script);
 }
 
@@ -2133,7 +2131,7 @@ void
 MovingTracer::onLazyScriptEdge(LazyScript** lazyp)
 {
     LazyScript* lazy = *lazyp;
-    if (IsForwarded(lazy))
+    if (lazy->runtimeFromAnyThread() == runtime() && IsForwarded(lazy))
         *lazyp = Forwarded(lazy);
 }
 
@@ -2141,7 +2139,7 @@ void
 MovingTracer::onBaseShapeEdge(BaseShape** basep)
 {
     BaseShape* base = *basep;
-    if (IsForwarded(base))
+    if (base->runtimeFromAnyThread() == runtime() && IsForwarded(base))
         *basep = Forwarded(base);
 }
 
@@ -2149,7 +2147,7 @@ void
 MovingTracer::onScopeEdge(Scope** scopep)
 {
     Scope* scope = *scopep;
-    if (IsForwarded(scope))
+    if (scope->runtimeFromAnyThread() == runtime() && IsForwarded(scope))
         *scopep = Forwarded(scope);
 }
 
@@ -2536,7 +2534,7 @@ GCRuntime::updatePointersToRelocatedCells(Zone* zone, AutoLockForExclusiveAccess
     for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next())
         comp->fixupAfterMovingGC();
     JSCompartment::fixupCrossCompartmentWrappersAfterMovingGC(&trc);
-    rt->spsProfiler.fixupStringsMapAfterMovingGC();
+    rt->geckoProfiler.fixupStringsMapAfterMovingGC();
 
     // Iterate through all cells that can contain relocatable pointers to update
     // them. Since updating each cell is independent we try to parallelize this
@@ -2914,11 +2912,8 @@ SliceBudget::describe(char* buffer, size_t maxlen) const
 }
 
 bool
-SliceBudget::checkOverBudget(JSContext* cx)
+SliceBudget::checkOverBudget()
 {
-    if (cx)
-        cx->gc.checkInterruptCallback(cx);
-
     bool over = PRMJ_Now() >= deadline;
     if (!over)
         counter = CounterReset;
@@ -3213,23 +3208,6 @@ GCRuntime::assertBackgroundSweepingFinished()
     }
     MOZ_ASSERT(blocksToFreeAfterSweeping.computedSizeOfExcludingThis() == 0);
 #endif
-}
-
-unsigned
-js::GetCPUCount()
-{
-    static unsigned ncpus = 0;
-    if (ncpus == 0) {
-# ifdef XP_WIN
-        SYSTEM_INFO sysinfo;
-        GetSystemInfo(&sysinfo);
-        ncpus = unsigned(sysinfo.dwNumberOfProcessors);
-# else
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
-        ncpus = (n > 0) ? unsigned(n) : 1;
-# endif
-    }
-    return ncpus;
 }
 
 void
@@ -3796,11 +3774,6 @@ GCRuntime::beginMarkPhase(JS::gcreason::Reason reason, AutoLockForExclusiveAcces
     }
 
     /*
-     * Atoms are not in the cross-compartment map. If there are any zones that
-     * are not being collected then we cannot collect the atoms zone, otherwise
-     * the non-collected zones could contain pointers to atoms that we would
-     * miss.
-     *
      * If keepAtoms() is true then either an instance of AutoKeepAtoms is
      * currently on the stack or parsing is currently happening on another
      * thread. In either case we don't have information about which atoms are
@@ -3812,8 +3785,12 @@ GCRuntime::beginMarkPhase(JS::gcreason::Reason reason, AutoLockForExclusiveAcces
      * Off-main-thread parsing is inhibited after the start of GC which prevents
      * races between creating atoms during parsing and sweeping atoms on the
      * main thread.
+     *
+     * Otherwise, we always schedule a GC in the atoms zone so that atoms which
+     * the other collected zones are using are marked, and we can update the
+     * set of atoms in use by the other collected zones at the end of the GC.
      */
-    if (isFull && !rt->keepAtoms()) {
+    if (!rt->keepAtoms()) {
         Zone* atomsZone = rt->atomsCompartment(lock)->zone();
         if (atomsZone->isGCScheduled()) {
             MOZ_ASSERT(!atomsZone->isCollecting());
@@ -4166,7 +4143,7 @@ js::gc::MarkingValidator::nonIncrementalMark(AutoLockForExclusiveAccess& lock)
      * For saving, smush all of the keys into one big table and split them back
      * up into per-zone tables when restoring.
      */
-    gc::WeakKeyTable savedWeakKeys;
+    gc::WeakKeyTable savedWeakKeys(SystemAllocPolicy(), runtime->randomHashCodeScrambler());
     if (!savedWeakKeys.init())
         return;
 
@@ -4680,11 +4657,11 @@ MarkIncomingCrossCompartmentPointers(JSRuntime* rt, const uint32_t color)
             MOZ_ASSERT(dst->compartment() == c);
 
             if (color == GRAY) {
-                if (IsMarkedUnbarriered(&src) && src->asTenured().isMarked(GRAY))
+                if (IsMarkedUnbarriered(rt, &src) && src->asTenured().isMarked(GRAY))
                     TraceManuallyBarrieredEdge(&rt->gc.marker, &dst,
                                                "cross-compartment gray pointer");
             } else {
-                if (IsMarkedUnbarriered(&src) && !src->asTenured().isMarked(GRAY))
+                if (IsMarkedUnbarriered(rt, &src) && !src->asTenured().isMarked(GRAY))
                     TraceManuallyBarrieredEdge(&rt->gc.marker, &dst,
                                                "cross-compartment black pointer");
             }
@@ -4872,7 +4849,21 @@ MAKE_GC_SWEEP_TASK(SweepMiscTask);
 /* virtual */ void
 SweepAtomsTask::run()
 {
+    AtomMarkingRuntime::Bitmap marked;
+    if (runtime->gc.atomMarking.computeBitmapFromChunkMarkBits(runtime, marked)) {
+        for (GCZonesIter zone(runtime); !zone.done(); zone.next())
+            runtime->gc.atomMarking.updateZoneBitmap(zone, marked);
+    } else {
+        // Ignore OOM in computeBitmapFromChunkMarkBits. The updateZoneBitmap
+        // call can only remove atoms from the zone bitmap, so it is
+        // conservative to just not call it.
+    }
+
+    runtime->gc.atomMarking.updateChunkMarkBits(runtime);
     runtime->sweepAtoms();
+    runtime->unsafeSymbolRegistry().sweep();
+    for (CompartmentsIter comp(runtime, SkipAtoms); !comp.done(); comp.next())
+        comp->sweepVarNames();
 }
 
 /* virtual */ void
@@ -5095,11 +5086,6 @@ GCRuntime::beginSweepingZoneGroup(AutoLockForExclusiveAccess& lock)
             for (GCZoneGroupIter zone(rt); !zone.done(); zone.next())
                 zone->sweepUniqueIds(&fop);
         }
-    }
-
-    if (sweepingAtoms) {
-        gcstats::AutoPhase ap(stats, gcstats::PHASE_SWEEP_SYMBOL_REGISTRY);
-        rt->symbolRegistry(lock).sweep();
     }
 
     // Rejoin our off-main-thread tasks.
@@ -5450,7 +5436,7 @@ GCRuntime::endSweepPhase(bool destroyingRuntime, AutoLockForExclusiveAccess& loc
 
         /* If we finished a full GC, then the gray bits are correct. */
         if (isFull)
-            grayBitsValid = true;
+            rt->setGCGrayBitsValid(true);
     }
 
     finishMarkingValidation();
@@ -5510,7 +5496,7 @@ GCRuntime::compactPhase(JS::gcreason::Reason reason, SliceBudget& sliceBudget,
             updatePointersToRelocatedCells(zone, lock);
         zone->setGCState(Zone::Finished);
         zonesToMaybeCompact.removeFront();
-        if (sliceBudget.isOverBudget(rt->contextFromMainThread()))
+        if (sliceBudget.isOverBudget())
             break;
     }
 
@@ -5892,7 +5878,7 @@ GCRuntime::incrementalCollectSlice(SliceBudget& budget, JS::gcreason::Reason rea
          * now exhasted.
          */
         beginSweepPhase(destroyingRuntime, lock);
-        if (budget.isOverBudget(rt->contextFromMainThread()))
+        if (budget.isOverBudget())
             break;
 
         /*
@@ -6316,16 +6302,6 @@ GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget, JS::gcreason::R
     // Check if we are allowed to GC at this time before proceeding.
     if (!checkIfGCAllowedInCurrentState(reason))
         return;
-
-    interruptCallbackRequested = false;
-    {
-        AutoLockGC lock(rt);
-        currentBudget = &budget;
-    }
-    auto guard = mozilla::MakeScopeExit([&] {
-            AutoLockGC lock(rt);
-            currentBudget = nullptr;
-    });
 
     AutoTraceLog logGC(TraceLoggerForMainThread(rt), TraceLogger_GC);
     AutoStopVerifyingBarriers av(rt, IsShutdownGC(reason));
@@ -6753,6 +6729,9 @@ gc::MergeCompartments(JSCompartment* source, JSCompartment* target)
 
     // Merge other info in source's zone into target's zone.
     target->zone()->types.typeLifoAlloc.transferFrom(&source->zone()->types.typeLifoAlloc);
+
+    // Atoms which are marked in source's zone are now marked in target's zone.
+    cx->atomMarking().adoptMarkedAtoms(target->zone(), source->zone());
 }
 
 void
@@ -7158,7 +7137,7 @@ js::gc::CheckHashTablesAfterMovingGC(JSRuntime* rt)
      * Check that internal hash tables no longer have any pointers to things
      * that have been moved.
      */
-    rt->spsProfiler.checkStringsMapAfterMovingGC();
+    rt->geckoProfiler.checkStringsMapAfterMovingGC();
     for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
         zone->checkUniqueIdTableAfterMovingGC();
         zone->checkInitialShapesTableAfterMovingGC();
@@ -7694,47 +7673,27 @@ js::gc::Cell::dump() const
 }
 #endif
 
-bool
-JS::AddGCInterruptCallback(JSContext* cx, GCInterruptCallback callback)
+JS_PUBLIC_API(bool)
+js::gc::detail::CellIsMarkedGrayIfKnown(const Cell* cell)
 {
-    return cx->runtime()->gc.addInterruptCallback(callback);
-}
+    MOZ_ASSERT(cell);
+    if (!cell->isTenured())
+        return false;
 
-void
-JS::RequestGCInterruptCallback(JSContext* cx)
-{
-    cx->runtime()->gc.requestInterruptCallback();
-}
-
-bool
-GCRuntime::addInterruptCallback(JS::GCInterruptCallback callback)
-{
-    return interruptCallbacks.append(callback);
-}
-
-void
-GCRuntime::requestInterruptCallback()
-{
-    AutoLockGC lock(rt);
-    if (currentBudget) {
-        interruptCallbackRequested = true;
-        currentBudget->requestFullCheck();
-    }
-}
-
-void
-GCRuntime::invokeInterruptCallback(JSContext* cx)
-{
-    interruptCallbackRequested = false;
-
-    stats.suspendPhases();
-
-    JS::AutoAssertNoGC nogc(cx);
-    JS::AutoAssertOnBarrier nobarrier(cx);
-    JS::AutoSuppressGCAnalysis suppress(cx);
-    for (JS::GCInterruptCallback callback : interruptCallbacks) {
-        (*callback)(cx);
+    // We ignore the gray marking state of cells and return false in two cases:
+    //
+    // 1) When OOM has caused us to clear the gcGrayBitsValid_ flag.
+    //
+    // 2) When we are in an incremental GC and examine a cell that is in a zone
+    // that is not being collected. Gray targets of CCWs that are marked black
+    // by a barrier will eventually be marked black in the next GC slice.
+    auto tc = &cell->asTenured();
+    auto rt = tc->runtimeFromMainThread();
+    if (!rt->areGCGrayBitsValid() ||
+        (rt->gc.isIncrementalGCInProgress() && !tc->zone()->wasGCStarted()))
+    {
+        return false;
     }
 
-    stats.resumePhases();
+    return detail::CellIsMarkedGray(tc);
 }

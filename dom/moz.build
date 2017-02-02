@@ -12,7 +12,6 @@ interfaces = [
     'core',
     'html',
     'events',
-    'settings',
     'stylesheets',
     'sidebar',
     'css',
@@ -43,6 +42,7 @@ DIRS += [
     'browser-element',
     'cache',
     'canvas',
+    'commandhandler',
     'crypto',
     'devicestorage',
     'encoding',
@@ -67,7 +67,6 @@ DIRS += [
     'push',
     'quota',
     'security',
-    'settings',
     'storage',
     'svg',
     'time',
@@ -86,7 +85,7 @@ DIRS += [
     'promise',
     'smil',
     'url',
-    'inputmethod',
+    'webauthn',
     'webidl',
     'xbl',
     'xml',
@@ -97,6 +96,7 @@ DIRS += [
     'u2f',
     'console',
     'performance',
+    'webbrowserpersist',
     'xhr',
     'worklet',
 ]
@@ -106,11 +106,6 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 
 if CONFIG['MOZ_SECUREELEMENT']:
     DIRS += ['secureelement']
-
-if CONFIG['MOZ_B2G']:
-    DIRS += [
-        'downloads',
-    ]
 
 DIRS += ['presentation']
 

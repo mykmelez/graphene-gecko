@@ -188,11 +188,21 @@ function getElRect(selector, win) {
  * the rect of the dragged element as it was before drag.
  */
 function dragElementBy(selector, x, y, win) {
+  let React = win.require("devtools/client/shared/vendor/react");
+  let { Simulate } = React.addons.TestUtils;
   let rect = getElRect(selector, win);
-  let startPoint = [ rect.left + rect.width / 2, rect.top + rect.height / 2 ];
-  let endPoint = [ startPoint[0] + x, startPoint[1] + y ];
+  let startPoint = {
+    clientX: Math.floor(rect.left + rect.width / 2),
+    clientY: Math.floor(rect.top + rect.height / 2),
+  };
+  let endPoint = [ startPoint.clientX + x, startPoint.clientY + y ];
 
-  EventUtils.synthesizeMouseAtPoint(...startPoint, { type: "mousedown" }, win);
+  let elem = win.document.querySelector(selector);
+
+  // mousedown is a React listener, need to use its testing tools to avoid races
+  Simulate.mouseDown(elem, startPoint);
+
+  // mousemove and mouseup are regular DOM listeners
   EventUtils.synthesizeMouseAtPoint(...endPoint, { type: "mousemove" }, win);
   EventUtils.synthesizeMouseAtPoint(...endPoint, { type: "mouseup" }, win);
 
@@ -202,12 +212,9 @@ function dragElementBy(selector, x, y, win) {
 function* testViewportResize(ui, selector, moveBy,
                              expectedViewportSize, expectedHandleMove) {
   let win = ui.toolWindow;
-
-  let changed = once(ui, "viewport-device-changed");
   let resized = waitForViewportResizeTo(ui, ...expectedViewportSize);
   let startRect = dragElementBy(selector, ...moveBy, win);
   yield resized;
-  yield changed;
 
   let endRect = getElRect(selector, win);
   is(endRect.left - startRect.left, expectedHandleMove[0],
@@ -216,8 +223,10 @@ function* testViewportResize(ui, selector, moveBy,
     `The y move of ${selector} is as expected`);
 }
 
-function openDeviceModal({toolWindow}) {
+function openDeviceModal({ toolWindow }) {
   let { document } = toolWindow;
+  let React = toolWindow.require("devtools/client/shared/vendor/react");
+  let { Simulate } = React.addons.TestUtils;
   let select = document.querySelector(".viewport-device-selector");
   let modal = document.querySelector("#device-modal-wrapper");
 
@@ -226,16 +235,8 @@ function openDeviceModal({toolWindow}) {
     "The device modal is closed by default.");
 
   info("Opening device modal through device selector.");
-
-  let event = new toolWindow.UIEvent("change", {
-    view: toolWindow,
-    bubbles: true,
-    cancelable: true
-  });
-
   select.value = OPEN_DEVICE_MODAL_VALUE;
-  select.dispatchEvent(event);
-
+  Simulate.change(select);
   ok(modal.classList.contains("opened") && !modal.classList.contains("closed"),
     "The device modal is displayed.");
 }
@@ -268,7 +269,7 @@ function changeSelectValue({ toolWindow }, selector, value) {
 }
 
 const selectDevice = (ui, value) => Promise.all([
-  once(ui, "viewport-device-changed"),
+  once(ui, "device-changed"),
   changeSelectValue(ui, ".viewport-device-selector", value)
 ]);
 
@@ -325,6 +326,15 @@ function waitForPageShow(browser) {
   });
 }
 
+function waitForViewportLoad(ui) {
+  return new Promise(resolve => {
+    let browser = ui.getViewportBrowser();
+    browser.addEventListener("mozbrowserloadend", () => {
+      resolve();
+    }, { once: true });
+  });
+}
+
 function load(browser, url) {
   let loaded = BrowserTestUtils.browserLoaded(browser, false, url);
   browser.loadURI(url, null, null);
@@ -355,7 +365,37 @@ function addDeviceForTest(device) {
 
 function waitForClientClose(ui) {
   return new Promise(resolve => {
-    info("RDM's debugger client is now closed");
-    ui.client.addOneTimeListener("closed", resolve);
+    info("Waiting for RDM debugger client to close");
+    ui.client.addOneTimeListener("closed", () => {
+      info("RDM's debugger client is now closed");
+      resolve();
+    });
   });
+}
+
+function* testTouchEventsOverride(ui, expected) {
+  let { document } = ui.toolWindow;
+  let touchButton = document.querySelector("#global-touch-simulation-button");
+
+  let flag = yield ui.emulationFront.getTouchEventsOverride();
+  is(flag === Ci.nsIDocShell.TOUCHEVENTS_OVERRIDE_ENABLED, expected,
+    `Touch events override should be ${expected ? "enabled" : "disabled"}`);
+  is(touchButton.classList.contains("active"), expected,
+    `Touch simulation button should be ${expected ? "" : "in"}active.`);
+}
+
+function testViewportDeviceSelectLabel(ui, expected) {
+  info("Test viewport's device select label");
+
+  let select = ui.toolWindow.document.querySelector(".viewport-device-selector");
+  is(select.selectedOptions[0].textContent, expected,
+     `Device Select value should be: ${expected}`);
+}
+
+function* enableTouchSimulation(ui) {
+  let { document } = ui.toolWindow;
+  let touchButton = document.querySelector("#global-touch-simulation-button");
+  let loaded = waitForViewportLoad(ui);
+  touchButton.click();
+  yield loaded;
 }

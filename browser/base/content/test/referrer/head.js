@@ -13,7 +13,7 @@ const REFERRER_POLICYSERVER_URL =
 const REFERRER_POLICYSERVER_URL_ATTRIBUTE =
   "test1.example.com" + REFERRER_URL_BASE + "file_referrer_policyserver_attr.sjs";
 
-SpecialPowers.pushPrefEnv({"set": [['network.http.enablePerElementReferrer', true]]});
+SpecialPowers.pushPrefEnv({"set": [["network.http.enablePerElementReferrer", true]]});
 
 var gTestWindow = null;
 var rounds = 0;
@@ -203,9 +203,10 @@ function referrerTestCaseLoaded(aTestNumber, aParams) {
             "?scheme=" + escape(test.toScheme) +
             "&policy=" + escape(test.policy || "") +
             "&rel=" + escape(test.rel || "");
-  var browser = gTestWindow.gBrowser;
-  browser.selectedTab = browser.addTab(url, aParams);
-  return BrowserTestUtils.browserLoaded(browser.selectedBrowser);
+  let browser = gTestWindow.gBrowser;
+  return BrowserTestUtils.openNewForegroundTab(browser, () => {
+    browser.selectedTab = browser.addTab(url, aParams);
+  });
 }
 
 /**

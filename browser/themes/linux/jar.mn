@@ -11,7 +11,7 @@ browser.jar:
   skin/classic/browser/aboutSyncTabs.css
 * skin/classic/browser/syncedtabs/sidebar.css     (syncedtabs/sidebar.css)
 * skin/classic/browser/browser.css
-* skin/classic/browser/devedition.css
+* skin/classic/browser/compacttheme.css
 * skin/classic/browser/browser-lightweightTheme.css
   skin/classic/browser/click-to-play-warning-stripes.png
   skin/classic/browser/Info.png
@@ -31,7 +31,6 @@ browser.jar:
   skin/classic/browser/reload-stop-go.png
   skin/classic/browser/reload-stop-go@2x.png
   skin/classic/browser/searchbar.css
-  skin/classic/browser/Security-broken.png
   skin/classic/browser/setDesktopBackground.css
   skin/classic/browser/slowStartup-16.png
   skin/classic/browser/Toolbar.png
@@ -80,8 +79,6 @@ browser.jar:
   skin/classic/browser/preferences/applications.css   (preferences/applications.css)
   skin/classic/browser/social/services-16.png         (social/services-16.png)
   skin/classic/browser/social/services-64.png         (social/services-64.png)
-  skin/classic/browser/social/share-button.png        (social/share-button.png)
-  skin/classic/browser/social/share-button-active.png (social/share-button-active.png)
   skin/classic/browser/tabbrowser/alltabs.png         (tabbrowser/alltabs.png)
   skin/classic/browser/tabbrowser/alltabs-inverted.png (tabbrowser/alltabs-inverted.png)
   skin/classic/browser/tabbrowser/newtab.svg                (tabbrowser/newtab.svg)
@@ -116,10 +113,6 @@ browser.jar:
   skin/classic/browser/sync-horizontalbar.png
   skin/classic/browser/sync-horizontalbar@2x.png
   skin/classic/browser/sync-mobileIcon.svg  (../shared/sync-mobileIcon.svg)
-  skin/classic/browser/sync-notification-24.png
-  skin/classic/browser/syncSetup.css
-  skin/classic/browser/syncCommon.css
-  skin/classic/browser/syncQuota.css
   skin/classic/browser/syncProgress-horizontalbar.png
   skin/classic/browser/syncProgress-horizontalbar@2x.png
 #ifdef E10S_TESTING_ONLY

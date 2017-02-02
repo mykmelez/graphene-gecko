@@ -30,7 +30,6 @@ CatapultEngine.prototype = {
 function sync_httpd_setup() {
   let collectionsHelper = track_collections_helper();
   let upd = collectionsHelper.with_updated_collection;
-  let collections = collectionsHelper.collections;
 
   let catapultEngine = engineManager.get("catapult");
   let engines        = {catapult: {version: catapultEngine.version,
@@ -42,13 +41,13 @@ function sync_httpd_setup() {
   let keysWBO     = new ServerWBO("keys");
   let globalWBO   = new ServerWBO("global", {storageVersion: STORAGE_VERSION,
                                              syncID: Utils.makeGUID(),
-                                             engines: engines});
+                                             engines});
 
   let handlers = {
     "/1.1/johndoe/info/collections":    collectionsHelper.handler,
-    "/1.1/johndoe/storage/meta/global": upd("meta",    globalWBO.handler()),
+    "/1.1/johndoe/storage/meta/global": upd("meta", globalWBO.handler()),
     "/1.1/johndoe/storage/clients":     upd("clients", clientsColl.handler()),
-    "/1.1/johndoe/storage/crypto/keys": upd("crypto",  keysWBO.handler())
+    "/1.1/johndoe/storage/crypto/keys": upd("crypto", keysWBO.handler())
   };
   return httpd_setup(handlers);
 }
@@ -67,7 +66,7 @@ function generateAndUploadKeys(server) {
 }
 
 
-add_identity_test(this, async function test_backoff500() {
+add_task(async function test_backoff500() {
   _("Test: HTTP 500 sets backoff status.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -94,7 +93,7 @@ add_identity_test(this, async function test_backoff500() {
   await promiseStopServer(server);
 });
 
-add_identity_test(this, async function test_backoff503() {
+add_task(async function test_backoff503() {
   _("Test: HTTP 503 with Retry-After header leads to backoff notification and sets backoff status.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -106,7 +105,7 @@ add_identity_test(this, async function test_backoff503() {
                       headers: {"retry-after": BACKOFF}};
 
   let backoffInterval;
-  Svc.Obs.add("weave:service:backoff:interval", function (subject) {
+  Svc.Obs.add("weave:service:backoff:interval", function(subject) {
     backoffInterval = subject;
   });
 
@@ -130,7 +129,7 @@ add_identity_test(this, async function test_backoff503() {
   await promiseStopServer(server);
 });
 
-add_identity_test(this, async function test_overQuota() {
+add_task(async function test_overQuota() {
   _("Test: HTTP 400 with body error code 14 means over quota.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -159,7 +158,7 @@ add_identity_test(this, async function test_overQuota() {
   await promiseStopServer(server);
 });
 
-add_identity_test(this, async function test_service_networkError() {
+add_task(async function test_service_networkError() {
   _("Test: Connection refused error from Service.sync() leads to the right status code.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -181,7 +180,7 @@ add_identity_test(this, async function test_service_networkError() {
   }
 });
 
-add_identity_test(this, async function test_service_offline() {
+add_task(async function test_service_offline() {
   _("Test: Wanting to sync in offline mode leads to the right status code but does not increment the ignorable error count.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -206,7 +205,7 @@ add_identity_test(this, async function test_service_offline() {
   Services.prefs.clearUserPref("network.dns.offline-localhost");
 });
 
-add_identity_test(this, async function test_engine_networkError() {
+add_task(async function test_engine_networkError() {
   _("Test: Network related exceptions from engine.sync() lead to the right status code.");
   let server = sync_httpd_setup();
   await setUp(server);
@@ -233,7 +232,7 @@ add_identity_test(this, async function test_engine_networkError() {
   await promiseStopServer(server);
 });
 
-add_identity_test(this, async function test_resource_timeout() {
+add_task(async function test_resource_timeout() {
   let server = sync_httpd_setup();
   await setUp(server);
 

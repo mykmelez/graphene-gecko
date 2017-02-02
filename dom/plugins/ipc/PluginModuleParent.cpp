@@ -19,7 +19,7 @@
 #include "mozilla/plugins/PluginBridge.h"
 #include "mozilla/plugins/PluginInstanceParent.h"
 #include "mozilla/Preferences.h"
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 #include "mozilla/ProfileGatherer.h"
 #endif
 #include "mozilla/ProcessHangMonitor.h"
@@ -47,7 +47,7 @@
 #include "PluginUtilsWin.h"
 #endif
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 #include "nsIProfiler.h"
 #include "nsIProfileSaveEvent.h"
 #endif
@@ -62,7 +62,7 @@
 using base::KillProcess;
 
 using mozilla::PluginLibrary;
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 using mozilla::ProfileGatherer;
 #endif
 using mozilla::ipc::MessageChannel;
@@ -98,7 +98,8 @@ mozilla::plugins::SetupBridge(uint32_t aPluginId,
                               dom::ContentParent* aContentParent,
                               bool aForceBridgeNow,
                               nsresult* rv,
-                              uint32_t* runID)
+                              uint32_t* runID,
+                              ipc::Endpoint<PPluginModuleParent>* aEndpoint)
 {
     PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
     if (NS_WARN_IF(!rv) || NS_WARN_IF(!runID)) {
@@ -130,7 +131,24 @@ mozilla::plugins::SetupBridge(uint32_t aPluginId,
         // We'll handle the bridging asynchronously
         return true;
     }
-    *rv = PPluginModule::Bridge(aContentParent, chromeParent);
+
+    ipc::Endpoint<PPluginModuleParent> parent;
+    ipc::Endpoint<PPluginModuleChild> child;
+
+    *rv = PPluginModule::CreateEndpoints(aContentParent->OtherPid(),
+                                         chromeParent->OtherPid(),
+                                         &parent, &child);
+    if (NS_FAILED(*rv)) {
+        return true;
+    }
+
+    *aEndpoint = Move(parent);
+
+    if (!chromeParent->SendInitPluginModuleChild(Move(child))) {
+        *rv = NS_ERROR_BRIDGE_OPEN_CHILD;
+        return true;
+    }
+
     return true;
 }
 
@@ -416,11 +434,13 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId,
     dom::ContentChild* cp = dom::ContentChild::GetSingleton();
     nsresult rv;
     uint32_t runID;
+    Endpoint<PPluginModuleParent> endpoint;
     TimeStamp sendLoadPluginStart = TimeStamp::Now();
-    if (!cp->SendLoadPlugin(aPluginId, &rv, &runID) ||
+    if (!cp->SendLoadPlugin(aPluginId, &rv, &runID, &endpoint) ||
         NS_FAILED(rv)) {
         return nullptr;
     }
+    Initialize(Move(endpoint));
     TimeStamp sendLoadPluginEnd = TimeStamp::Now();
 
     PluginModuleContentParent* parent = mapping->GetModule();
@@ -449,19 +469,16 @@ PluginModuleContentParent::AssociatePluginId(uint32_t aPluginId,
     MOZ_ASSERT(mapping);
 }
 
-/* static */ PluginModuleContentParent*
-PluginModuleContentParent::Initialize(mozilla::ipc::Transport* aTransport,
-                                      base::ProcessId aOtherPid)
+/* static */ void
+PluginModuleContentParent::Initialize(Endpoint<PPluginModuleParent>&& aEndpoint)
 {
     nsAutoPtr<PluginModuleMapping> moduleMapping(
-        PluginModuleMapping::Resolve(aOtherPid));
+        PluginModuleMapping::Resolve(aEndpoint.OtherPid()));
     MOZ_ASSERT(moduleMapping);
     PluginModuleContentParent* parent = moduleMapping->GetModule();
     MOZ_ASSERT(parent);
 
-    DebugOnly<bool> ok = parent->Open(aTransport, aOtherPid,
-                                      XRE_GetIOMessageLoop(),
-                                      mozilla::ipc::ParentSide);
+    DebugOnly<bool> ok = aEndpoint.Bind(parent);
     MOZ_ASSERT(ok);
 
     moduleMapping->SetChannelOpened();
@@ -477,13 +494,14 @@ PluginModuleContentParent::Initialize(mozilla::ipc::Transport* aTransport,
     // needed later, so since this function is returning successfully we
     // forget it here.
     moduleMapping.forget();
-    return parent;
 }
 
 /* static */ void
 PluginModuleContentParent::OnLoadPluginResult(const uint32_t& aPluginId,
-                                              const bool& aResult)
+                                              const bool& aResult,
+                                              Endpoint<PPluginModuleParent>&& aEndpoint)
 {
+    Initialize(Move(aEndpoint));
     nsAutoPtr<PluginModuleMapping> moduleMapping(
         PluginModuleMapping::FindModuleByPluginId(aPluginId));
     MOZ_ASSERT(moduleMapping);
@@ -636,7 +654,7 @@ PluginModuleChromeParent::OnProcessLaunched(const bool aSucceeded)
 #endif
     }
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     nsCOMPtr<nsIProfiler> profiler(do_GetService("@mozilla.org/tools/profiler;1"));
     bool profilerActive = false;
     DebugOnly<nsresult> rv = profiler->IsActive(&profilerActive);
@@ -754,7 +772,7 @@ PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath,
     mSandboxLevel = aSandboxLevel;
     mRunID = GeckoChildProcessHost::GetUniqueID();
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     InitPluginProfiling();
 #endif
 
@@ -767,7 +785,7 @@ PluginModuleChromeParent::~PluginModuleChromeParent()
         MOZ_CRASH("unsafe destruction");
     }
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     ShutdownPluginProfiling();
 #endif
 
@@ -2736,17 +2754,6 @@ PluginModuleParent::NPP_NewInternal(NPMIMEType pluginType, NPP instance,
                values.AppendElement(opaqueAttributeValue);
            }
         }
-
-      // Update the flashvar bgcolor if it's not set, fixes a rendering problem with
-      // async plugin painting and transparent flash.
-      if (supportsAsyncRender) {
-        NS_NAMED_LITERAL_CSTRING(bgcolorAttributeName, "bgcolor");
-        NS_NAMED_LITERAL_CSTRING(bgcolorAttributeDefault, "#FFFFFF");
-        if (!names.Contains(bgcolorAttributeName)) {
-          names.AppendElement(bgcolorAttributeName);
-          values.AppendElement(bgcolorAttributeDefault);
-        }
-      }
 #endif
     }
 
@@ -2764,7 +2771,7 @@ PluginModuleParent::NPP_NewInternal(NPMIMEType pluginType, NPP instance,
     if (nsCOMPtr<nsINode> node = do_QueryInterface(elt)) {
         nsCOMPtr<nsIDocument> doc = node->OwnerDoc();
         if (doc) {
-            nsCOMPtr<nsIEventTarget> eventTarget = doc->EventTargetFor(dom::TaskCategory::Other);
+            nsCOMPtr<nsIEventTarget> eventTarget = doc->EventTargetFor(TaskCategory::Other);
             SetEventTargetForActor(parentInstance, eventTarget);
         }
     }
@@ -3265,7 +3272,7 @@ PluginModuleChromeParent::OnCrash(DWORD processID)
 
 #endif // MOZ_CRASHREPORTER_INJECTOR
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 class PluginProfilerObserver final : public nsIObserver,
                                      public nsSupportsWeakReference
 {
@@ -3379,12 +3386,12 @@ PluginModuleChromeParent::GatheredAsyncProfile(nsIProfileSaveEvent* aSaveEvent)
         mProfile.Truncate();
     }
 }
-#endif // MOZ_ENABLE_PROFILER_SPS
+#endif // MOZ_GECKO_PROFILER
 
 mozilla::ipc::IPCResult
 PluginModuleChromeParent::RecvProfile(const nsCString& aProfile)
 {
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     if (NS_WARN_IF(!mGatherer)) {
         return IPC_OK();
     }

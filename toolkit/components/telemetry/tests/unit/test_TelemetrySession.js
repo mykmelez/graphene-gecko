@@ -98,13 +98,13 @@ function sendPing() {
 }
 
 function fakeGenerateUUID(sessionFunc, subsessionFunc) {
-  let session = Cu.import("resource://gre/modules/TelemetrySession.jsm");
+  let session = Cu.import("resource://gre/modules/TelemetrySession.jsm", {});
   session.Policy.generateSessionUUID = sessionFunc;
   session.Policy.generateSubsessionUUID = subsessionFunc;
 }
 
 function fakeIdleNotification(topic) {
-  let session = Cu.import("resource://gre/modules/TelemetrySession.jsm");
+  let session = Cu.import("resource://gre/modules/TelemetrySession.jsm", {});
   return session.TelemetryScheduler.observe(null, topic, null);
 }
 
@@ -274,7 +274,7 @@ function checkScalars(processes) {
   const scalars = parentProcess.scalars;
   for (let name in scalars) {
     Assert.equal(typeof name, "string", "Scalar names must be strings.");
-    checkScalar(scalar[name]);
+    checkScalar(scalars [name]);
   }
 
   // Check that we have valid keyed scalar entries.
@@ -286,7 +286,7 @@ function checkScalars(processes) {
     for (let key in keyedScalars[name]) {
       Assert.equal(typeof key, "string", "Keyed scalar keys must be strings.");
       Assert.ok(key.length <= 70, "Keyed scalar keys can't have more than 70 characters.");
-      checkScalar(scalar[name][key]);
+      checkScalar(scalars[name][key]);
     }
   }
 }
@@ -427,8 +427,8 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
   // Telemetry doesn't touch a memory reporter with these units that's
   // available on all platforms.
 
-  Assert.ok('MEMORY_JS_GC_HEAP' in payload.histograms); // UNITS_BYTES
-  Assert.ok('MEMORY_JS_COMPARTMENTS_SYSTEM' in payload.histograms); // UNITS_COUNT
+  Assert.ok("MEMORY_JS_GC_HEAP" in payload.histograms); // UNITS_BYTES
+  Assert.ok("MEMORY_JS_COMPARTMENTS_SYSTEM" in payload.histograms); // UNITS_COUNT
 
   // We should have included addon histograms.
   Assert.ok("addonHistograms" in payload);
@@ -716,6 +716,9 @@ add_task(function* test_checkSubsessionEvents() {
   Telemetry.clearEvents();
   yield TelemetryController.testReset();
 
+  // Enable recording for the test events.
+  Telemetry.setEventRecordingEnabled("telemetry.test", true);
+
   // Record some events.
   let expected = [
     ["telemetry.test", "test1", "object1", "a", null],
@@ -796,7 +799,7 @@ add_task(function* test_checkSubsessionHistograms() {
   // "classic" histograms. However, histograms can change
   // between us collecting the different payloads, so we only
   // check for deep equality on known stable histograms.
-  checkHistograms = (classic, subsession) => {
+  let checkHistograms = (classic, subsession) => {
     for (let id of Object.keys(classic)) {
       if (!registeredIds.has(id)) {
         continue;
@@ -814,7 +817,7 @@ add_task(function* test_checkSubsessionHistograms() {
   };
 
   // Same as above, except for keyed histograms.
-  checkKeyedHistograms = (classic, subsession) => {
+  let checkKeyedHistograms = (classic, subsession) => {
     for (let id of Object.keys(classic)) {
       if (!registeredIds.has(id)) {
         continue;
@@ -953,7 +956,7 @@ add_task(function* test_checkSubsessionData() {
   let activeTicksAtSubsessionStart = sessionRecorder.activeTicks;
   let expectedActiveTicks = activeTicksAtSubsessionStart;
 
-  incrementActiveTicks = () => {
+  let incrementActiveTicks = () => {
     sessionRecorder.incrementActiveTicks();
     ++expectedActiveTicks;
   }

@@ -53,6 +53,7 @@
 #include "MediaStreamList.h"
 #include "nsIScriptGlobalObject.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/dom/RTCStatsReportBinding.h"
 #include "MediaStreamTrack.h"
 #include "VideoStreamTrack.h"
@@ -66,6 +67,14 @@ namespace mozilla {
 using namespace dom;
 
 static const char* logTag = "PeerConnectionMedia";
+
+//XXX(pkerr) What about bitrate settings? Going with the defaults for now.
+RefPtr<WebRtcCallWrapper>
+CreateCall()
+{
+  WebRtcCallWrapper::Config call_config;
+  return WebRtcCallWrapper::Create(call_config);
+}
 
 nsresult
 PeerConnectionMedia::ReplaceTrack(const std::string& aOldStreamId,
@@ -406,6 +415,9 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
   }
   ConnectSignals(mIceCtxHdlr->ctx().get());
 
+  // This webrtc:Call instance will be shared by audio and video media conduits.
+  mCall = CreateCall();
+
   return NS_OK;
 }
 
@@ -457,7 +469,8 @@ PeerConnectionMedia::EnsureTransport_s(size_t aLevel, size_t aComponentCount)
 }
 
 void
-PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession)
+PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession,
+                                                const bool forceIceTcp)
 {
   auto transports = aSession.GetTransports();
   for (size_t i = 0; i < transports.size(); ++i) {
@@ -478,6 +491,14 @@ PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession)
       // Make sure the MediaPipelineFactory doesn't try to use these.
       RemoveTransportFlow(i, false);
       RemoveTransportFlow(i, true);
+    }
+
+    if (forceIceTcp) {
+      candidates.erase(std::remove_if(candidates.begin(),
+                                      candidates.end(),
+                                      [](const std::string & s) {
+                                        return s.find(" UDP "); }),
+                       candidates.end());
     }
 
     RUN_ON_THREAD(
@@ -567,6 +588,7 @@ nsresult PeerConnectionMedia::UpdateMediaPipelines(
     JsepTrackPair pair = *i;
 
     if (pair.mReceiving) {
+
       rv = factory.CreateOrUpdateMediaPipeline(pair, *pair.mReceiving);
       if (NS_FAILED(rv)) {
         return rv;
@@ -770,6 +792,11 @@ PeerConnectionMedia::RollbackIceRestart_s()
 
   mIceCtxHdlr->RollbackIceRestart();
   ConnectSignals(mIceCtxHdlr->ctx().get(), restartCtx.get());
+
+  // Fixup the telemetry by transferring abandoned ctx stats to current ctx.
+  NrIceStats stats = restartCtx->Destroy();
+  restartCtx = nullptr;
+  mIceCtxHdlr->ctx()->AccumulateStats(stats);
 }
 
 bool
@@ -846,6 +873,7 @@ PeerConnectionMedia::AddIceCandidate(const std::string& candidate,
                     aMLine),
                 NS_DISPATCH_NORMAL);
 }
+
 void
 PeerConnectionMedia::AddIceCandidate_s(const std::string& aCandidate,
                                        const std::string& aMid,
@@ -863,6 +891,21 @@ PeerConnectionMedia::AddIceCandidate_s(const std::string& aCandidate,
                 static_cast<unsigned>(aMLine));
     return;
   }
+}
+
+void
+PeerConnectionMedia::UpdateNetworkState(bool online) {
+  RUN_ON_THREAD(GetSTSThread(),
+                WrapRunnable(
+                    RefPtr<PeerConnectionMedia>(this),
+                    &PeerConnectionMedia::UpdateNetworkState_s,
+                    online),
+                NS_DISPATCH_NORMAL);
+}
+
+void
+PeerConnectionMedia::UpdateNetworkState_s(bool online) {
+  mIceCtxHdlr->ctx()->UpdateNetworkState(online);
 }
 
 void
@@ -1064,6 +1107,25 @@ PeerConnectionMedia::ShutdownMediaTransport_s()
 
   disconnect_all();
   mTransportFlows.clear();
+
+#if !defined(MOZILLA_EXTERNAL_LINKAGE)
+  NrIceStats stats = mIceCtxHdlr->Destroy();
+
+  CSFLogDebug(logTag, "Ice Telemetry: stun (retransmits: %d)"
+                      "   turn (401s: %d   403s: %d   438s: %d)",
+              stats.stun_retransmits, stats.turn_401s, stats.turn_403s,
+              stats.turn_438s);
+
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_STUN_RETRANSMITS,
+                       stats.stun_retransmits);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_401S,
+                       stats.turn_401s);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_403S,
+                       stats.turn_403s);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_438S,
+                       stats.turn_438s);
+#endif
+
   mIceCtxHdlr = nullptr;
 
   mMainThread->Dispatch(WrapRunnable(this, &PeerConnectionMedia::SelfDestruct_m),

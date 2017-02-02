@@ -91,6 +91,7 @@ class NrIceMediaStream;
 
 extern const char kNrIceTransportUdp[];
 extern const char kNrIceTransportTcp[];
+extern const char kNrIceTransportTls[];
 
 class NrIceStunServer {
  public:
@@ -190,6 +191,14 @@ class NrIceProxyServer {
 };
 
 class TestNat;
+
+class NrIceStats {
+ public:
+  uint16_t stun_retransmits;
+  uint16_t turn_401s;
+  uint16_t turn_403s;
+  uint16_t turn_438s;
+};
 
 class NrIceCtx {
  friend class NrIceCtxHandler;
@@ -314,9 +323,15 @@ class NrIceCtx {
   // Start checking
   nsresult StartChecks();
 
+  // Notify that the network has gone online/offline
+  void UpdateNetworkState(bool online);
+
   // Finalize the ICE negotiation. I.e., there will be no
   // more forking.
   nsresult Finalize();
+
+  void AccumulateStats(const NrIceStats& stats);
+  NrIceStats Destroy();
 
   // Are we trickling?
   bool generating_trickle() const { return trickle_; }

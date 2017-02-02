@@ -19,7 +19,7 @@ if (arguments.length != 3) {
                   "<absolute path to StaticHPKPins.h>");
 }
 
-var { 'classes': Cc, 'interfaces': Ci, 'utils': Cu, 'results': Cr } = Components;
+const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 var { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 var { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
@@ -236,7 +236,7 @@ function downloadAndParseChromeCerts(filename, certNameToSKD, certSKDToName) {
   let chromeName;
   for (let line of lines) {
     // Skip comments and newlines.
-    if (line.length == 0 || line[0] == '#') {
+    if (line.length == 0 || line[0] == "#") {
       continue;
     }
     switch (state) {
@@ -440,7 +440,7 @@ function nameToAlias(certName) {
   return "k" + certName + "Fingerprint";
 }
 
-function compareByName (a, b) {
+function compareByName(a, b) {
   return a.name.localeCompare(b.name);
 }
 
@@ -449,7 +449,7 @@ function genExpirationTime() {
   let nowMillis = now.getTime();
   let expirationMillis = nowMillis + (PINNING_MINIMUM_REQUIRED_MAX_AGE * 1000);
   let expirationMicros = expirationMillis * 1000;
-  return "static const PRTime kPreloadPKPinsExpirationTime = INT64_C(" +
+  return "static constexpr PRTime kPreloadPKPinsExpirationTime = INT64_C(" +
          expirationMicros + ");\n";
 }
 
@@ -464,7 +464,7 @@ function writeFullPinset(certNameToSKD, certSKDToName, pinset) {
 
 function writeFingerprints(certNameToSKD, certSKDToName, name, hashes) {
   let varPrefix = "kPinset_" + name;
-  writeString("static const char* const " + varPrefix + "_Data[] = {\n");
+  writeString("static constexpr const char* " + varPrefix + "_Data[] = {\n");
   let SKDList = [];
   for (let certName of hashes) {
     if (!(certName in certNameToSKD)) {
@@ -480,13 +480,13 @@ function writeFingerprints(certNameToSKD, certSKDToName, name, hashes) {
     writeString("  0\n");
   }
   writeString("};\n");
-  writeString("static const StaticFingerprints " + varPrefix + " = {\n  " +
+  writeString("static constexpr StaticFingerprints " + varPrefix + " = {\n  " +
     "sizeof(" + varPrefix + "_Data) / sizeof(const char*),\n  " + varPrefix +
     "_Data\n};\n\n");
 }
 
 function writeEntry(entry) {
-  let printVal = "  { \"" + entry.name + "\",\ ";
+  let printVal = `  { "${entry.name}", `;
   if (entry.include_subdomains) {
     printVal += "true, ";
   } else {
@@ -525,7 +525,7 @@ function writeEntry(entry) {
 
 function writeDomainList(chromeImportedEntries) {
   writeString("/* Sort hostnames for binary search. */\n");
-  writeString("static const TransportSecurityPreload " +
+  writeString("static constexpr TransportSecurityPreload " +
           "kPublicKeyPinningPreloadList[] = {\n");
   let count = 0;
   let mozillaDomains = {};
@@ -550,7 +550,7 @@ function writeDomainList(chromeImportedEntries) {
   writeString("};\n");
 
   writeString("\n// Pinning Preload List Length = " + count + ";\n");
-  writeString("\nstatic const int32_t kUnknownId = -1;\n");
+  writeString("\nstatic constexpr int32_t kUnknownId = -1;\n");
 }
 
 function writeFile(certNameToSKD, certSKDToName,
@@ -578,7 +578,7 @@ function writeFile(certNameToSKD, certSKDToName,
   Object.keys(usedFingerprints).sort().forEach(function(certName) {
     if (certName) {
       writeString("/* " + certName + " */\n");
-      writeString("static const char " + nameToAlias(certName) + "[] =\n");
+      writeString("static constexpr char " + nameToAlias(certName) + "[] =\n");
       writeString("  \"" + certNameToSKD[certName] + "\";\n");
       writeString("\n");
     }

@@ -136,7 +136,7 @@ function testService() {
       }
       let test = testURLs.shift();
       let tables = "test-malware-simple,test-unwanted-simple,test-phish-simple,test-track-simple,test-block-simple";
-      let uri = ios.newURI(test.url, null, null);
+      let uri = ios.newURI(test.url);
       let prin = ssm.createCodebasePrincipal(uri, {});
       is(service.classifyLocal(uri, tables), test.table,
          `Successful synchronous classification of ${test.url} with TP=${test.trackingProtection}`);
@@ -154,7 +154,8 @@ SpecialPowers.pushPrefEnv(
   {"set" : [["urlclassifier.malwareTable", "test-malware-simple,test-unwanted-simple"],
             ["urlclassifier.phishTable", "test-phish-simple"],
             ["urlclassifier.downloadBlockTable", "test-block-simple"],
-            ["urlclassifier.trackingTable", "test-track-simple"]]},
+            ["urlclassifier.trackingTable", "test-track-simple"],
+            ["privacy.trackingprotection.annotate_channels", true]]},
   function() {
     classifierHelper.waitForInit()
       .then(() => classifierHelper.addUrlToDB(testData))

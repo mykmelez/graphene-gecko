@@ -220,6 +220,10 @@ private:
   // Returns false if memory couldn't be allocated.
   bool EnsureCapacity(size_t aLength)
   {
+    if (!aLength) {
+      // No need to allocate a buffer yet.
+      return true;
+    }
     const CheckedInt<size_t> sizeNeeded =
       CheckedInt<size_t>(aLength) * sizeof(Type) + AlignmentPaddingSize();
 
@@ -471,6 +475,17 @@ public:
                                                        int64_t aTime,
                                                        int64_t aDuration,
                                                        const YCbCrBuffer &aBuffer,
+                                                       bool aKeyframe,
+                                                       int64_t aTimecode,
+                                                       const IntRect& aPicture);
+
+  static already_AddRefed<VideoData> CreateAndCopyData(const VideoInfo& aInfo,
+                                                       ImageContainer* aContainer,
+                                                       int64_t aOffset,
+                                                       int64_t aTime,
+                                                       int64_t aDuration,
+                                                       const YCbCrBuffer &aBuffer,
+                                                       const YCbCrBuffer::Plane &aAlphaPlane,
                                                        bool aKeyframe,
                                                        int64_t aTimecode,
                                                        const IntRect& aPicture);

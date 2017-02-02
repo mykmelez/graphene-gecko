@@ -136,11 +136,11 @@
         <getter><![CDATA[
           // For security reasons delay searches on pasted values.
           if (this._valueIsPasted) {
-            let t = parseInt(this.getAttribute('pastetimeout'));
+            let t = parseInt(this.getAttribute("pastetimeout"));
             return isNaN(t) ? 1000 : t;
           }
 
-          let t = parseInt(this.getAttribute('timeout'));
+          let t = parseInt(this.getAttribute("timeout"));
           return isNaN(t) ? 50 : t;
         ]]></getter>
       </property>
@@ -330,8 +330,8 @@
             this.formatValue();
 
           this.mIgnoreInput = false;
-          var event = document.createEvent('Events');
-          event.initEvent('ValueChange', true, true);
+          var event = document.createEvent("Events");
+          event.initEvent("ValueChange", true, true);
           this.inputField.dispatchEvent(event);
           return val;
         ]]></setter>
@@ -403,7 +403,7 @@
         <body><![CDATA[
           // history dropmarker pushed state
           function cleanup(popup) {
-            popup.removeEventListener("popupshowing", onShow, false);
+            popup.removeEventListener("popupshowing", onShow);
           }
           function onShow(event) {
             var popup = event.target, input = popup.input;
@@ -411,11 +411,11 @@
             input.setAttribute("open", "true");
             function onHide() {
               input.removeAttribute("open");
-              popup.removeEventListener("popuphiding", onHide, false);
+              popup.removeEventListener("popuphiding", onHide);
             }
-            popup.addEventListener("popuphiding", onHide, false);
+            popup.addEventListener("popuphiding", onHide);
           }
-          this.popup.addEventListener("popupshowing", onShow, false);
+          this.popup.addEventListener("popupshowing", onShow);
           setTimeout(cleanup, 1000, this.popup);
 
           // Store our "normal" maxRows on the popup, so that it can reset the
@@ -618,16 +618,16 @@
           _autocomplete: this,
           _kGlobalClipboard: Components.interfaces.nsIClipboard.kGlobalClipboard,
           supportsCommand: aCommand => aCommand == "cmd_paste",
-          doCommand: function(aCommand) {
+          doCommand(aCommand) {
             this._autocomplete._valueIsPasted = true;
             this._autocomplete.editor.paste(this._kGlobalClipboard);
             this._autocomplete._valueIsPasted = false;
           },
-          isCommandEnabled: function(aCommand) {
+          isCommandEnabled(aCommand) {
             return this._autocomplete.editor.isSelectionEditable &&
                    this._autocomplete.editor.canPaste(this._kGlobalClipboard);
           },
-          onEvent: function() {}
+          onEvent() {}
         })
       ]]></field>
 
@@ -785,7 +785,7 @@
             this.tree.treeBoxObject.ensureRowIsVisible(val < 0 ? 0 : val);
           // Fire select event on xul:tree so that accessibility API
           // support layer can fire appropriate accessibility events.
-          var event = document.createEvent('Events');
+          var event = document.createEvent("Events");
           event.initEvent("select", true, true);
           this.tree.dispatchEvent(event);
           return val;
@@ -843,7 +843,7 @@
             this.showImageColumn = this.mInput.showImageColumn;
 
             var rect = aElement.getBoundingClientRect();
-            var nav = aElement.ownerDocument.defaultView.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+            var nav = aElement.ownerGlobal.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
                               .getInterface(Components.interfaces.nsIWebNavigation);
             var docShell = nav.QueryInterface(Components.interfaces.nsIDocShell);
             var docViewer = docShell.contentViewer;
@@ -851,7 +851,7 @@
             this.setAttribute("width", width > 100 ? width : 100);
 
             // Adjust the direction of the autocomplete popup list based on the textbox direction, bug 649840
-            var popupDirection = aElement.ownerDocument.defaultView.getComputedStyle(aElement).direction;
+            var popupDirection = aElement.ownerGlobal.getComputedStyle(aElement).direction;
             this.style.direction = popupDirection;
 
             this.openPopup(aElement, "after_start", 0, 0, false, false);
@@ -1250,6 +1250,15 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                 visibleHeight + this._rlbPadding + "px";
             }
 
+            // The class `forceHandleUnderflow` is for the item might need to
+            // handle OverUnderflow or Overflow when the height of an item will
+            // be changed dynamically.
+            for (let i = 0; i < numRows; i++) {
+              if (rows[i].classList.contains("forceHandleUnderflow")) {
+                rows[i].handleOverUnderflow();
+              }
+            }
+
             let lastRowRect = rows[numRows - 1].getBoundingClientRect();
             // Calculate the height to have the first row to last row shown
             height = lastRowRect.bottom - firstRowRect.top +
@@ -1338,8 +1347,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                   continue;
                 }
               }
-            }
-            else {
+            } else {
               // need to create a new item
               item = document.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul", "richlistitem");
               item.setAttribute("dir", this.style.direction);
@@ -1358,8 +1366,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               // re-use the existing item
               item._adjustAcItem();
               item.collapsed = false;
-            }
-            else {
+            } else {
               // set the class at the end so we can use the attributes
               // in the xbl constructor
               item.className = "autocomplete-richlistitem";
@@ -1510,11 +1517,22 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         </xul:description>
       </xul:hbox>
     </content>
+
+    <handlers>
+      <handler event="click" button="0"><![CDATA[
+        let baseURL = Services.urlFormatter.formatURLPref("app.support.baseURL");
+        window.openUILinkIn(baseURL + "insecure-password", "tab", {
+          relatedToCurrent: true,
+        });
+      ]]></handler>
+    </handlers>
+
     <implementation>
       <constructor><![CDATA[
         // Unlike other autocomplete items, the height of the insecure warning
-        // increases by wrapping.
-        this._handleOverflow();
+        // increases by wrapping. So "forceHandleUnderflow" is for container to
+        // recalculate an item's height and width.
+        this.classList.add("forceHandleUnderflow");
       ]]></constructor>
     </implementation>
   </binding>
@@ -2142,7 +2160,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             title = displayUrl;
             titleLooksLikeUrl = true;
             try {
-              let uri = Services.io.newURI(originalUrl, null, null);
+              let uri = Services.io.newURI(originalUrl);
               // Not all valid URLs have a domain.
               if (uri.host)
                 title = uri.host;
@@ -2353,7 +2371,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           let [, type, params] = aUrl.match(/^moz-action:([^,]+),(.*)$/);
 
           let action = {
-            type: type,
+            type,
           };
 
           try {

@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include "CTDiversityPolicy.h"
 #include "CTKnownLogs.h"
 #include "CTLogVerifier.h"
 #include "ExtendedValidation.h"
@@ -30,11 +31,55 @@ using namespace mozilla::psm;
 
 mozilla::LazyLogModule gCertVerifierLog("certverifier");
 
+// Returns the certificate validity period in calendar months (rounded down).
+// "extern" to allow unit tests in CTPolicyEnforcerTest.cpp.
+extern mozilla::pkix::Result
+GetCertLifetimeInFullMonths(PRTime certNotBefore,
+                            PRTime certNotAfter,
+                            size_t& months)
+{
+  if (certNotBefore >= certNotAfter) {
+    MOZ_ASSERT_UNREACHABLE("Expected notBefore < notAfter");
+    return mozilla::pkix::Result::FATAL_ERROR_INVALID_ARGS;
+  }
+
+  PRExplodedTime explodedNotBefore;
+  PRExplodedTime explodedNotAfter;
+
+  PR_ExplodeTime(certNotBefore, PR_LocalTimeParameters, &explodedNotBefore);
+  PR_ExplodeTime(certNotAfter, PR_LocalTimeParameters, &explodedNotAfter);
+
+  PRInt32 signedMonths =
+    (explodedNotAfter.tm_year - explodedNotBefore.tm_year) * 12 +
+    (explodedNotAfter.tm_month - explodedNotBefore.tm_month);
+  if (explodedNotAfter.tm_mday < explodedNotBefore.tm_mday) {
+    --signedMonths;
+  }
+
+  // Can't use `mozilla::AssertedCast<size_t>(signedMonths)` below
+  // since it currently generates a warning on Win x64 debug.
+  if (signedMonths < 0) {
+    MOZ_ASSERT_UNREACHABLE("Expected explodedNotBefore < explodedNotAfter");
+    return mozilla::pkix::Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+  months = static_cast<size_t>(signedMonths);
+
+  return Success;
+}
+
 namespace mozilla { namespace psm {
 
 const CertVerifier::Flags CertVerifier::FLAG_LOCAL_ONLY = 1;
 const CertVerifier::Flags CertVerifier::FLAG_MUST_BE_EV = 2;
 const CertVerifier::Flags CertVerifier::FLAG_TLS_IGNORE_STATUS_REQUEST = 4;
+
+void
+CertificateTransparencyInfo::Reset()
+{
+  enabled = false;
+  verifyResult.Reset();
+  policyCompliance = CTPolicyCompliance::Unknown;
+}
 
 CertVerifier::CertVerifier(OcspDownloadConfig odc,
                            OcspStrictConfig osc,
@@ -179,10 +224,13 @@ CertVerifier::LoadKnownCTLogs()
       continue;
     }
   }
+  // TBD: Initialize mCTDiversityPolicy with the CA dependency map
+  // of the known CT logs operators.
+  mCTDiversityPolicy = MakeUnique<CTDiversityPolicy>();
 }
 
 Result
-CertVerifier::VerifySignedCertificateTimestamps(
+CertVerifier::VerifyCertificateTransparencyPolicy(
   NSSCertDBTrustDomain& trustDomain, const UniqueCERTCertList& builtChain,
   Input sctsFromTLS, Time time,
   /*optional out*/ CertificateTransparencyInfo* ctInfo)
@@ -201,29 +249,22 @@ CertVerifier::VerifySignedCertificateTimestamps(
     return Result::FATAL_ERROR_INVALID_ARGS;
   }
 
-  bool gotScts = false;
   Input embeddedSCTs = trustDomain.GetSCTListFromCertificate();
   if (embeddedSCTs.GetLength() > 0) {
-    gotScts = true;
     MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
             ("Got embedded SCT data of length %zu\n",
               static_cast<size_t>(embeddedSCTs.GetLength())));
   }
   Input sctsFromOCSP = trustDomain.GetSCTListFromOCSPStapling();
   if (sctsFromOCSP.GetLength() > 0) {
-    gotScts = true;
     MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
             ("Got OCSP SCT data of length %zu\n",
               static_cast<size_t>(sctsFromOCSP.GetLength())));
   }
   if (sctsFromTLS.GetLength() > 0) {
-    gotScts = true;
     MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
             ("Got TLS SCT data of length %zu\n",
               static_cast<size_t>(sctsFromTLS.GetLength())));
-  }
-  if (!gotScts) {
-    return Success;
   }
 
   CERTCertListNode* endEntityNode = CERT_LIST_HEAD(builtChain);
@@ -240,6 +281,12 @@ CertVerifier::VerifySignedCertificateTimestamps(
   CERTCertificate* issuer = issuerNode->cert;
   if (!endEntity || !issuer) {
     return Result::FATAL_ERROR_INVALID_ARGS;
+  }
+
+  if (endEntity->subjectName) {
+    MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+            ("Verifying CT Policy compliance of subject %s\n",
+             endEntity->subjectName));
   }
 
   Input endEntityDER;
@@ -304,9 +351,44 @@ CertVerifier::VerifySignedCertificateTimestamps(
              result.decodingErrors));
   }
 
+  PRTime notBefore;
+  PRTime notAfter;
+  if (CERT_GetCertTimes(endEntity, &notBefore, &notAfter) != SECSuccess) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+  size_t lifetimeInMonths;
+  rv = GetCertLifetimeInFullMonths(notBefore, notAfter, lifetimeInMonths);
+  if (rv != Success) {
+    return rv;
+  }
+
+  CTLogOperatorList allOperators;
+  rv = GetCTLogOperatorsFromVerifiedSCTList(result.verifiedScts,
+                                            allOperators);
+  if (rv != Success) {
+    return rv;
+  }
+
+  CTLogOperatorList dependentOperators;
+  rv = mCTDiversityPolicy->GetDependentOperators(builtChain, allOperators,
+                                                 dependentOperators);
+  if (rv != Success) {
+    return rv;
+  }
+
+  CTPolicyEnforcer ctPolicyEnforcer;
+  CTPolicyCompliance ctPolicyCompliance;
+  rv = ctPolicyEnforcer.CheckCompliance(result.verifiedScts, lifetimeInMonths,
+                                        dependentOperators, ctPolicyCompliance);
+  if (rv != Success) {
+    MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+            ("CT policy check failed with fatal error %i\n", rv));
+    return rv;
+  }
+
   if (ctInfo) {
-    ctInfo->processedSCTs = true;
     ctInfo->verifyResult = Move(result);
+    ctInfo->policyCompliance = ctPolicyCompliance;
   }
   return Success;
 }
@@ -341,7 +423,7 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
             /*optional*/ const Flags flags,
             /*optional*/ const SECItem* stapledOCSPResponseSECItem,
             /*optional*/ const SECItem* sctsFromTLSSECItem,
-            /*optional*/ const NeckoOriginAttributes& originAttributes,
+            /*optional*/ const OriginAttributes& originAttributes,
         /*optional out*/ SECOidTag* evOidPolicy,
         /*optional out*/ OCSPStaplingStatus* ocspStaplingStatus,
         /*optional out*/ KeySizeStatus* keySizeStatus,
@@ -351,10 +433,10 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
 {
   MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("Top of VerifyCert\n"));
 
-  PR_ASSERT(cert);
-  PR_ASSERT(usage == certificateUsageSSLServer || !(flags & FLAG_MUST_BE_EV));
-  PR_ASSERT(usage == certificateUsageSSLServer || !keySizeStatus);
-  PR_ASSERT(usage == certificateUsageSSLServer || !sha1ModeResult);
+  MOZ_ASSERT(cert);
+  MOZ_ASSERT(usage == certificateUsageSSLServer || !(flags & FLAG_MUST_BE_EV));
+  MOZ_ASSERT(usage == certificateUsageSSLServer || !keySizeStatus);
+  MOZ_ASSERT(usage == certificateUsageSSLServer || !sha1ModeResult);
 
   if (evOidPolicy) {
     *evOidPolicy = SEC_OID_UNKNOWN;
@@ -538,9 +620,9 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
           if (sha1ModeResult) {
             *sha1ModeResult = sha1ModeResults[i];
           }
-          rv = VerifySignedCertificateTimestamps(trustDomain, builtChain,
-                                                 sctsFromTLSInput, time,
-                                                 ctInfo);
+          rv = VerifyCertificateTransparencyPolicy(trustDomain, builtChain,
+                                                   sctsFromTLSInput, time,
+                                                   ctInfo);
           if (rv != Success) {
             break;
           }
@@ -625,9 +707,9 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
             if (sha1ModeResult) {
               *sha1ModeResult = sha1ModeResults[j];
             }
-            rv = VerifySignedCertificateTimestamps(trustDomain, builtChain,
-                                                   sctsFromTLSInput, time,
-                                                   ctInfo);
+            rv = VerifyCertificateTransparencyPolicy(trustDomain, builtChain,
+                                                     sctsFromTLSInput, time,
+                                                     ctInfo);
             if (rv != Success) {
               break;
             }
@@ -644,11 +726,9 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
       }
       // The telemetry probe CERT_CHAIN_SHA1_POLICY_STATUS gives us feedback on
       // the result of setting a specific policy. However, we don't want noise
-      // from users who have manually set the policy to Allowed or Forbidden, so
-      // we only collect for ImportedRoot or ImportedRootOrBefore2016.
-      if (sha1ModeResult &&
-          (mSHA1Mode == SHA1Mode::ImportedRoot ||
-           mSHA1Mode == SHA1Mode::ImportedRootOrBefore2016)) {
+      // from users who have manually set the policy to something other than the
+      // default, so we only collect for ImportedRoot (which is the default).
+      if (sha1ModeResult && mSHA1Mode == SHA1Mode::ImportedRoot) {
         *sha1ModeResult = SHA1ModeResult::Failed;
       }
 
@@ -826,7 +906,7 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
                           /*out*/ UniqueCERTCertList& builtChain,
                      /*optional*/ bool saveIntermediatesInPermanentDatabase,
                      /*optional*/ Flags flags,
-                     /*optional*/ const NeckoOriginAttributes& originAttributes,
+                     /*optional*/ const OriginAttributes& originAttributes,
                  /*optional out*/ SECOidTag* evOidPolicy,
                  /*optional out*/ OCSPStaplingStatus* ocspStaplingStatus,
                  /*optional out*/ KeySizeStatus* keySizeStatus,
@@ -834,10 +914,10 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
                  /*optional out*/ PinningTelemetryInfo* pinningTelemetryInfo,
                  /*optional out*/ CertificateTransparencyInfo* ctInfo)
 {
-  PR_ASSERT(peerCert);
-  // XXX: PR_ASSERT(pinarg)
-  PR_ASSERT(hostname);
-  PR_ASSERT(hostname[0]);
+  MOZ_ASSERT(peerCert);
+  // XXX: MOZ_ASSERT(pinarg);
+  MOZ_ASSERT(hostname);
+  MOZ_ASSERT(hostname[0]);
 
   if (evOidPolicy) {
     *evOidPolicy = SEC_OID_UNKNOWN;

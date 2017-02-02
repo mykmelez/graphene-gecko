@@ -37,7 +37,6 @@
 #include "nsIDOMNode.h"                 // for nsIDOMNode
 #include "nsIDocument.h"                // for nsIDocument
 #include "nsIEditor.h"                  // for EditorBase::GetSelection, etc.
-#include "nsIEditorIMESupport.h"
 #include "nsIEditorMailSupport.h"       // for nsIEditorMailSupport
 #include "nsIFocusManager.h"            // for nsIFocusManager
 #include "nsIFormControl.h"             // for nsIFormControl, etc.
@@ -668,6 +667,13 @@ EditorEventListener::MouseClick(nsIDOMMouseEvent* aMouseEvent)
     return rv;
   }
 
+  // IMEStateManager::OnClickInEditor() may cause anything because it may
+  // set input context.  For example, it may cause opening VKB, changing focus
+  // or reflow.  So, mEditorBase here might have been gone.
+  if (!mEditorBase) {
+    return NS_OK;
+  }
+
   // If we got a mouse down inside the editing area, we should force the
   // IME to commit before we change the cursor position
   mEditorBase->ForceCompositionEnd();
@@ -766,7 +772,9 @@ EditorEventListener::MouseDown(nsIDOMMouseEvent* aMouseEvent)
 {
   // FYI: This may be called by HTMLEditorEventListener::MouseDown() even
   //      when the event is not acceptable for committing composition.
-  mEditorBase->ForceCompositionEnd();
+  if (mEditorBase) {
+    mEditorBase->ForceCompositionEnd();
+  }
   return NS_OK;
 }
 

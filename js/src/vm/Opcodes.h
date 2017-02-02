@@ -1017,7 +1017,7 @@
      *   Category: Literals
      *   Type: Object
      *   Operands: uint32_t nameIndex
-     *   Stack: receiver obj => obj[name]
+     *   Stack: receiver, obj => obj[name]
      */ \
     macro(JSOP_GETPROP_SUPER,   104, "getprop-super", NULL, 5,  2,  1, JOF_ATOM|JOF_PROP) \
     /*
@@ -1150,10 +1150,12 @@
      * a 32-bit offset from the current bytecode.
      *
      * This opcode is used for entering 'finally' block.
+     * When the execution resumes from 'finally' block, those stack values are
+     * popped.
      *   Category: Statements
      *   Type: Exception Handling
      *   Operands: int32_t offset
-     *   Stack: => false, (next bytecode's PC)
+     *   Stack: =>
      */ \
     macro(JSOP_GOSUB,     116,"gosub",      NULL,         5,  0,  0,  JOF_JUMP) \
     /*
@@ -1734,7 +1736,7 @@
      *   Category: Literals
      *   Type: Class
      *   Operands: atom className
-     *   Stack: => constructor
+     *   Stack: proto => constructor
      */ \
     macro(JSOP_DERIVEDCONSTRUCTOR, 168,"derivedconstructor", NULL, 5,  1,  1,  JOF_ATOM) \
     /*
@@ -1744,7 +1746,7 @@
      *   Category: Variables and Scopes
      *   Type: Local Variables
      *   Operands: uint32_t localno
-     *   Stack: =>
+     *   Stack: v => v
      */ \
     macro(JSOP_THROWSETCONST,        169, "throwsetconst",        NULL, 4,  1,  1, JOF_LOCAL|JOF_NAME|JOF_SET|JOF_DETECTING) \
     /*
@@ -1754,7 +1756,7 @@
      *   Category: Variables and Scopes
      *   Type: Aliased Variables
      *   Operands: uint8_t hops, uint24_t slot
-     *   Stack: =>
+     *   Stack: v => v
      */ \
     macro(JSOP_THROWSETALIASEDCONST, 170, "throwsetaliasedconst", NULL, 5,  1,  1, JOF_ENVCOORD|JOF_NAME|JOF_SET|JOF_DETECTING) \
     /*
@@ -1838,7 +1840,7 @@
      *   Category: Statements
      *   Type: Function
      *   Operands:
-     *   Stack: arr => arr optimized
+     *   Stack: arr => arr, optimized
      */ \
     macro(JSOP_OPTIMIZE_SPREADCALL,178,"optimize-spreadcall", NULL, 1,  1,  2,  JOF_BYTE) \
     /*
@@ -1851,7 +1853,7 @@
      *   Category: Variables and Scopes
      *   Type: Local Variables
      *   Operands:
-     *   Stack: =>
+     *   Stack: v => v
      */ \
     macro(JSOP_THROWSETCALLEE,     179, "throwsetcallee",        NULL, 1,  1,  1, JOF_SET|JOF_BYTE) \
     /*
@@ -1880,8 +1882,14 @@
      *   Stack: fun, name => fun
      */ \
     macro(JSOP_SETFUNNAME,    182,"setfunname", NULL,     2,  2,  1,  JOF_UINT8) \
-    macro(JSOP_UNUSED183,     183,"unused183",  NULL,     1,  0,  0,  JOF_BYTE) \
-    \
+    /*
+     * Moves the top of the stack value under the nth element of the stack.
+     *   Category: Operators
+     *   Type: Stack Operations
+     *   Operands: uint8_t n
+     *   Stack: v[n], v[n-1], ..., v[1], v[0] => v[0], v[n], v[n-1], ..., v[1]
+     */ \
+    macro(JSOP_UNPICK,        183,"unpick",     NULL,     2,  0,  0,  JOF_UINT8) \
     /*
      * Pops the top of stack value, pushes property of it onto the stack.
      *
@@ -1910,8 +1918,16 @@
      *   Stack: => this
      */ \
     macro(JSOP_GLOBALTHIS,    186,"globalthis", NULL,     1,  0,  1,  JOF_BYTE) \
-    macro(JSOP_UNUSED187,     187,"unused187",  NULL,     1,  0,  0,  JOF_BYTE) \
-    \
+    /*
+     * Pushes a boolean indicating whether the top of the stack is
+     * MagicValue(JS_GENERATOR_CLOSING).
+     *
+     *   Category: Statements
+     *   Type: For-In Statement
+     *   Operands:
+     *   Stack: val => val, res
+     */ \
+    macro(JSOP_ISGENCLOSING,  187, "isgenclosing",   NULL,         1,  1,  2,  JOF_BYTE) \
     /*
      * Pushes unsigned 24-bit int immediate integer operand onto the stack.
      *   Category: Literals
@@ -2052,7 +2068,7 @@
      *   Category: Statements
      *   Type: Generator
      *   Operands: uint24_t yieldIndex
-     *   Stack: generator =>
+     *   Stack: generator => generator
      */ \
     macro(JSOP_INITIALYIELD,  202,"initialyield", NULL,   4,  1,  1,  JOF_UINT24) \
     /*

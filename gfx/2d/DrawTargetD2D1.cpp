@@ -512,7 +512,7 @@ DrawTargetD2D1::Fill(const Path *aPath,
                      const Pattern &aPattern,
                      const DrawOptions &aOptions)
 {
-  if (aPath->GetBackendType() != BackendType::DIRECT2D1_1) {
+  if (!aPath || aPath->GetBackendType() != BackendType::DIRECT2D1_1) {
     gfxDebug() << *this << ": Ignoring drawing call for incompatible path.";
     return;
   }
@@ -1377,6 +1377,11 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
   const RadialGradientPattern *pat = static_cast<const RadialGradientPattern*>(&aPattern);
   if (pat->mCenter1 == pat->mCenter2 && pat->mRadius1 == pat->mRadius2) {
     // Draw nothing!
+    return;
+  }
+
+  if (!pat->mStops) {
+    // Draw nothing because of no color stops
     return;
   }
 

@@ -5,6 +5,7 @@
 #ifndef _JSEPTRACK_H_
 #define _JSEPTRACK_H_
 
+#include <functional>
 #include <algorithm>
 #include <string>
 #include <map>
@@ -53,6 +54,15 @@ public:
       return &it->second;
     }
     return nullptr;
+  }
+
+  void
+  ForEachRTPHeaderExtension(
+    const std::function<void(const SdpExtmapAttributeList::Extmap& extmap)> & fn) const
+  {
+    for(auto entry: mExtmap) {
+      fn(entry.second);
+    }
   }
 
   std::vector<uint8_t> GetUniquePayloadTypes() const

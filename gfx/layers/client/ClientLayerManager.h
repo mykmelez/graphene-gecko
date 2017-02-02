@@ -79,6 +79,7 @@ public:
   virtual void SetRoot(Layer* aLayer) override;
 
   virtual void Mutated(Layer* aLayer) override;
+  virtual void MutatedSimple(Layer* aLayer) override;
 
   virtual already_AddRefed<PaintedLayer> CreatePaintedLayer() override;
   virtual already_AddRefed<PaintedLayer> CreatePaintedLayerWithHint(PaintedLayerCreationHint aHint) override;
@@ -91,7 +92,8 @@ public:
   virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
-  void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier);
+  void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
+                                      uint64_t aDeviceResetSeqNo);
   TextureFactoryIdentifier GetTextureFactoryIdentifier()
   {
     return AsShadowForwarder()->GetTextureFactoryIdentifier();
@@ -172,8 +174,6 @@ public:
 
   virtual void Composite() override;
   virtual void GetFrameUniformity(FrameUniformityData* aFrameUniformityData) override;
-  virtual bool RequestOverfill(mozilla::dom::OverfillCallback* aCallback) override;
-  virtual void RunOverfillCallback(const uint32_t aOverfill) override;
 
   void DidComposite(uint64_t aTransactionId,
                     const mozilla::TimeStamp& aCompositeStart,
@@ -286,8 +286,6 @@ private:
                               void* aCallbackData,
                               EndTransactionFlags);
 
-  bool DependsOnStaleDevice() const;
-
   LayerRefArray mKeepAlive;
 
   nsIWidget* mWidget;
@@ -329,10 +327,13 @@ private:
   // Incremented in BeginTransaction(), but not for repeat transactions.
   uint32_t mPaintSequenceNumber;
 
+  // A sequence number for checking whether we have not yet acknowledged
+  // a device reset.
+  uint64_t mDeviceResetSequenceNumber;
+
   APZTestData mApzTestData;
 
   RefPtr<ShadowLayerForwarder> mForwarder;
-  AutoTArray<dom::OverfillCallback*,0> mOverfillCallbacks;
   mozilla::TimeStamp mTransactionStart;
 
   nsTArray<DidCompositeObserver*> mDidCompositeObservers;
@@ -350,22 +351,6 @@ public:
   }
 
   ~ClientLayer();
-
-  void SetShadow(PLayerChild* aShadow)
-  {
-    MOZ_ASSERT(!mShadow, "can't have two shadows (yet)");
-    mShadow = aShadow;
-  }
-
-  virtual void Disconnect()
-  {
-    // This is an "emergency Disconnect()", called when the compositing
-    // process has died.  |mShadow| and our Shmem buffers are
-    // automatically managed by IPDL, so we don't need to explicitly
-    // free them here (it's hard to get that right on emergency
-    // shutdown anyway).
-    mShadow = nullptr;
-  }
 
   virtual void ClearCachedResources() { }
 
@@ -403,12 +388,12 @@ CreateShadowFor(ClientLayer* aLayer,
                 ClientLayerManager* aMgr,
                 CreatedMethod aMethod)
 {
-  PLayerChild* shadow = aMgr->AsShadowForwarder()->ConstructShadowFor(aLayer);
+  LayerHandle shadow = aMgr->AsShadowForwarder()->ConstructShadowFor(aLayer);
   if (!shadow) {
     return;
   }
 
-  aLayer->SetShadow(shadow);
+  aLayer->SetShadow(aMgr->AsShadowForwarder(), shadow);
   (aMgr->AsShadowForwarder()->*aMethod)(aLayer);
   aMgr->Hold(aLayer->AsLayer());
 }

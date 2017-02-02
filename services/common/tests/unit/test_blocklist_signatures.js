@@ -3,10 +3,10 @@
 Cu.import("resource://services-common/blocklist-updater.js");
 Cu.import("resource://testing-common/httpd.js");
 
-const { Kinto } = Cu.import("resource://services-common/kinto-offline-client.js");
-const { FirefoxAdapter } = Cu.import("resource://services-common/kinto-storage-adapter.js");
+const { Kinto } = Cu.import("resource://services-common/kinto-offline-client.js", {});
+const { FirefoxAdapter } = Cu.import("resource://services-common/kinto-storage-adapter.js", {});
 const { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
-const { OneCRLBlocklistClient } = Cu.import("resource://services-common/blocklist-clients.js");
+const { OneCRLBlocklistClient } = Cu.import("resource://services-common/blocklist-clients.js", {});
 
 let server;
 
@@ -65,7 +65,7 @@ function* checkRecordCount(count) {
   const sqliteHandle = yield FirefoxAdapter.openConnection({path: kintoFilename});
   const config = {
     remote: base,
-    bucket: bucket,
+    bucket,
     adapter: FirefoxAdapter,
     adapterOptions: {sqliteHandle},
   };
@@ -83,7 +83,7 @@ function* checkRecordCount(count) {
 
 // Check to ensure maybeSync is called with correct values when a changes
 // document contains information on when a collection was last modified
-add_task(function* test_check_signatures(){
+add_task(function* test_check_signatures() {
   const port = server.identity.primaryPort;
 
   // a response to give the client when the cert chain is expected
@@ -97,7 +97,7 @@ add_task(function* test_check_signatures(){
           public_key: "fake",
           "content-signature": `x5u=http://localhost:${port}/test_blocklist_signatures/test_cert_chain.pem;p384ecdsa=${signature}`,
           signature_encoding: "rs_base64url",
-          signature: signature,
+          signature,
           hash_algorithm: "sha384",
           ref: "1yryrnmzou5rf31ou80znpnq8n"
         }
@@ -107,7 +107,7 @@ add_task(function* test_check_signatures(){
 
   function makeMetaResponse(eTag, body, comment) {
     return {
-      comment: comment,
+      comment,
       sampleHeaders: [
         "Content-Type: application/json; charset=UTF-8",
         `ETag: \"${eTag}\"`
@@ -117,8 +117,8 @@ add_task(function* test_check_signatures(){
     };
   }
 
-  function registerHandlers(responses){
-    function handleResponse (serverTimeMillis, request, response) {
+  function registerHandlers(responses) {
+    function handleResponse(serverTimeMillis, request, response) {
       const key = `${request.method}:${request.path}?${request.queryString}`;
       const available = responses[key];
       const sampled = available.length > 1 ? available.shift() : available[0];
@@ -131,7 +131,7 @@ add_task(function* test_check_signatures(){
                             sampled.status.statusText);
       // send the headers
       for (let headerLine of sampled.sampleHeaders) {
-        let headerElements = headerLine.split(':');
+        let headerElements = headerLine.split(":");
         response.setHeader(headerElements[0], headerElements[1].trimLeft());
       }
 
@@ -143,7 +143,6 @@ add_task(function* test_check_signatures(){
 
     for (let key of Object.keys(responses)) {
       const keyParts = key.split(":");
-      const method = keyParts[0];
       const valueParts = keyParts[1].split("?");
       const path = valueParts[0];
 
@@ -156,7 +155,7 @@ add_task(function* test_check_signatures(){
   let verifier = Cc["@mozilla.org/security/contentsignatureverifier;1"]
                    .createInstance(Ci.nsIContentSignatureVerifier);
 
-  const emptyData = '[]';
+  const emptyData = "[]";
   const emptySignature = "p384ecdsa=zbugm2FDitsHwk5-IWsas1PpWwY29f0Fg5ZHeqD8fzep7AVl2vfcaHA7LdmCZ28qZLOioGKvco3qT117Q4-HlqFTJM7COHzxGyU2MMJ0ZTnhJrPOC1fP3cVQjU1PTWi9";
   const name = "onecrl.content-signature.mozilla.org";
   ok(verifier.verifyContentSignature(emptyData, emptySignature,
@@ -504,5 +503,3 @@ function run_test() {
     server.stop(function() { });
   });
 }
-
-

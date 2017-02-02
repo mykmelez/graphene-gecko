@@ -88,7 +88,7 @@ function Notification(id, message, anchorID, mainAction, secondaryActions,
   this.wasDismissed = false;
   this.recordedTelemetryStats = new Set();
   this.isPrivate = PrivateBrowsingUtils.isWindowPrivate(
-                                        this.browser.ownerDocument.defaultView);
+                                        this.browser.ownerGlobal);
   this.timeCreated = this.owner.window.performance.now();
 }
 
@@ -143,7 +143,7 @@ Notification.prototype = {
     return anchorElement;
   },
 
-  reshow: function() {
+  reshow() {
     this.owner._reshowNotifications(this.anchorElement, this.browser);
   },
 
@@ -211,13 +211,41 @@ this.PopupNotifications = function PopupNotifications(tabbrowser, panel, iconBox
   if (!(panel instanceof Ci.nsIDOMXULElement))
     throw "Invalid panel";
 
-  this.window = tabbrowser.ownerDocument.defaultView;
+  this.window = tabbrowser.ownerGlobal;
   this.panel = panel;
   this.tabbrowser = tabbrowser;
   this.iconBox = iconBox;
   this.buttonDelay = Services.prefs.getIntPref(PREF_SECURITY_DELAY);
 
   this.panel.addEventListener("popuphidden", this, true);
+  this.panel.classList.add("popup-notification-panel");
+
+  // This listener will be attached to the chrome window whenever a notification
+  // is showing, to allow the user to dismiss notifications using the escape key.
+  this._handleWindowKeyPress = aEvent => {
+    if (aEvent.keyCode != aEvent.DOM_VK_ESCAPE) {
+      return;
+    }
+
+    // Esc key cancels the topmost notification, if there is one.
+    let notification = this.panel.firstChild;
+    if (!notification) {
+      return;
+    }
+
+    let doc = this.window.document;
+    let activeElement = doc.activeElement;
+
+    // If the chrome window has a focused element, let it handle the ESC key instead.
+    if (!activeElement ||
+        activeElement == doc.body ||
+        activeElement == this.tabbrowser.selectedBrowser ||
+        // Ignore focused elements inside the notification.
+        getNotificationFromElement(activeElement) == notification ||
+        notification.contains(activeElement)) {
+      this._onButtonEvent(aEvent, "secondarybuttoncommand", notification);
+    }
+  };
 
   this.window.addEventListener("activate", this, true);
   if (this.tabbrowser.tabContainer)
@@ -234,13 +262,13 @@ PopupNotifications.prototype = {
   set iconBox(iconBox) {
     // Remove the listeners on the old iconBox, if needed
     if (this._iconBox) {
-      this._iconBox.removeEventListener("click", this, false);
-      this._iconBox.removeEventListener("keypress", this, false);
+      this._iconBox.removeEventListener("click", this);
+      this._iconBox.removeEventListener("keypress", this);
     }
     this._iconBox = iconBox;
     if (iconBox) {
-      iconBox.addEventListener("click", this, false);
-      iconBox.addEventListener("keypress", this, false);
+      iconBox.addEventListener("click", this);
+      iconBox.addEventListener("keypress", this);
     }
   },
   get iconBox() {
@@ -505,6 +533,19 @@ PopupNotifications.prototype = {
   },
 
   /**
+   * Called by the consumer to indicate that the visibility of the notification
+   * anchors may have changed, but the location has not changed. This may result
+   * in the "showing" and "shown" events for visible notifications to be
+   * invoked even if the anchor has not changed.
+   */
+  anchorVisibilityChange() {
+    let notifications =
+      this._getNotificationsForBrowser(this.tabbrowser.selectedBrowser);
+    this._update(notifications, this._getAnchorsForNotifications(notifications,
+      getAnchorFromBrowser(this.tabbrowser.selectedBrowser)));
+  },
+
+  /**
    * Removes a Notification.
    * @param notification
    *        The Notification object to remove.
@@ -518,12 +559,14 @@ PopupNotifications.prototype = {
     }
   },
 
-  handleEvent: function(aEvent) {
+  handleEvent(aEvent) {
     switch (aEvent.type) {
       case "popuphidden":
         this._onPopupHidden(aEvent);
         break;
       case "activate":
+        if (this.isPanelOpen)
+          break;
       case "TabSelect":
         let self = this;
         // This is where we could detect if the panel is dismissed if the page
@@ -579,16 +622,18 @@ PopupNotifications.prototype = {
   /**
    * Dismisses the notification without removing it.
    */
-  _dismiss: function PopupNotifications_dismiss(telemetryReason) {
+  _dismiss: function PopupNotifications_dismiss(event, telemetryReason) {
     if (telemetryReason) {
       this.nextDismissReason = telemetryReason;
     }
 
     // An explicitly dismissed persistent notification effectively becomes
     // non-persistent.
-    if (this.panel.firstChild &&
-        telemetryReason == TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON) {
-      this.panel.firstChild.notification.options.persistent = false;
+    if (event && telemetryReason == TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON) {
+      let notificationEl = getNotificationFromElement(event.target);
+      if (notificationEl) {
+        notificationEl.notification.options.persistent = false;
+      }
     }
 
     let browser = this.panel.firstChild &&
@@ -617,7 +662,7 @@ PopupNotifications.prototype = {
   /**
    * Removes all notifications from the notification popup.
    */
-  _clearPanel: function() {
+  _clearPanel() {
     let popupnotification;
     while ((popupnotification = this.panel.lastChild)) {
       this.panel.removeChild(popupnotification);
@@ -671,7 +716,11 @@ PopupNotifications.prototype = {
       popupnotification.setAttribute("label", n.message);
       popupnotification.setAttribute("id", popupnotificationID);
       popupnotification.setAttribute("popupid", n.id);
-      popupnotification.setAttribute("closebuttoncommand", `PopupNotifications._dismiss(${TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON});`);
+      if (Services.prefs.getBoolPref("privacy.permissionPrompts.showCloseButton")) {
+        popupnotification.setAttribute("closebuttoncommand", "PopupNotifications._onButtonEvent(event, 'secondarybuttoncommand');");
+      } else {
+        popupnotification.setAttribute("closebuttoncommand", `PopupNotifications._dismiss(event, ${TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON});`);
+      }
       if (n.mainAction) {
         popupnotification.setAttribute("buttonlabel", n.mainAction.label);
         popupnotification.setAttribute("buttonaccesskey", n.mainAction.accessKey);
@@ -831,10 +880,33 @@ PopupNotifications.prototype = {
 
     this._refreshPanel(notificationsToShow);
 
+    // If the anchor element is hidden or null, fall back to the identity icon.
+    if (!anchorElement || (anchorElement.boxObject.height == 0 &&
+                           anchorElement.boxObject.width == 0)) {
+      anchorElement = this.window.document.getElementById("identity-icon");
+
+      // If the identity icon is not available in this window, or maybe the
+      // entire location bar is hidden for any reason, use the tab as the
+      // anchor. We only ever show notifications for the current browser, so we
+      // can just use the current tab.
+      if (!anchorElement || (anchorElement.boxObject.height == 0 &&
+                             anchorElement.boxObject.width == 0)) {
+        anchorElement = this.tabbrowser.selectedTab;
+      }
+    }
+
     if (this.isPanelOpen && this._currentAnchorElement == anchorElement) {
       notificationsToShow.forEach(function(n) {
         this._fireCallback(n, NOTIFICATION_EVENT_SHOWN);
       }, this);
+
+      // Make sure we update the noautohide attribute on the panel, in case it changed.
+      if (notificationsToShow.some(n => n.options.persistent)) {
+        this.panel.setAttribute("noautohide", "true");
+      } else {
+        this.panel.removeAttribute("noautohide");
+      }
+
       // Let tests know that the panel was updated and what notifications it was
       // updated with so that tests can wait for the correct notifications to be
       // added.
@@ -848,18 +920,6 @@ PopupNotifications.prototype = {
     // it first.  Otherwise it can appear in the wrong spot.  (_hidePanel is
     // safe to call even if the panel is already hidden.)
     this._hidePanel().then(() => {
-      // If the anchor element is hidden or null, use the tab as the anchor. We
-      // only ever show notifications for the current browser, so we can just use
-      // the current tab.
-      let selectedTab = this.tabbrowser.selectedTab;
-      if (anchorElement) {
-        let bo = anchorElement.boxObject;
-        if (bo.height == 0 && bo.width == 0)
-          anchorElement = selectedTab; // hidden
-      } else {
-        anchorElement = selectedTab; // null
-      }
-
       this._currentAnchorElement = anchorElement;
 
       if (notificationsToShow.some(n => n.options.persistent)) {
@@ -986,6 +1046,10 @@ PopupNotifications.prototype = {
       if (anchorElement) {
         this._showPanel(notificationsToShow, anchorElement);
       }
+
+      // Setup a capturing event listener on the whole window to catch the
+      // escape key while persistent notifications are visible.
+      this.window.addEventListener("keypress", this._handleWindowKeyPress, true);
     } else {
       // Notify observers that we're not showing the popup (useful for testing)
       this._notify("updateNotShowing");
@@ -1007,6 +1071,9 @@ PopupNotifications.prototype = {
             anchorElement.removeAttribute(ICON_ATTRIBUTE_SHOWING);
         }
       }
+
+      // Stop listening to keyboard events for notifications.
+      this.window.removeEventListener("keypress", this._handleWindowKeyPress, true);
     }
   },
 
@@ -1083,7 +1150,7 @@ PopupNotifications.prototype = {
     return anchors;
   },
 
-  _isActiveBrowser: function(browser) {
+  _isActiveBrowser(browser) {
     // We compare on frameLoader instead of just comparing the
     // selectedBrowser and browser directly because browser tabs in
     // Responsive Design Mode put the actual web content into a
@@ -1137,6 +1204,11 @@ PopupNotifications.prototype = {
     this.panel.removeAttribute("noautofocus");
 
     this._reshowNotifications(anchor);
+
+    // If the user re-selects the current notification, focus it.
+    if (anchor == this._currentAnchorElement && this.panel.firstChild) {
+      this.panel.firstChild.button.focus();
+    }
   },
 
   _reshowNotifications: function PopupNotifications_reshowNotifications(anchor, browser) {
@@ -1159,7 +1231,7 @@ PopupNotifications.prototype = {
     // to update our notification map.
 
     let ourNotifications = this._getNotificationsForBrowser(ourBrowser);
-    let other = otherBrowser.ownerDocument.defaultView.PopupNotifications;
+    let other = otherBrowser.ownerGlobal.PopupNotifications;
     if (!other) {
       if (ourNotifications.length > 0)
         Cu.reportError("unable to swap notifications: otherBrowser doesn't support notifications");
@@ -1230,7 +1302,7 @@ PopupNotifications.prototype = {
     this._update();
   },
 
-  _dismissOrRemoveCurrentNotifications: function() {
+  _dismissOrRemoveCurrentNotifications() {
     let browser = this.panel.firstChild &&
                   this.panel.firstChild.notification.browser;
     if (!browser)
@@ -1265,8 +1337,10 @@ PopupNotifications.prototype = {
     }, this);
   },
 
-  _onButtonEvent(event, type) {
-    let notificationEl = getNotificationFromElement(event.originalTarget);
+  _onButtonEvent(event, type, notificationEl = null) {
+    if (!notificationEl) {
+      notificationEl = getNotificationFromElement(event.originalTarget);
+    }
 
     if (!notificationEl)
       throw "PopupNotifications._onButtonEvent: couldn't find notification element";

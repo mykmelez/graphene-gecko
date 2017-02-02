@@ -9,9 +9,6 @@
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 const LOCAL_EME_SOURCES = [{
-  "id": "gmp-eme-adobe",
-  "src": "chrome://global/content/gmp-sources/eme-adobe.json"
-}, {
   "id": "gmp-gmpopenh264",
   "src": "chrome://global/content/gmp-sources/openh264.json"
 }, {
@@ -42,7 +39,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "GMPPrefs",
 XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
                                   "resource://gre/modules/UpdateUtils.jsm");
 
-var logger = Log.repository.getLogger("addons.productaddons");
+XPCOMUtils.defineLazyModuleGetter(this, "ServiceRequest",
+                                  "resource://gre/modules/ServiceRequest.jsm");
 
 // This exists so that tests can override the XHR behaviour for downloading
 // the addon update XML file.
@@ -50,6 +48,8 @@ var CreateXHR = function() {
   return Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
     createInstance(Ci.nsISupports);
 }
+
+var logger = Log.repository.getLogger("addons.productaddons");
 
 /**
  * Number of milliseconds after which we need to cancel `downloadXML`.
@@ -75,8 +75,7 @@ function getRequestStatus(request) {
   let status = null;
   try {
     status = request.status;
-  }
-  catch (e) {
+  } catch (e) {
   }
 
   if (status != null) {
@@ -113,6 +112,11 @@ function downloadXML(url, allowNonBuiltIn = false, allowedCerts = null) {
     request.channel.loadFlags |= Ci.nsIRequest.LOAD_BYPASS_CACHE;
     // Prevent the request from writing to the cache.
     request.channel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
+    // Use conservative TLS settings. See bug 1325501.
+    // TODO move to ServiceRequest.
+    if (request.channel instanceof Ci.nsIHttpChannelInternal) {
+      request.channel.QueryInterface(Ci.nsIHttpChannelInternal).beConservative = true;
+    }
     request.timeout = TIMEOUT_DELAY_MS;
 
     request.overrideMimeType("text/xml");
@@ -127,7 +131,7 @@ function downloadXML(url, allowNonBuiltIn = false, allowedCerts = null) {
     let fail = (event) => {
       let request = event.target;
       let status = getRequestStatus(request);
-      let message = "Failed downloading XML, status: " + status +  ", reason: " + event.type;
+      let message = "Failed downloading XML, status: " + status + ", reason: " + event.type;
       logger.warn(message);
       let ex = new Error(message);
       ex.status = status;
@@ -150,10 +154,10 @@ function downloadXML(url, allowNonBuiltIn = false, allowedCerts = null) {
       resolve(request.responseXML);
     };
 
-    request.addEventListener("error", fail, false);
-    request.addEventListener("abort", fail, false);
-    request.addEventListener("timeout", fail, false);
-    request.addEventListener("load", success, false);
+    request.addEventListener("error", fail);
+    request.addEventListener("abort", fail);
+    request.addEventListener("timeout", fail);
+    request.addEventListener("load", success);
 
     logger.info("sending request to: " + url);
     request.send(null);
@@ -163,7 +167,7 @@ function downloadXML(url, allowNonBuiltIn = false, allowedCerts = null) {
 function downloadJSON(uri) {
   logger.info("fetching config from: " + uri);
   return new Promise((resolve, reject) => {
-    let xmlHttp = new XMLHttpRequest({mozAnon: true});
+    let xmlHttp = new ServiceRequest({mozAnon: true});
 
     xmlHttp.onload = function(aResponse) {
       resolve(JSON.parse(this.responseText));
@@ -290,8 +294,7 @@ function downloadLocalConfig() {
  */
 function downloadFile(url) {
   return new Promise((resolve, reject) => {
-    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                  createInstance(Ci.nsISupports);
+    let xhr = new XMLHttpRequest();
     xhr.onload = function(response) {
       logger.info("downloadXHR File download. status=" + xhr.status);
       if (xhr.status != 200 && xhr.status != 206) {
@@ -311,7 +314,7 @@ function downloadFile(url) {
     let fail = (event) => {
       let request = event.target;
       let status = getRequestStatus(request);
-      let message = "Failed downloading via XHR, status: " + status +  ", reason: " + event.type;
+      let message = "Failed downloading via XHR, status: " + status + ", reason: " + event.type;
       logger.warn(message);
       let ex = new Error(message);
       ex.status = status;
@@ -323,6 +326,11 @@ function downloadFile(url) {
     xhr.responseType = "arraybuffer";
     try {
       xhr.open("GET", url);
+      // Use conservative TLS settings. See bug 1325501.
+      // TODO move to ServiceRequest.
+      if (xhr.channel instanceof Ci.nsIHttpChannelInternal) {
+        xhr.channel.QueryInterface(Ci.nsIHttpChannelInternal).beConservative = true;
+      }
       xhr.send(null);
     } catch (ex) {
       reject(ex);
@@ -369,8 +377,7 @@ var computeHash = Task.async(function*(hashFunction, path) {
     } while (bytes.length == HASH_CHUNK_SIZE);
 
     return binaryToHex(hasher.finish(false));
-  }
-  finally {
+  } finally {
     yield file.close();
   }
 });
@@ -398,7 +405,7 @@ var verifyFile = Task.async(function*(properties, path) {
     let expectedDigest = properties.hashValue.toLowerCase();
     let digest = yield computeHash(properties.hashFunction, path);
     if (digest != expectedDigest) {
-      throw new Error("Hash was `" + digest + "` but expected `" + expectedDigest +  "`.");
+      throw new Error("Hash was `" + digest + "` but expected `" + expectedDigest + "`.");
     }
   }
 });
@@ -419,7 +426,12 @@ const ProductAddonChecker = {
    *         and whether the local fallback was used, or rejects with a JS
    *         exception in case of error.
    */
-  getProductAddonList: function(url, allowNonBuiltIn = false, allowedCerts = null) {
+  getProductAddonList(url, allowNonBuiltIn = false, allowedCerts = null) {
+    if (!GMPPrefs.get(GMPPrefs.KEY_UPDATE_ENABLED, true)) {
+      logger.info("Updates are disabled via media.gmp-manager.updateEnabled");
+      return Promise.resolve({usedFallback: true, gmpAddons: []});
+    }
+
     return downloadXML(url, allowNonBuiltIn, allowedCerts)
       .then(parseXML)
       .catch(downloadLocalConfig);
@@ -439,8 +451,7 @@ const ProductAddonChecker = {
     try {
       yield verifyFile(addon, path);
       return path;
-    }
-    catch (e) {
+    } catch (e) {
       yield OS.File.remove(path);
       throw e;
     }

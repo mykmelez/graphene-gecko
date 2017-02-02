@@ -66,6 +66,8 @@ public:
     virtual JS::Value GetFramebufferAttachmentParameter(JSContext* cx, GLenum target,
                                                         GLenum attachment, GLenum pname,
                                                         ErrorResult& rv) override;
+    // Make the inline version from the superclass visible here.
+    using WebGLContext::GetFramebufferAttachmentParameter;
 
     void InvalidateFramebuffer(GLenum target, const dom::Sequence<GLenum>& attachments,
                                ErrorResult& rv);
@@ -241,8 +243,10 @@ public:
     ////////////////
 
     // GL 3.0 & ES 3.0
-    void VertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
-    void VertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
+    void VertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w,
+                         const char* funcName = nullptr);
+    void VertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w,
+                          const char* funcName = nullptr);
 
     void VertexAttribI4iv(GLuint index, const Int32ListU& list) {
         const auto& arr = Int32Arr::From(list);
@@ -270,8 +274,21 @@ public:
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instanceCount);
     void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, GLintptr offset, GLsizei instanceCount);
     */
-    void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, GLintptr offset);
 
+    void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count,
+                           GLenum type, WebGLintptr byteOffset)
+    {
+        const char funcName[] = "drawRangeElements";
+        if (IsContextLost())
+            return;
+
+        if (end < start) {
+            ErrorInvalidValue("%s: end must be >= start.", funcName);
+            return;
+        }
+
+        DrawElements(mode, count, type, byteOffset, funcName);
+    }
 
     // ------------------------------------------------------------------------
     // Multiple Render Targets - WebGL2ContextMRTs.cpp
@@ -281,7 +298,7 @@ public:
 
 private:
     bool ValidateClearBuffer(const char* funcName, GLenum buffer, GLint drawBuffer,
-                             size_t availElemCount, GLuint elemOffset);
+                             size_t availElemCount, GLuint elemOffset, GLenum funcType);
 
     void ClearBufferfv(GLenum buffer, GLint drawBuffer, const Float32Arr& src,
                        GLuint srcElemOffset);
@@ -325,6 +342,8 @@ public:
     // -------------------------------------------------------------------------
     // Sync objects - WebGL2ContextSync.cpp
 
+    const GLuint64 kMaxClientWaitSyncTimeoutNS = 1000 * 1000 * 1000; // 1000ms in ns.
+
     already_AddRefed<WebGLSync> FenceSync(GLenum condition, GLbitfield flags);
     bool IsSync(const WebGLSync* sync);
     void DeleteSync(WebGLSync* sync);
@@ -360,6 +379,8 @@ public:
     void BindBufferRange(GLenum target, GLuint index, WebGLBuffer* buffer, GLintptr offset, GLsizeiptr size);
 */
     virtual JS::Value GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv) override;
+    // Make the inline version from the superclass visible here.
+    using WebGLContext::GetParameter;
     void GetIndexedParameter(JSContext* cx, GLenum target, GLuint index,
                              JS::MutableHandleValue retval, ErrorResult& rv);
     void GetUniformIndices(const WebGLProgram& program,

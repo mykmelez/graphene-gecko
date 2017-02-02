@@ -43,7 +43,6 @@ add_task(async function test_records_crypto() {
 
     log.info("Creating a record");
 
-    let cryptoUri = "http://localhost:8080/crypto/steam";
     cryptoWrap = prepareCryptoWrap("steam", "resource");
 
     log.info("cryptoWrap: " + cryptoWrap.toString());
@@ -66,8 +65,7 @@ add_task(async function test_records_crypto() {
     let error = "";
     try {
       payload = cryptoWrap.decrypt(keyBundle);
-    }
-    catch(ex) {
+    } catch (ex) {
       error = ex;
     }
     do_check_eq(error, "No ciphertext: nothing to decrypt?");
@@ -89,8 +87,7 @@ add_task(async function test_records_crypto() {
     error = "";
     try {
       cryptoWrap.decrypt(keyBundle);
-    }
-    catch(ex) {
+    } catch (ex) {
       error = ex;
     }
     do_check_eq(error, "Record id mismatch: resource != other");
@@ -101,8 +98,7 @@ add_task(async function test_records_crypto() {
     error = "";
     try {
       cryptoWrap.decrypt(keyBundle);
-    }
-    catch(ex) {
+    } catch (ex) {
       error = ex;
     }
     do_check_eq(error.substr(0, 42), "Record SHA256 HMAC mismatch: should be foo");
@@ -110,7 +106,6 @@ add_task(async function test_records_crypto() {
     // Checking per-collection keys and default key handling.
 
     generateNewKeys(Service.collectionKeys);
-    let bu = "http://localhost:8080/storage/bookmarks/foo";
     let bookmarkItem = prepareCryptoWrap("bookmarks", "foo");
     bookmarkItem.encrypt(Service.collectionKeys.keyForCollection("bookmarks"));
     log.info("Ciphertext is " + bookmarkItem.ciphertext);
@@ -172,8 +167,7 @@ add_task(async function test_records_crypto() {
     emptyKeys.setContents(payload, null);
 
     log.info("Done!");
-  }
-  finally {
+  } finally {
     await promiseStopServer(server);
   }
 });

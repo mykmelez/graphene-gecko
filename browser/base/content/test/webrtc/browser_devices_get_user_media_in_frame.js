@@ -6,17 +6,6 @@ registerCleanupFunction(function() {
   gBrowser.removeCurrentTab();
 });
 
-function promiseReloadFrame(aFrameId) {
-  return ContentTask.spawn(gBrowser.selectedBrowser, aFrameId, function*(contentFrameId) {
-    content.wrappedJSObject
-           .document
-           .getElementById(contentFrameId)
-           .contentWindow
-           .location
-           .reload();
-  });
-}
-
 var gTests = [
 
 {
@@ -70,7 +59,7 @@ var gTests = [
     yield checkSharingUI({video: true, audio: true});
 
     let Perms = Services.perms;
-    let uri = Services.io.newURI("https://example.com/", null, null);
+    let uri = Services.io.newURI("https://example.com/");
     is(Perms.testExactPermission(uri, "microphone"), Perms.ALLOW_ACTION,
                                  "microphone persistently allowed");
     is(Perms.testExactPermission(uri, "camera"), Perms.ALLOW_ACTION,
@@ -111,10 +100,11 @@ var gTests = [
     yield checkSharingUI({video: true, audio: true});
 
     info("reloading the frame");
-    promise = promiseObserverCalled("recording-device-events");
+    promise = promiseObserverCalled("recording-device-stopped");
     yield promiseReloadFrame("frame1");
     yield promise;
 
+    yield expectObserverCalled("recording-device-events");
     yield expectObserverCalled("recording-window-ended");
     yield expectNoObserverCalled();
     yield checkNotSharing();
@@ -235,9 +225,7 @@ function test() {
 
   browser.messageManager.loadFrameScript(CONTENT_SCRIPT_HELPER, true);
 
-  browser.addEventListener("load", function onload() {
-    browser.removeEventListener("load", onload, true);
-
+  browser.addEventListener("load", function() {
     is(PopupNotifications._currentNotifications.length, 0,
        "should start the test without any prior popup notification");
 
@@ -256,7 +244,7 @@ function test() {
      ok(false, "Unexpected Exception: " + ex);
      finish();
     });
-  }, true);
+  }, {capture: true, once: true});
   let rootDir = getRootDirectory(gTestPath);
   rootDir = rootDir.replace("chrome://mochitests/content/",
                             "https://example.com/");

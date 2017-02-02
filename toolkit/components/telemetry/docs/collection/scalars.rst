@@ -5,7 +5,6 @@ Scalars
 Historically we started to overload our histogram mechanism to also collect scalar data,
 such as flag values, counts, labels and others.
 The scalar measurement types are the suggested way to collect that kind of scalar data.
-We currently only support recording of scalars from the parent process.
 The serialized scalar data is submitted with the :doc:`main pings <../data/main-ping>`.
 
 The API
@@ -100,6 +99,13 @@ Required Fields
 - ``expires``: The version number in which the scalar expires, e.g. "30"; a version number of type "N" and "N.0" is automatically converted to "N.0a1" in order to expire the scalar also in the development channels. A telemetry probe acting on an expired scalar will print a warning into the browser console. For scalars that never expire the value ``never`` can be used.
 - ``kind``: A string representing the scalar type. Allowed values are ``uint``, ``string`` and ``boolean``.
 - ``notification_emails``: A list of email addresses to notify with alerts of expiring probes. More importantly, these are used by the data steward to verify that the probe is still useful.
+- ``record_in_processes``: A list of processes the scalar is allowed to record in. Currently supported values are:
+
+  - ``main``;
+  - ``content``;
+  - ``gpu``;
+  - ``all_child`` (record in all the child processes);
+  - ``all`` (record in all the processes).
 
 Optional Fields
 ---------------
@@ -118,6 +124,11 @@ Keyed Scalars
 Keyed scalars are collections of one of the available scalar types, indexed by a string key that can contain UTF8 characters and cannot be longer than 70 characters. Keyed scalars can contain up to 100 keys. This scalar type is for example useful when you want to break down certain counts by a name, like how often searches happen with which search engine.
 
 Keyed scalars should only be used if the set of keys are not known beforehand. If the keys are from a known set of strings, other options are preferred if suitable, like categorical histograms or splitting measurements up into separate scalars.
+
+Multiple processes caveats
+--------------------------
+When recording data in different processes of the same type (e.g. multiple content processes), the user is responsible for preventing races between the operations on the scalars.
+Races can happen because scalar changes are send from each child process to the parent process, and then merged into the final storage location. Since there's no synchronization between the processes, operations like ``setMaximum`` can potentially produce different results if sent from more than one child process.
 
 The processor scripts
 =====================
@@ -138,3 +149,10 @@ This script is called by the build system to generate the ``TelemetryScalarEnums
 file out of the scalar definitions.
 This header file contains an enum class with all the scalar identifiers used to access them
 from code through the C++ API.
+
+Version History
+===============
+
+- Firefox 50: Initial scalar support (`bug 1276195 <https://bugzilla.mozilla.org/show_bug.cgi?id=1276195>`_).
+- Firefox 51: Added keyed scalars (`bug 1277806 <https://bugzilla.mozilla.org/show_bug.cgi?id=1277806>`_).
+- Firefox 53: Added child process scalars (`bug 1278556 <https://bugzilla.mozilla.org/show_bug.cgi?id=1278556>`_).

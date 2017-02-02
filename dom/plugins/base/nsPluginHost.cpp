@@ -265,8 +265,10 @@ static bool UnloadPluginsASAP()
 }
 
 nsPluginHost::nsPluginHost()
-  // No need to initialize members to nullptr, false etc because this class
-  // has a zeroing operator new.
+  : mPluginsLoaded(false)
+  , mOverrideInternalTypes(false)
+  , mPluginsDisabled(false)
+  , mPluginEpoch(0)
 {
   // Bump the pluginchanged epoch on startup. This insures content gets a
   // good plugin list the first time it requests it. Normally we'd just
@@ -1579,7 +1581,7 @@ nsPluginHost::RegisterFakePlugin(JS::Handle<JS::Value> aInitDictionary,
   nsresult rv = nsFakePluginTag::Create(initDictionary, getter_AddRefs(newTag));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  for (auto existingTag : mFakePlugins) {
+  for (const auto& existingTag : mFakePlugins) {
     if (newTag->HandlerURIMatches(existingTag->HandlerURI())) {
       return NS_ERROR_UNEXPECTED;
     }
@@ -2808,11 +2810,14 @@ nsPluginHost::WritePluginInfo()
     return rv;
   }
 
+  bool flashOnly = Preferences::GetBool("plugin.load_flash_only", true);
+
   PR_fprintf(fd, "Generated File. Do not edit.\n");
 
-  PR_fprintf(fd, "\n[HEADER]\nVersion%c%s%c%c\nArch%c%s%c%c\n",
+  PR_fprintf(fd, "\n[HEADER]\nVersion%c%s%c%c%c\nArch%c%s%c%c\n",
              PLUGIN_REGISTRY_FIELD_DELIMITER,
              kPluginRegistryVersion,
+             flashOnly ? 't' : 'f',
              PLUGIN_REGISTRY_FIELD_DELIMITER,
              PLUGIN_REGISTRY_END_OF_LINE_MARKER,
              PLUGIN_REGISTRY_FIELD_DELIMITER,
@@ -3008,7 +3013,12 @@ nsPluginHost::ReadPluginInfo()
     return rv;
 
   // If we're reading an old registry, ignore it
-  if (strcmp(values[1], kPluginRegistryVersion) != 0) {
+  // If we flipped the flash-only pref, ignore it
+  bool flashOnly = Preferences::GetBool("plugin.load_flash_only", true);
+  nsAutoCString expectedVersion(kPluginRegistryVersion);
+  expectedVersion.Append(flashOnly ? 't' : 'f');
+
+  if (!expectedVersion.Equals(values[1])) {
     return rv;
   }
 
@@ -3304,7 +3314,7 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
       // errors about malformed requests if we include it in POSTs. See
       // bug 724465.
       nsCOMPtr<nsIURI> referer;
-      net::ReferrerPolicy referrerPolicy = net::RP_Default;
+      net::ReferrerPolicy referrerPolicy = net::RP_Unset;
 
       nsCOMPtr<nsIObjectLoadingContent> olc = do_QueryInterface(element);
       if (olc)

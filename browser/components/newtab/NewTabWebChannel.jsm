@@ -188,7 +188,7 @@ NewTabWebChannelImpl.prototype = {
 
     try {
       let msg = JSON.parse(message);
-      this.emit(msg.type, {data: msg.data, target: target});
+      this.emit(msg.type, {data: msg.data, target});
     } catch (err) {
       Cu.reportError(err);
     }
@@ -263,7 +263,7 @@ NewTabWebChannelImpl.prototype = {
     this._browsers = new Set();
 
     if (this._prefs.enabled) {
-      this._channel = new WebChannel(this.chanId, Services.io.newURI(this.origin, null, null));
+      this._channel = new WebChannel(this.chanId, Services.io.newURI(this.origin));
       this._channel.listen(this._incomingMessage);
     }
   },

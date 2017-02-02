@@ -111,20 +111,19 @@ add_task(function* test_multiple_no_id_extensions() {
   };
 
   let extension1 = ExtensionTestUtils.loadExtension({
-    manifest: manifest,
+    manifest,
     useAddonManager: "temporary",
   });
 
   let extension2 = ExtensionTestUtils.loadExtension({
-    manifest: manifest,
+    manifest,
     useAddonManager: "temporary",
   });
 
   yield Promise.all([extension1.startup(), extension2.startup()]);
 
-  const allAddons = yield new Promise(resolve => {
-    AddonManager.getAllAddons(addons => resolve(addons));
-  });
+  const allAddons = yield AddonManager.getAllAddons();
+
   do_print(`Found these add-ons: ${allAddons.map(a => a.name).join(", ")}`);
   const filtered = allAddons.filter(addon => addon.name === manifest.name);
   // Make sure we have two add-ons by the same name.
@@ -156,7 +155,7 @@ add_task(function* test_bss_id() {
   equal(addon, null, "Add-on is not installed");
 
   let extension = ExtensionTestUtils.loadExtension({
-    manifest: manifest,
+    manifest,
     useAddonManager: "temporary",
   });
   yield extension.startup();
@@ -193,7 +192,7 @@ add_task(function* test_two_ids() {
   }
 
   let extension = ExtensionTestUtils.loadExtension({
-    manifest: manifest,
+    manifest,
     useAddonManager: "temporary",
   });
   yield extension.startup();
@@ -490,12 +489,10 @@ add_task(function* test_permissions() {
 
   let xpi = ExtensionTestCommon.generateXPI({manifest});
 
-  let install = yield new Promise(resolve => {
-    AddonManager.getInstallForFile(xpi, resolve);
-  });
+  let install = yield AddonManager.getInstallForFile(xpi);
 
   let perminfo;
-  install._permHandler = info => {
+  install.promptHandler = info => {
     perminfo = info;
     return Promise.resolve();
   };
@@ -530,12 +527,10 @@ add_task(function* test_permissions() {
 
   let xpi = ExtensionTestCommon.generateXPI({manifest});
 
-  let install = yield new Promise(resolve => {
-    AddonManager.getInstallForFile(xpi, resolve);
-  });
+  let install = yield AddonManager.getInstallForFile(xpi);
 
   let perminfo;
-  install._permHandler = info => {
+  install.promptHandler = info => {
     perminfo = info;
     return Promise.reject();
   };

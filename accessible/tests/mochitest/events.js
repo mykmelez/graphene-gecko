@@ -112,7 +112,7 @@ function waveOverImageMap(aImageMapID)
 {
   var imageMapNode = getNode(aImageMapID);
   synthesizeMouse(imageMapNode, 10, 10, { type: "mousemove" },
-                  imageMapNode.ownerDocument.defaultView);
+                  imageMapNode.ownerGlobal);
 }
 
 /**
@@ -1597,7 +1597,7 @@ function moveCaretToDOMPoint(aID, aDOMPointNodeID, aDOMPointOffset,
     if (this.focusNode)
       this.focusNode.focus();
 
-    var selection = this.DOMPointNode.ownerDocument.defaultView.getSelection();
+    var selection = this.DOMPointNode.ownerGlobal.getSelection();
     var selRange = selection.getRangeAt(0);
     selRange.setStart(this.DOMPointNode, aDOMPointOffset);
     selRange.collapse(true);
@@ -1763,13 +1763,27 @@ function nofocusChecker(aID)
  * Text inserted/removed events checker.
  * @param aFromUser  [in, optional] kNotFromUserInput or kFromUserInput
  */
-function textChangeChecker(aID, aStart, aEnd, aTextOrFunc, aIsInserted, aFromUser)
+function textChangeChecker(aID, aStart, aEnd, aTextOrFunc, aIsInserted, aFromUser, aAsync)
 {
   this.target = getNode(aID);
   this.type = aIsInserted ? EVENT_TEXT_INSERTED : EVENT_TEXT_REMOVED;
   this.startOffset = aStart;
   this.endOffset = aEnd;
   this.textOrFunc = aTextOrFunc;
+  this.async = aAsync;
+
+  this.match = function stextChangeChecker_match(aEvent)
+  {
+    if (!(aEvent instanceof nsIAccessibleTextChangeEvent) ||
+        aEvent.accessible !== getAccessible(this.target)) {
+      return false;
+    }
+
+    let tcEvent = aEvent.QueryInterface(nsIAccessibleTextChangeEvent);
+    let modifiedText = (typeof this.textOrFunc === "function") ?
+      this.textOrFunc() : this.textOrFunc;
+    return modifiedText === tcEvent.modifiedText;
+  };
 
   this.check = function textChangeChecker_check(aEvent)
   {

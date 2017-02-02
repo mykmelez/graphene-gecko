@@ -446,7 +446,8 @@ public:
                        Connection* aClone,
                        const bool aReadOnly,
                        mozIStorageCompletionCallback* aCallback)
-    : mConnection(aConnection)
+    : Runnable("storage::AsyncInitializeClone")
+    , mConnection(aConnection)
     , mClone(aClone)
     , mReadOnly(aReadOnly)
     , mCallback(aCallback)
@@ -589,14 +590,13 @@ Connection::getAsyncExecutionTarget()
     return nullptr;
 
   if (!mAsyncExecutionThread) {
-    nsresult rv = ::NS_NewThread(getter_AddRefs(mAsyncExecutionThread));
+    static nsThreadPoolNaming naming;
+    nsresult rv = NS_NewNamedThread(naming.GetNextThreadName("mozStorage"),
+                                    getter_AddRefs(mAsyncExecutionThread));
     if (NS_FAILED(rv)) {
       NS_WARNING("Failed to create async thread.");
       return nullptr;
     }
-    static nsThreadPoolNaming naming;
-    naming.SetThreadPoolName(NS_LITERAL_CSTRING("mozStorage"),
-                             mAsyncExecutionThread);
   }
 
 #ifdef DEBUG

@@ -105,6 +105,19 @@ add_task(function* checkBadStsCert() {
   yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
+// This checks that the appinfo.appBuildID starts with a date string,
+// which is required for the misconfigured system time check.
+add_task(function* checkAppBuildIDIsDate() {
+  let appBuildID = Services.appinfo.appBuildID;
+  let year = parseInt(appBuildID.substr(0, 4), 10);
+  let month = parseInt(appBuildID.substr(4, 2), 10);
+  let day = parseInt(appBuildID.substr(6, 2), 10);
+
+  ok(year >= 2016 && year <= 2100, "appBuildID contains a valid year");
+  ok(month >= 1 && month <= 12, "appBuildID contains a valid month");
+  ok(day >= 1 && day <= 31, "appBuildID contains a valid day");
+});
+
 const PREF_BLOCKLIST_CLOCK_SKEW_SECONDS = "services.blocklist.clock_skew_seconds";
 
 add_task(function* checkWrongSystemTimeWarning() {
@@ -151,7 +164,7 @@ add_task(function* checkWrongSystemTimeWarning() {
   let message = yield Task.spawn(setUpPage);
 
   isnot(message.divDisplay, "none", "Wrong time message information is visible");
-  ok(message.text.includes("because your clock appears to show the wrong time"),
+  ok(message.text.includes("clock appears to show the wrong time"),
      "Correct error message found");
   ok(message.text.includes("expired.example.com"), "URL found in error message");
   ok(message.systemDate.includes(localDateFmt), "correct local date displayed");
@@ -172,7 +185,7 @@ add_task(function* checkWrongSystemTimeWarning() {
   message = yield Task.spawn(setUpPage);
 
   isnot(message.divDisplay, "none", "Wrong time message information is visible");
-  ok(message.text.includes("because your clock appears to show the wrong time"),
+  ok(message.text.includes("clock appears to show the wrong time"),
      "Correct error message found");
   ok(message.text.includes("expired.example.com"), "URL found in error message");
   ok(message.systemDate.includes(localDateFmt), "correct local date displayed");
@@ -287,7 +300,7 @@ add_task(function* checkAdvancedDetailsForHSTS() {
     };
   });
 
-  const badStsUri = Services.io.newURI(BAD_STS_CERT, null, null);
+  const badStsUri = Services.io.newURI(BAD_STS_CERT);
   is(message.ecTextContent, "SSL_ERROR_BAD_CERT_DOMAIN",
      "Correct error message found");
   is(message.ecTagName, "a", "Error message is a link");
@@ -376,19 +389,17 @@ function getCertChain(securityInfoAsString) {
   return certChain;
 }
 
-function getDERString(cert)
-{
+function getDERString(cert) {
   var length = {};
   var derArray = cert.getRawDER(length);
-  var derString = '';
+  var derString = "";
   for (var i = 0; i < derArray.length; i++) {
     derString += String.fromCharCode(derArray[i]);
   }
   return derString;
 }
 
-function getPEMString(cert)
-{
+function getPEMString(cert) {
   var derb64 = btoa(getDERString(cert));
   // Wrap the Base64 string into lines of 64 characters,
   // with CRLF line breaks (as specified in RFC 1421).

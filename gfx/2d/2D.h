@@ -42,6 +42,9 @@ typedef _cairo_scaled_font cairo_scaled_font_t;
 struct _FcPattern;
 typedef _FcPattern FcPattern;
 
+struct FT_LibraryRec_;
+typedef FT_LibraryRec_* FT_Library;
+
 struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID2D1Device;
@@ -350,6 +353,16 @@ public:
   virtual bool IsValid() const { return true; }
 
   /**
+   * This function will return true if the surface type matches that of a
+   * DataSourceSurface and if GetDataSurface will return the same object.
+   */
+  bool IsDataSourceSurface() const {
+    SurfaceType type = GetType();
+    return type == SurfaceType::DATA ||
+           type == SurfaceType::DATA_SHARED;
+  }
+
+  /**
    * This function will get a DataSourceSurface for this surface, a
    * DataSourceSurface's data can be accessed directly.
    */
@@ -491,6 +504,24 @@ public:
    * guaranteed to have surface->GetType() == SurfaceType::DATA.
    */
   virtual already_AddRefed<DataSourceSurface> GetDataSurface() override;
+
+  /**
+   * Add the size of the underlying data buffer to the aggregate.
+   */
+  virtual void AddSizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
+                                      size_t& aHeapSizeOut,
+                                      size_t& aNonHeapSizeOut) const
+  {
+  }
+
+  /**
+   * Returns whether or not the data was allocated on the heap. This should
+   * be used to determine if the memory needs to be cleared to 0.
+   */
+  virtual bool OnHeap() const
+  {
+    return true;
+  }
 
 protected:
   bool mIsMapped;
@@ -676,8 +707,16 @@ public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(ScaledFont)
   virtual ~ScaledFont() {}
 
-  typedef void (*FontFileDataOutput)(const uint8_t *aData, uint32_t aLength, uint32_t aIndex, Float aGlyphSize, void *aBaton);
-  typedef void (*FontDescriptorOutput)(const uint8_t *aData, uint32_t aLength, Float aFontSize, void *aBaton);
+  typedef struct {
+    uint32_t mTag;
+    Float    mValue;
+  } VariationSetting;
+
+  typedef void (*FontFileDataOutput)(const uint8_t *aData, uint32_t aLength, uint32_t aIndex, Float aGlyphSize,
+                                     uint32_t aVariationCount, const VariationSetting* aVariations,
+                                     void *aBaton);
+  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
+  typedef void (*FontDescriptorOutput)(const uint8_t* aData, uint32_t aLength, Float aFontSize, void* aBaton);
 
   virtual FontType GetType() const = 0;
   virtual AntialiasMode GetDefaultAAMode() {
@@ -707,6 +746,8 @@ public:
   virtual void GetGlyphDesignMetrics(const uint16_t* aGlyphIndices, uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics) = 0;
 
   virtual bool GetFontFileData(FontFileDataOutput, void *) { return false; }
+
+  virtual bool GetFontInstanceData(FontInstanceDataOutput, void *) { return false; }
 
   virtual bool GetFontDescriptor(FontDescriptorOutput, void *) { return false; }
 
@@ -738,10 +779,13 @@ public:
    *
    * @param aIndex index for the font within the resource.
    * @param aGlyphSize the size of ScaledFont required.
+   * @param aInstanceData pointer to read-only buffer of any available instance data.
+   * @param aInstanceDataLength the size of the instance data.
    * @return an already_addrefed ScaledFont, containing nullptr if failed.
    */
   virtual already_AddRefed<ScaledFont>
-    CreateScaledFont(uint32_t aIndex, uint32_t aGlyphSize) = 0;
+    CreateScaledFont(uint32_t aIndex, Float aGlyphSize,
+                     const uint8_t* aInstanceData, uint32_t aInstanceDataLength) = 0;
 
   virtual ~NativeFontResource() {};
 };
@@ -1389,11 +1433,23 @@ public:
    *
    * @param aData Pointer to the data
    * @param aSize Size of the TrueType data
+   * @param aVariationCount Number of VariationSetting records provided.
+   * @param aVariations Pointer to VariationSetting records.
    * @param aType Type of NativeFontResource that should be created.
    * @return a NativeFontResource of nullptr if failed.
    */
   static already_AddRefed<NativeFontResource>
-    CreateNativeFontResource(uint8_t *aData, uint32_t aSize, FontType aType);
+    CreateNativeFontResource(uint8_t *aData, uint32_t aSize,
+                             uint32_t aVariationCount,
+                             const ScaledFont::VariationSetting* aVariations,
+                             FontType aType);
+
+  /**
+   * This creates a scaled font of the given type based on font descriptor
+   * data retrieved from ScaledFont::GetFontDescriptor.
+   */
+  static already_AddRefed<ScaledFont>
+    CreateScaledFontFromFontDescriptor(FontType aType, const uint8_t* aData, uint32_t aDataLength, Float aSize);
 
   /**
    * This creates a scaled font with an associated cairo_scaled_font_t, and
@@ -1494,6 +1550,15 @@ public:
     CreateCGGlyphRenderingOptions(const Color &aFontSmoothingBackgroundColor);
 #endif
 
+#ifdef MOZ_ENABLE_FREETYPE
+  static void SetFTLibrary(FT_Library aFTLibrary);
+  static FT_Library GetFTLibrary();
+
+private:
+  static FT_Library mFTLibrary;
+public:
+#endif
+
 #ifdef WIN32
   static already_AddRefed<DrawTarget> CreateDrawTargetForD3D11Texture(ID3D11Texture2D *aTexture, SurfaceFormat aFormat);
 
@@ -1521,6 +1586,8 @@ public:
                                   Float aSize,
                                   bool aUseEmbeddedBitmap,
                                   bool aForceGDIMode);
+
+  static void UpdateSystemTextQuality();
 
 private:
   static ID2D1Device *mD2D1Device;

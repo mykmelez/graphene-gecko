@@ -8,35 +8,25 @@
 #define mozilla_dom_Dispatcher_h
 
 #include "mozilla/AlreadyAddRefed.h"
+#include "mozilla/TaskCategory.h"
 #include "nsISupports.h"
 
 class nsIEventTarget;
 class nsIRunnable;
 
+// This file defines basic functionality for dispatching runnables to various
+// groups: either the SystemGroup or a DocGroup or TabGroup. Ideally all
+// runnables destined for the main thread should be dispatched to a group
+// instead so that we know what kind of web content they'll be
+// touching. Runnables sent to the SystemGroup never touch web
+// content. Runnables sent to a DocGroup can only touch documents belonging to
+// that DocGroup. Runnables sent to a TabGroup can touch any document in any of
+// the tabs belonging to the TabGroup.
+
 namespace mozilla {
+class AbstractThread;
 namespace dom {
-
-enum class TaskCategory {
-  // User input (clicks, keypresses, etc.)
-  UI,
-
-  // Data from the network
-  Network,
-
-  // setTimeout, setInterval
-  Timer,
-
-  // requestIdleCallback
-  IdleCallback,
-
-  // Vsync notifications
-  RefreshDriver,
-
-  // Most DOM events (postMessage, media, plugins)
-  Other,
-
-  Count
-};
+class TabGroup;
 
 // This trait should be attached to classes like nsIGlobalObject and nsIDocument
 // that have a DocGroup or TabGroup attached to them. The methods here should
@@ -53,8 +43,11 @@ public:
   // This method may or may not be safe off of the main thread. For nsIDocument
   // it is safe. For nsIGlobalWindow it is not safe. The nsIEventTarget can
   // always be used off the main thread.
-  virtual already_AddRefed<nsIEventTarget>
-  EventTargetFor(TaskCategory aCategory) const;
+  virtual nsIEventTarget* EventTargetFor(TaskCategory aCategory) const;
+
+  // Must be called on the main thread. The AbstractThread can always be used
+  // off the main thread.
+  virtual AbstractThread* AbstractMainThreadFor(TaskCategory aCategory);
 };
 
 // Base class for DocGroup and TabGroup.
@@ -67,12 +60,21 @@ public:
 
   // This method is always safe to call off the main thread. The nsIEventTarget
   // can always be used off the main thread.
-  virtual already_AddRefed<nsIEventTarget>
-  EventTargetFor(TaskCategory aCategory) const = 0;
+  virtual nsIEventTarget* EventTargetFor(TaskCategory aCategory) const = 0;
+
+  // Must be called on the main thread. The AbstractThread can always be used
+  // off the main thread.
+  virtual AbstractThread* AbstractMainThreadFor(TaskCategory aCategory) = 0;
+
+  // This method performs a safe cast. It returns null if |this| is not of the
+  // requested type.
+  virtual TabGroup* AsTabGroup() { return nullptr; }
 
 protected:
   virtual already_AddRefed<nsIEventTarget>
   CreateEventTargetFor(TaskCategory aCategory);
+
+  static Dispatcher* FromEventTarget(nsIEventTarget* aEventTarget);
 };
 
 } // namespace dom

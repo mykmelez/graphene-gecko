@@ -811,6 +811,9 @@ inline void
 JSFunction::initExtendedSlot(size_t which, const js::Value& val)
 {
     MOZ_ASSERT(which < mozilla::ArrayLength(toExtended()->extendedSlots));
+    MOZ_ASSERT_IF(js::IsMarkedBlack(this) && val.isGCThing(),
+                  !JS::GCThingIsMarkedGray(JS::GCCellPtr(val)));
+    MOZ_ASSERT(js::IsObjectValueInCompartment(val, compartment()));
     toExtended()->extendedSlots[which].init(val);
 }
 
@@ -818,8 +821,9 @@ inline void
 JSFunction::setExtendedSlot(size_t which, const js::Value& val)
 {
     MOZ_ASSERT(which < mozilla::ArrayLength(toExtended()->extendedSlots));
-    MOZ_ASSERT_IF(js::IsMarkedBlack(this) && val.isMarkable(),
+    MOZ_ASSERT_IF(js::IsMarkedBlack(this) && val.isGCThing(),
                   !JS::GCThingIsMarkedGray(JS::GCCellPtr(val)));
+    MOZ_ASSERT(js::IsObjectValueInCompartment(val, compartment()));
     toExtended()->extendedSlots[which] = val;
 }
 
@@ -837,7 +841,7 @@ JSString* FunctionToString(JSContext* cx, HandleFunction fun, bool prettyPring);
 template<XDRMode mode>
 bool
 XDRInterpretedFunction(XDRState<mode>* xdr, HandleScope enclosingScope,
-                       HandleScript enclosingScript, MutableHandleFunction objp);
+                       HandleScriptSource sourceObject, MutableHandleFunction objp);
 
 /*
  * Report an error that call.thisv is not compatible with the specified class,

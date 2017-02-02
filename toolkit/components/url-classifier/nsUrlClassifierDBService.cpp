@@ -122,6 +122,11 @@ LazyLogModule gUrlClassifierDbServiceLog("UrlClassifierDbService");
 #define CONFIRM_AGE_PREF        "urlclassifier.max-complete-age"
 #define CONFIRM_AGE_DEFAULT_SEC (45 * 60)
 
+// TODO: The following two prefs are to be removed after we
+//       roll out full v4 hash completion. See Bug 1331534.
+#define TAKE_V4_COMPLETION_RESULT_PREF    "browser.safebrowsing.temporary.take_v4_completion_result"
+#define TAKE_V4_COMPLETION_RESULT_DEFAULT false
+
 class nsUrlClassifierDBServiceWorker;
 
 // Singleton instance.
@@ -170,6 +175,9 @@ nsUrlClassifierDBServiceWorker::QueueLookup(const nsACString& spec,
                                             nsIUrlClassifierLookupCallback* callback)
 {
   MutexAutoLock lock(mPendingLookupLock);
+  if (gShuttingDownThread) {
+      return NS_ERROR_ABORT;
+  }
 
   PendingLookup* lookup = mPendingLookups.AppendElement();
   if (!lookup) return NS_ERROR_OUT_OF_MEMORY;
@@ -273,8 +281,12 @@ nsUrlClassifierDBServiceWorker::DoLookup(const nsACString& spec,
   nsAutoPtr<LookupResultArray> completes(new LookupResultArray());
 
   for (uint32_t i = 0; i < results->Length(); i++) {
-    if (!mMissCache.Contains(results->ElementAt(i).hash.prefix)) {
-      completes->AppendElement(results->ElementAt(i));
+    const LookupResult& lookupResult = results->ElementAt(i);
+
+    // mMissCache should only be used in V2.
+    if (!lookupResult.mProtocolV2 ||
+        !mMissCache.Contains(lookupResult.hash.fixedLengthPrefix)) {
+      completes->AppendElement(lookupResult);
     }
   }
 
@@ -283,7 +295,7 @@ nsUrlClassifierDBServiceWorker::DoLookup(const nsACString& spec,
       // We're going to be doing a gethash request, add some extra entries.
       // Note that we cannot pass the first two by reference, because we
       // add to completes, whicah can cause completes to reallocate and move.
-      AddNoise(completes->ElementAt(i).hash.prefix,
+      AddNoise(completes->ElementAt(i).hash.fixedLengthPrefix,
                completes->ElementAt(i).mTableName,
                mGethashNoise, *completes);
       break;
@@ -343,9 +355,9 @@ nsUrlClassifierDBServiceWorker::AddNoise(const Prefix aPrefix,
     if (!result)
       return NS_ERROR_OUT_OF_MEMORY;
 
-    result->hash.prefix = noiseEntries[i];
+    result->hash.fixedLengthPrefix = noiseEntries[i];
     result->mNoise = true;
-
+    result->mPartialHashLength = PREFIX_SIZE; // Noise is always 4-byte,
     result->mTableName.Assign(tableName);
   }
 
@@ -605,6 +617,22 @@ nsUrlClassifierDBServiceWorker::FinishUpdate()
     LOG(("nsUrlClassifierDBServiceWorker::FinishUpdate() Not running "
          "ApplyUpdate() since the update has already failed."));
   }
+
+  nsCOMPtr<nsIUrlClassifierUtils> urlUtil =
+    do_GetService(NS_URLCLASSIFIERUTILS_CONTRACTID);
+
+  nsCString provider;
+  // Assume that all the tables in update should have the same provider.
+  urlUtil->GetTelemetryProvider(mUpdateTables.SafeElementAt(0, EmptyCString()), provider);
+
+  nsresult updateStatus = mUpdateStatus;
+  if (NS_FAILED(mUpdateStatus)) {
+   updateStatus = NS_ERROR_GET_MODULE(mUpdateStatus) == NS_ERROR_MODULE_URL_CLASSIFIER ?
+     mUpdateStatus : NS_ERROR_UC_UPDATE_UNKNOWN;
+  }
+
+  Telemetry::Accumulate(Telemetry::URLCLASSIFIER_UPDATE_ERROR, provider,
+                        NS_ERROR_GET_CODE(updateStatus));
 
   mMissCache.Clear();
 
@@ -964,9 +992,20 @@ nsUrlClassifierLookupCallback::LookupComplete(nsTArray<LookupResult>* results)
            StringBeginsWith(result.mTableName, NS_LITERAL_CSTRING("test-"))) &&
           mDBService->GetCompleter(result.mTableName,
                                    getter_AddRefs(completer))) {
+
+        // TODO: Figure out how long the partial hash should be sent
+        //       for completion. See Bug 1323953.
         nsAutoCString partialHash;
-        partialHash.Assign(reinterpret_cast<char*>(&result.hash.prefix),
-                           PREFIX_SIZE);
+        if (StringEndsWith(result.mTableName, NS_LITERAL_CSTRING("-proto"))) {
+          // We send the complete partial hash for v4 at the moment.
+          partialHash = result.PartialHash();
+        } else {
+          // We always send the first 4 bytes of the partial hash for
+          // non-v4 tables. This matters when we have 32-byte prefix
+          // in "test-xxx-simple" test data.
+          partialHash.Assign(reinterpret_cast<char*>(&result.hash.fixedLengthPrefix),
+                             PREFIX_SIZE);
+        }
 
         nsresult rv = completer->Complete(partialHash,
                                           gethashUrl,
@@ -977,10 +1016,9 @@ nsUrlClassifierLookupCallback::LookupComplete(nsTArray<LookupResult>* results)
         }
       } else {
         // For tables with no hash completer, a complete hash match is
-        // good enough, we'll consider it fresh, even if it hasn't been updated
-        // in 45 minutes.
+        // good enough, we'll consider it is valid.
         if (result.Complete()) {
-          result.mFresh = true;
+          result.mConfirmed = true;
           LOG(("Skipping completion in a table without a valid completer (%s).",
                result.mTableName.get()));
         } else {
@@ -1025,6 +1063,15 @@ nsUrlClassifierLookupCallback::Completion(const nsACString& completeHash,
 {
   LOG(("nsUrlClassifierLookupCallback::Completion [%p, %s, %d]",
        this, PromiseFlatCString(tableName).get(), chunkId));
+
+  if (StringEndsWith(tableName, NS_LITERAL_CSTRING("-proto")) &&
+      !Preferences::GetBool(TAKE_V4_COMPLETION_RESULT_PREF,
+                            TAKE_V4_COMPLETION_RESULT_DEFAULT)) {
+    // Bug 1331534 - We temporarily ignore hash completion result
+    // for v4 tables.
+    return NS_OK;
+  }
+
   mozilla::safebrowsing::Completion hash;
   hash.Assign(completeHash);
 
@@ -1081,23 +1128,24 @@ nsUrlClassifierLookupCallback::HandleResults()
     // the list can't be verified.  Also leave out randomly-generated
     // noise.
     if (result.mNoise) {
-      LOG(("Skipping result %X from table %s (noise)",
-           result.hash.prefix.ToUint32(), result.mTableName.get()));
+      LOG(("Skipping result %s from table %s (noise)",
+           result.PartialHashHex().get(), result.mTableName.get()));
       continue;
     } else if (!result.Confirmed()) {
       LOG(("Skipping result %X from table %s (not confirmed)",
-           result.hash.prefix.ToUint32(), result.mTableName.get()));
+           result.PartialHashHex().get(), result.mTableName.get()));
       continue;
     }
 
     LOG(("Confirmed result %X from table %s",
-         result.hash.prefix.ToUint32(), result.mTableName.get()));
+         result.PartialHashHex().get(), result.mTableName.get()));
 
     if (tables.IndexOf(result.mTableName) == nsTArray<nsCString>::NoIndex) {
       tables.AppendElement(result.mTableName);
     }
   }
 
+  // TODO: Bug 1333328, Refactor cache miss mechanism for v2.
   // Some parts of this gethash request generated no hits at all.
   // Prefixes must have been removed from the database since our last update.
   // Save the prefixes we checked to prevent repeated requests
@@ -1106,8 +1154,8 @@ nsUrlClassifierLookupCallback::HandleResults()
   if (cacheMisses) {
     for (uint32_t i = 0; i < mResults->Length(); i++) {
       LookupResult &result = mResults->ElementAt(i);
-      if (!result.Confirmed() && !result.mNoise) {
-        cacheMisses->AppendElement(result.PrefixHash());
+      if (result.mProtocolV2 && !result.Confirmed() && !result.mNoise) {
+        cacheMisses->AppendElement(result.hash.fixedLengthPrefix);
       }
     }
     // Hands ownership of the miss array back to the worker thread.

@@ -9,9 +9,9 @@ Cu.import("resource://testing-common/services/sync/utils.js");
 
 // Track HMAC error counts.
 var hmacErrorCount = 0;
-(function () {
+(function() {
   let hHE = Service.handleHMACEvent;
-  Service.handleHMACEvent = function () {
+  Service.handleHMACEvent = function() {
     hmacErrorCount++;
     return hHE.call(Service);
   };
@@ -28,7 +28,7 @@ function shared_setup() {
   engine.lastSync = 123; // Needs to be non-zero so that tracker is queried.
   engine._store.items = {flying: "LNER Class A3 4472",
                          scotsman: "Flying Scotsman"};
-  engine._tracker.addChangedID('scotsman', 0);
+  engine._tracker.addChangedID("scotsman", 0);
   do_check_eq(1, Service.engineManager.getEnabled().length);
 
   let engines = {rotary:  {version: engine.version,
@@ -37,7 +37,7 @@ function shared_setup() {
                            syncID:  Service.clientsEngine.syncID}};
 
   // Common server objects.
-  let global      = new ServerWBO("global", {engines: engines});
+  let global      = new ServerWBO("global", {engines});
   let keysWBO     = new ServerWBO("keys");
   let rotaryColl  = new ServerCollection({}, true);
   let clientsColl = new ServerCollection({}, true);
@@ -52,7 +52,7 @@ add_task(async function hmac_error_during_404() {
   // Hand out 404s for crypto/keys.
   let keysHandler    = keysWBO.handler();
   let key404Counter  = 0;
-  let keys404Handler = function (request, response) {
+  let keys404Handler = function(request, response) {
     if (key404Counter > 0) {
       let body = "Not Found";
       response.setStatusLine(request.httpVersion, 404, body);
@@ -65,7 +65,6 @@ add_task(async function hmac_error_during_404() {
 
   let collectionsHelper = track_collections_helper();
   let upd = collectionsHelper.with_updated_collection;
-  let collections = collectionsHelper.collections;
   let handlers = {
     "/1.1/foo/info/collections": collectionsHelper.handler,
     "/1.1/foo/storage/meta/global": upd("meta", global.handler()),
@@ -123,7 +122,7 @@ add_task(async function hmac_error_during_node_reassignment() {
 
   let should401 = false;
   function upd401(coll, handler) {
-    return function (request, response) {
+    return function(request, response) {
       if (should401 && (request.method != "DELETE")) {
         on401();
         should401 = false;
@@ -136,16 +135,7 @@ add_task(async function hmac_error_during_node_reassignment() {
     };
   }
 
-  function sameNodeHandler(request, response) {
-    // Set this so that _setCluster will think we've really changed.
-    let url = Service.serverURL.replace("localhost", "LOCALHOST");
-    _("Client requesting reassignment; pointing them to " + url);
-    response.setStatusLine(request.httpVersion, 200, "OK");
-    response.bodyOutputStream.write(url, url.length);
-  }
-
   let handlers = {
-    "/user/1.0/foo/node/weave":     sameNodeHandler,
     "/1.1/foo/info/collections":    collectionsHelper.handler,
     "/1.1/foo/storage/meta/global": upd("meta", global.handler()),
     "/1.1/foo/storage/crypto/keys": upd("crypto", keysWBO.handler()),
@@ -208,9 +198,9 @@ add_task(async function hmac_error_during_node_reassignment() {
       _("---------------------------");
       onSyncFinished = function() {
         _("== Second (automatic) sync done.");
-        hasData = rotaryColl.wbo("flying") ||
-                  rotaryColl.wbo("scotsman");
-        hasKeys = keysWBO.modified;
+        let hasData = rotaryColl.wbo("flying") ||
+                      rotaryColl.wbo("scotsman");
+        let hasKeys = keysWBO.modified;
         do_check_true(!hasData == !hasKeys);
 
         // Kick off another sync. Can't just call it, because we're inside the
@@ -231,6 +221,7 @@ add_task(async function hmac_error_during_node_reassignment() {
 
             Svc.Prefs.resetBranch("");
             Service.recordManager.clearCache();
+            engine._tracker.clearChangedIDs();
             server.stop(resolve);
           };
 

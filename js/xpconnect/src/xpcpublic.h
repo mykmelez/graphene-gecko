@@ -151,6 +151,23 @@ IsXrayWrapper(JSObject* obj);
 JSObject*
 XrayAwareCalleeGlobal(JSObject* fun);
 
+// A version of XrayAwareCalleeGlobal that can be used from a binding
+// specialized getter.  We need this function because in a specialized getter we
+// don't have a callee JSFunction, so can't use xpc::XrayAwareCalleeGlobal.
+// Instead we do something a bit hacky using our current compartment and "this"
+// value.  Note that for the Xray case thisObj will NOT be in the compartment of
+// "cx".
+//
+// As expected, the outparam "global" need not be same-compartment with either
+// thisObj or cx, though it _will_ be same-compartment with one of them.
+//
+// This function can fail; the return value indicates success or failure.
+bool
+XrayAwareCalleeGlobalForSpecializedGetters(JSContext* cx,
+                                           JS::Handle<JSObject*> thisObj,
+                                           JS::MutableHandle<JSObject*> global);
+
+
 void
 TraceXPCGlobal(JSTracer* trc, JSObject* obj);
 
@@ -161,6 +178,8 @@ namespace JS {
 struct RuntimeStats;
 
 } // namespace JS
+
+#define XPC_WRAPPER_FLAGS (JSCLASS_HAS_PRIVATE | JSCLASS_FOREGROUND_FINALIZE)
 
 #define XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(n)                            \
     JSCLASS_DOM_GLOBAL | JSCLASS_HAS_PRIVATE |                                \
@@ -276,9 +295,9 @@ public:
 private:
     static const JSStringFinalizer sLiteralFinalizer, sDOMStringFinalizer;
 
-    static void FinalizeLiteral(const JSStringFinalizer* fin, char16_t* chars);
+    static void FinalizeLiteral(JS::Zone* zone, const JSStringFinalizer* fin, char16_t* chars);
 
-    static void FinalizeDOMString(const JSStringFinalizer* fin, char16_t* chars);
+    static void FinalizeDOMString(JS::Zone* zone, const JSStringFinalizer* fin, char16_t* chars);
 
     XPCStringConvert() = delete;
 };
@@ -355,7 +374,7 @@ bool NonVoidStringToJsval(JSContext* cx, mozilla::dom::DOMString& str,
     }
     if (shared) {
         // JS now needs to hold a reference to the buffer
-        buf->AddRef();
+        str.RelinquishBufferOwnership();
     }
     return true;
 }

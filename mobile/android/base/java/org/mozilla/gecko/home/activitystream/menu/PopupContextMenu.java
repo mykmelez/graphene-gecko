@@ -7,16 +7,18 @@ package org.mozilla.gecko.home.activitystream.menu;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.support.design.widget.NavigationView;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.PopupWindow;
 
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
 import org.mozilla.gecko.home.HomePager;
+import org.mozilla.gecko.home.activitystream.model.Item;
 
 /* package-private */ class PopupContextMenu
         extends ActivityStreamContextMenu {
@@ -28,19 +30,15 @@ import org.mozilla.gecko.home.HomePager;
 
     public PopupContextMenu(final Context context,
                             View anchor,
+                            final ActivityStreamTelemetry.Extras.Builder telemetryExtraBuilder,
                             final MenuMode mode,
-                            final String title,
-                            @NonNull final String url,
-                            @Nullable final Boolean isBookmarked,
-                            @Nullable final Boolean isPinned,
+                            final Item item,
                             HomePager.OnUrlOpenListener onUrlOpenListener,
                             HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener) {
         super(context,
+                telemetryExtraBuilder,
                 mode,
-                title,
-                url,
-                isBookmarked,
-                isPinned,
+                item,
                 onUrlOpenListener,
                 onUrlOpenInBackgroundListener);
 
@@ -56,6 +54,13 @@ import org.mozilla.gecko.home.HomePager;
         popupWindow.setContentView(card);
         popupWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popupWindow.setFocusable(true);
+
+        // On Asus devices running Android 4, PopupWindow is assigned height/width = 0 - we therefore
+        // need to manually override that behaviour, but only on those devices:
+        if (AppConstants.Versions.preLollipop && "asus".equals(android.os.Build.MANUFACTURER)) {
+            popupWindow.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
+            popupWindow.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
 
         super.postInit();
     }

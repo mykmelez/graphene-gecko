@@ -10,7 +10,6 @@
 #include "mozilla/LinkedList.h"
 #include "nsWrapperCache.h"
 
-#include "WebGLBuffer.h"
 #include "WebGLObjectModel.h"
 #include "WebGLStrongTypes.h"
 #include "WebGLVertexAttribData.h"
@@ -33,14 +32,6 @@ public:
         BindVertexArrayImpl();
     };
 
-    void EnsureAttrib(GLuint index);
-    bool HasAttrib(GLuint index) const {
-        return index < mAttribs.Length();
-    }
-    bool IsAttribArrayEnabled(GLuint index) const {
-        return HasAttrib(index) && mAttribs[index].mEnabled;
-    }
-
     // Implement parent classes:
     void Delete();
     bool IsVertexArray() const;
@@ -56,12 +47,11 @@ public:
 
     GLuint GLName() const { return mGLName; }
 
+    void AddBufferBindCounts(int8_t addVal) const;
+
 protected:
     explicit WebGLVertexArray(WebGLContext* webgl);
-
-    virtual ~WebGLVertexArray() {
-        MOZ_ASSERT(IsDeleted());
-    }
+    virtual ~WebGLVertexArray();
 
     virtual void GenVertexArray() = 0;
     virtual void BindVertexArrayImpl() = 0;
@@ -72,6 +62,7 @@ protected:
     nsTArray<WebGLVertexAttribData> mAttribs;
     WebGLRefPtr<WebGLBuffer> mElementArrayBuffer;
 
+    friend class ScopedDrawHelper;
     friend class WebGLContext;
     friend class WebGLVertexArrayFake;
     friend class WebGL2Context;

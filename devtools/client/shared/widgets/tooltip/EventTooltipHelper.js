@@ -9,9 +9,10 @@
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/inspector.properties");
 
-const viewSource = require("devtools/client/shared/view-source");
 const Editor = require("devtools/client/sourceeditor/editor");
 const beautify = require("devtools/shared/jsbeautify/beautify");
+
+loader.lazyRequireGetter(this, "viewSource", "devtools/client/shared/view-source");
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const CONTAINER_WIDTH = 500;
@@ -94,13 +95,19 @@ EventTooltip.prototype = {
         header.appendChild(eventTypeLabel);
       }
 
-      if (!listener.hide.filename) {
-        let filename = doc.createElementNS(XHTML_NS, "span");
-        filename.className = "event-tooltip-filename devtools-monospace";
-        filename.textContent = listener.origin;
-        filename.setAttribute("title", listener.origin);
-        header.appendChild(filename);
+      let filename = doc.createElementNS(XHTML_NS, "span");
+      filename.className = "event-tooltip-filename devtools-monospace";
+
+      let text = listener.origin;
+      let title = text;
+      if (listener.hide.filename) {
+        text = L10N.getStr("eventsTooltip.unknownLocation");
+        title = L10N.getStr("eventsTooltip.unknownLocationExplanation");
       }
+
+      filename.textContent = text;
+      filename.setAttribute("title", title);
+      header.appendChild(filename);
 
       let attributesContainer = doc.createElementNS(XHTML_NS, "div");
       attributesContainer.className = "event-tooltip-attributes-container";

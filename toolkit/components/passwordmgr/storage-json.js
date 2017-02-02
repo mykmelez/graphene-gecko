@@ -141,7 +141,7 @@ this.LoginManagerStorage_json.prototype = {
       encryptedUsername:   encUsername,
       encryptedPassword:   encPassword,
       guid:                loginClone.guid,
-      encType:             encType,
+      encType,
       timeCreated:         loginClone.timeCreated,
       timeLastUsed:        loginClone.timeLastUsed,
       timePasswordChanged: loginClone.timePasswordChanged,
@@ -151,6 +151,7 @@ this.LoginManagerStorage_json.prototype = {
 
     // Send a notification that a login was added.
     LoginHelper.notifyStorageChanged("addLogin", loginClone);
+    return loginClone;
   },
 
   removeLogin(login) {
@@ -376,13 +377,13 @@ this.LoginManagerStorage_json.prototype = {
 
   findLogins(count, hostname, formSubmitURL, httpRealm) {
     let loginData = {
-      hostname: hostname,
-      formSubmitURL: formSubmitURL,
-      httpRealm: httpRealm
+      hostname,
+      formSubmitURL,
+      httpRealm
     };
     let matchData = { };
     for (let field of ["hostname", "formSubmitURL", "httpRealm"])
-      if (loginData[field] != '')
+      if (loginData[field] != "")
         matchData[field] = loginData[field];
     let [logins, ids] = this._searchLogins(matchData);
 
@@ -396,13 +397,13 @@ this.LoginManagerStorage_json.prototype = {
 
   countLogins(hostname, formSubmitURL, httpRealm) {
     let loginData = {
-      hostname: hostname,
-      formSubmitURL: formSubmitURL,
-      httpRealm: httpRealm
+      hostname,
+      formSubmitURL,
+      httpRealm
     };
     let matchData = { };
     for (let field of ["hostname", "formSubmitURL", "httpRealm"])
-      if (loginData[field] != '')
+      if (loginData[field] != "")
         matchData[field] = loginData[field];
     let [logins, ids] = this._searchLogins(matchData);
 
@@ -426,7 +427,7 @@ this.LoginManagerStorage_json.prototype = {
   _getIdForLogin(login) {
     let matchData = { };
     for (let field of ["hostname", "formSubmitURL", "httpRealm"])
-      if (login[field] != '')
+      if (login[field] != "")
         matchData[field] = login[field];
     let [logins, ids] = this._searchLogins(matchData);
 

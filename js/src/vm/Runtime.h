@@ -45,10 +45,10 @@
 #include "vm/CodeCoverage.h"
 #include "vm/CommonPropertyNames.h"
 #include "vm/DateTime.h"
+#include "vm/GeckoProfiler.h"
 #include "vm/MallocProvider.h"
 #include "vm/Scope.h"
 #include "vm/SharedImmutableStringsCache.h"
-#include "vm/SPSProfiler.h"
 #include "vm/Stack.h"
 #include "vm/Stopwatch.h"
 #include "vm/Symbol.h"
@@ -62,6 +62,7 @@ namespace js {
 
 class PerThreadData;
 class ExclusiveContext;
+class AutoAssertNoContentJS;
 class AutoKeepAtoms;
 class EnterDebuggeeNoExecute;
 #ifdef JS_TRACE_LOGGING
@@ -274,7 +275,7 @@ class PerThreadData
 
   public:
 #ifdef JS_TRACE_LOGGING
-    TraceLoggerThread*  traceLogger;
+    TraceLoggerMainThread*  traceLogger;
 #endif
 
     /* Pointer to the current AutoFlushICache. */
@@ -693,6 +694,13 @@ struct JSRuntime : public JS::shadow::Runtime,
         return numExclusiveThreads > 0;
     }
 
+#ifdef DEBUG
+    bool currentThreadHasExclusiveAccess() const {
+        return (!exclusiveThreadsPresent() && mainThreadHasExclusiveAccess) ||
+            exclusiveAccessLock.ownedByCurrentThread();
+    }
+#endif
+
     // How many compartments there are across all zones. This number includes
     // ExclusiveContext compartments, so it isn't necessarily equal to the
     // number of compartments visited by CompartmentsIter.
@@ -769,6 +777,15 @@ struct JSRuntime : public JS::shadow::Runtime,
     void addUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
     void removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
 
+  private:
+    // Used to generate random keys for hash tables.
+    mozilla::Maybe<mozilla::non_crypto::XorShift128PlusRNG> randomKeyGenerator_;
+    mozilla::non_crypto::XorShift128PlusRNG& randomKeyGenerator();
+
+  public:
+    mozilla::HashCodeScrambler randomHashCodeScrambler();
+    mozilla::non_crypto::XorShift128PlusRNG forkRandomKeyGenerator();
+
     //-------------------------------------------------------------------------
     // Self-hosting support
     //-------------------------------------------------------------------------
@@ -844,6 +861,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Call this to get the name of a compartment. */
     JSCompartmentNameCallback compartmentNameCallback;
 
+    /* Callback for doing memory reporting on external strings. */
+    JSExternalStringSizeofCallback externalStringSizeofCallback;
+
     js::ActivityCallback  activityCallback;
     void*                activityCallbackArg;
     void triggerActivityCallback(bool active);
@@ -896,8 +916,8 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     mozilla::UniquePtr<js::SourceHook> sourceHook;
 
-    /* SPS profiling metadata */
-    js::SPSProfiler     spsProfiler;
+    /* Gecko profiling metadata */
+    js::GeckoProfiler   geckoProfiler;
 
     /* If true, new scripts must be created with PC counter information. */
     bool                profilingScripts;
@@ -1031,6 +1051,15 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
 
   private:
+    bool allowContentJS_;
+  public:
+    bool allowContentJS() const {
+        return allowContentJS_;
+    }
+
+    friend class js::AutoAssertNoContentJS;
+
+  private:
     // Set of all atoms other than those in permanentAtoms and staticStrings.
     // Reading or writing this set requires the calling thread to have an
     // ExclusiveContext and hold a lock. Use AutoLockForExclusiveAccess.
@@ -1058,7 +1087,13 @@ struct JSRuntime : public JS::shadow::Runtime,
     js::AtomSet& atoms(js::AutoLockForExclusiveAccess& lock) {
         return *atoms_;
     }
+    js::AtomSet& unsafeAtoms() {
+        return *atoms_;
+    }
     JSCompartment* atomsCompartment(js::AutoLockForExclusiveAccess& lock) {
+        return atomsCompartment_;
+    }
+    JSCompartment* unsafeAtomsCompartment() {
         return atomsCompartment_;
     }
 
@@ -1072,6 +1107,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool activeGCInAtomsZone();
 
     js::SymbolRegistry& symbolRegistry(js::AutoLockForExclusiveAccess& lock) {
+        return symbolRegistry_;
+    }
+    js::SymbolRegistry& unsafeSymbolRegistry() {
         return symbolRegistry_;
     }
 

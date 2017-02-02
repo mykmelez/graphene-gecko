@@ -1285,7 +1285,7 @@ static inline bool FrameHasBorderOrBackground(nsTableFrame* tableFrame, nsIFrame
   if (f->StyleBorder()->HasBorder()) {
     return true;
   }
-  if (!f->StyleBackground()->IsTransparent() ||
+  if (!f->StyleBackground()->IsTransparent(f) ||
       f->StyleDisplay()->mAppearance) {
     
     nsTableCellFrame *cellFrame = do_QueryFrame(f);
@@ -3805,35 +3805,54 @@ nsTableFrame::GetRowSpacing(int32_t aStartRowIndex,
 }
 
 /* virtual */ nscoord
-nsTableFrame::GetLogicalBaseline(WritingMode aWritingMode) const
+nsTableFrame::GetLogicalBaseline(WritingMode aWM) const
 {
-  nscoord ascent = 0;
+  nscoord baseline;
+  if (!GetNaturalBaselineBOffset(aWM, BaselineSharingGroup::eFirst, &baseline)) {
+    baseline = BSize(aWM);
+  }
+  return baseline;
+}
+
+/* virtual */ bool
+nsTableFrame::GetNaturalBaselineBOffset(WritingMode aWM,
+                                        BaselineSharingGroup aBaselineGroup,
+                                        nscoord*             aBaseline) const
+{
   RowGroupArray orderedRowGroups;
   OrderRowGroups(orderedRowGroups);
-  nsTableRowFrame* firstRow = nullptr;
   // XXX not sure if this should be the size of the containing block instead.
   nsSize containerSize = mRect.Size();
-  for (uint32_t rgIndex = 0; rgIndex < orderedRowGroups.Length(); rgIndex++) {
-    nsTableRowGroupFrame* rgFrame = orderedRowGroups[rgIndex];
-    if (rgFrame->GetRowCount()) {
-      firstRow = rgFrame->GetFirstRow();
-
-      nscoord rgNormalBStart =
-        LogicalRect(aWritingMode, rgFrame->GetNormalRect(), containerSize)
-        .Origin(aWritingMode).B(aWritingMode);
-      nscoord firstRowNormalBStart =
-        LogicalRect(aWritingMode, firstRow->GetNormalRect(), containerSize)
-        .Origin(aWritingMode).B(aWritingMode);
-
-      ascent = rgNormalBStart + firstRowNormalBStart +
-               firstRow->GetRowBaseline(aWritingMode);
-      break;
+  auto TableBaseline = [aWM, containerSize] (nsTableRowGroupFrame* aRowGroup,
+                                             nsTableRowFrame* aRow) {
+    nscoord rgBStart = LogicalRect(aWM, aRowGroup->GetNormalRect(),
+                                   containerSize).BStart(aWM);
+    nscoord rowBStart = LogicalRect(aWM, aRow->GetNormalRect(),
+                                    containerSize).BStart(aWM);
+    return rgBStart + rowBStart + aRow->GetRowBaseline(aWM);
+  };
+  if (aBaselineGroup == BaselineSharingGroup::eFirst) {
+    for (uint32_t rgIndex = 0; rgIndex < orderedRowGroups.Length(); rgIndex++) {
+      nsTableRowGroupFrame* rgFrame = orderedRowGroups[rgIndex];
+      nsTableRowFrame* row = rgFrame->GetFirstRow();
+      if (row) {
+        *aBaseline = TableBaseline(rgFrame, row);
+        return true;
+      }
+    }
+  } else {
+    for (uint32_t rgIndex = orderedRowGroups.Length(); rgIndex-- > 0;) {
+      nsTableRowGroupFrame* rgFrame = orderedRowGroups[rgIndex];
+      nsTableRowFrame* row = rgFrame->GetLastRow();
+      if (row) {
+        *aBaseline = BSize(aWM) - TableBaseline(rgFrame, row);
+        return true;
+      }
     }
   }
-  if (!firstRow)
-    ascent = BSize(aWritingMode);
-  return ascent;
+  return false;
 }
+
 /* ----- global methods ----- */
 
 nsTableFrame*
@@ -4793,8 +4812,8 @@ GetColorAndStyle(const nsIFrame* aFrame,
       (NS_STYLE_BORDER_STYLE_HIDDEN == *aStyle)) {
     return;
   }
-  *aColor = aFrame->StyleContext()->GetVisitedDependentColor(
-    nsCSSProps::SubpropertyEntryFor(eCSSProperty_border_color)[physicalSide]);
+  *aColor = aFrame->StyleContext()->
+    GetVisitedDependentColor(nsStyleBorder::BorderColorFieldFor(physicalSide));
 
   if (aWidth) {
     nscoord width = styleData->GetComputedBorderWidth(physicalSide);
@@ -5834,7 +5853,8 @@ nsTableFrame::CalcBCBorders()
         }
         else {
           tlCorner.Update(eLogicalSideIEnd, currentBorder);
-          tableCellMap->SetBCBorderCorner(eBStartIStart, *iter.mCellMap, 0, 0, colIdx,
+          tableCellMap->SetBCBorderCorner(eLogicalCornerBStartIStart,
+                                          *iter.mCellMap, 0, 0, colIdx,
                                           LogicalSide(tlCorner.ownerSide),
                                           tlCorner.subWidth,
                                           tlCorner.bevel);
@@ -5884,7 +5904,7 @@ nsTableFrame::CalcBCBorders()
         currentBorder = info.GetIStartEdgeBorder();
         BCCornerInfo& tlCorner = (0 == rowB) ? bStartCorners[0] : bEndCorners[0];
         tlCorner.Update(eLogicalSideBEnd, currentBorder);
-        tableCellMap->SetBCBorderCorner(eBStartIStart, *iter.mCellMap,
+        tableCellMap->SetBCBorderCorner(eLogicalCornerBStartIStart, *iter.mCellMap,
                                         iter.mRowGroupStart, rowB, 0,
                                         LogicalSide(tlCorner.ownerSide),
                                         tlCorner.subWidth,
@@ -5923,7 +5943,7 @@ nsTableFrame::CalcBCBorders()
                                  bStartCorners[info.GetCellEndColIndex() + 1] :
                                  bEndCorners[info.GetCellEndColIndex() + 1];
         trCorner.Update(eLogicalSideBEnd, currentBorder);   // bStart-iEnd
-        tableCellMap->SetBCBorderCorner(eBStartIEnd, *iter.mCellMap,
+        tableCellMap->SetBCBorderCorner(eLogicalCornerBStartIEnd, *iter.mCellMap,
                                         iter.mRowGroupStart, rowB,
                                         info.GetCellEndColIndex(),
                                         LogicalSide(trCorner.ownerSide),
@@ -5931,7 +5951,7 @@ nsTableFrame::CalcBCBorders()
                                         trCorner.bevel);
         BCCornerInfo& brCorner = bEndCorners[info.GetCellEndColIndex() + 1];
         brCorner.Set(eLogicalSideBStart, currentBorder); // bEnd-iEnd
-        tableCellMap->SetBCBorderCorner(eBEndIEnd, *iter.mCellMap,
+        tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIEnd, *iter.mCellMap,
                                         iter.mRowGroupStart, rowB,
                                         info.GetCellEndColIndex(),
                                         LogicalSide(brCorner.ownerSide),
@@ -6000,7 +6020,7 @@ nsTableFrame::CalcBCBorders()
         if (info.GetCellEndColIndex() < damageArea.EndCol() &&
             rowB >= damageArea.StartRow()) {
           if (0 != rowB) {
-            tableCellMap->SetBCBorderCorner(eBStartIEnd, *iter.mCellMap,
+            tableCellMap->SetBCBorderCorner(eLogicalCornerBStartIEnd, *iter.mCellMap,
                                             iter.mRowGroupStart, rowB,
                                             info.GetCellEndColIndex(),
                                             LogicalSide(trCorner->ownerSide),
@@ -6009,7 +6029,7 @@ nsTableFrame::CalcBCBorders()
           }
           // store any corners this cell spans together with the aja cell
           for (int32_t rX = rowB + 1; rX < rowB + segLength; rX++) {
-            tableCellMap->SetBCBorderCorner(eBEndIEnd, *iter.mCellMap,
+            tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIEnd, *iter.mCellMap,
                                             iter.mRowGroupStart, rX,
                                             info.GetCellEndColIndex(),
                                             LogicalSide(trCorner->ownerSide),
@@ -6046,7 +6066,7 @@ nsTableFrame::CalcBCBorders()
         // update/store the bEnd-iStart & bEnd-IEnd corners
         BCCornerInfo& blCorner = bEndCorners[colIdx]; // bEnd-iStart
         blCorner.Update(eLogicalSideIEnd, currentBorder);
-        tableCellMap->SetBCBorderCorner(eBEndIStart, *iter.mCellMap,
+        tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIStart, *iter.mCellMap,
                                         iter.mRowGroupStart,
                                         info.GetCellEndRowIndex(),
                                         colIdx,
@@ -6055,7 +6075,7 @@ nsTableFrame::CalcBCBorders()
         BCCornerInfo& brCorner = bEndCorners[colIdx + 1]; // bEnd-iEnd
         brCorner.Update(eLogicalSideIStart, currentBorder);
         if (info.mNumTableCols == colIdx + 1) { // bEnd-IEnd corner of the table
-          tableCellMap->SetBCBorderCorner(eBEndIEnd, *iter.mCellMap,
+          tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIEnd, *iter.mCellMap,
                                           iter.mRowGroupStart,
                                           info.GetCellEndRowIndex(), colIdx,
                                           LogicalSide(brCorner.ownerSide),
@@ -6127,7 +6147,7 @@ nsTableFrame::CalcBCBorders()
         if (info.GetCellEndRowIndex() < damageArea.EndRow() &&
             colIdx >= damageArea.StartCol()) {
           if (hitsSpanBelow) {
-            tableCellMap->SetBCBorderCorner(eBEndIStart, *iter.mCellMap,
+            tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIStart, *iter.mCellMap,
                                             iter.mRowGroupStart,
                                             info.GetCellEndRowIndex(), colIdx,
                                             LogicalSide(blCorner.ownerSide),
@@ -6137,7 +6157,7 @@ nsTableFrame::CalcBCBorders()
           for (int32_t c = colIdx + 1; c < colIdx + segLength; c++) {
             BCCornerInfo& corner = bEndCorners[c];
             corner.Set(eLogicalSideIEnd, currentBorder);
-            tableCellMap->SetBCBorderCorner(eBEndIStart, *iter.mCellMap,
+            tableCellMap->SetBCBorderCorner(eLogicalCornerBEndIStart, *iter.mCellMap,
                                             iter.mRowGroupStart,
                                             info.GetCellEndRowIndex(), c,
                                             LogicalSide(corner.ownerSide),
@@ -6343,7 +6363,7 @@ public:
   nsTableCellMap*       mTableCellMap;
   nsCellMap*            mCellMap;
   WritingMode           mTableWM;
-  const nsStyleBackground* mTableBgColor;
+  nscolor               mTableBgColor;
   nsTableFrame::RowGroupArray mRowGroups;
 
   nsTableRowGroupFrame* mPrevRg;
@@ -6461,7 +6481,7 @@ BCPaintBorderIterator::BCPaintBorderIterator(nsTableFrame* aTable)
 
   nsIFrame* bgFrame =
     nsCSSRendering::FindNonTransparentBackgroundFrame(aTable);
-  mTableBgColor = bgFrame->StyleBackground();
+  mTableBgColor = bgFrame->StyleBackground()->BackgroundColor(bgFrame);
 }
 
 bool
@@ -7431,7 +7451,7 @@ BCPaintBorderIterator::ResetVerInfo()
   if (mBlockDirInfo) {
     memset(mBlockDirInfo, 0, mDamageArea.ColCount() * sizeof(BCBlockDirSeg));
     // XXX reinitialize properly
-    for (auto xIndex : MakeRange(mDamageArea.ColCount())) {
+    for (auto xIndex : IntegerRange(mDamageArea.ColCount())) {
       mBlockDirInfo[xIndex].mColWidth = -1;
     }
   }

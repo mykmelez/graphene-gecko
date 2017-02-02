@@ -7,7 +7,7 @@
 /*global JSMSG_INTL_OBJECT_NOT_INITED: false, JSMSG_INVALID_LOCALES_ELEMENT: false,
          JSMSG_INVALID_LANGUAGE_TAG: false, JSMSG_INVALID_LOCALE_MATCHER: false,
          JSMSG_INVALID_OPTION_VALUE: false, JSMSG_INVALID_DIGITS_VALUE: false,
-         JSMSG_INTL_OBJECT_REINITED: false, JSMSG_INVALID_CURRENCY_CODE: false,
+         JSMSG_INVALID_CURRENCY_CODE: false,
          JSMSG_UNDEFINED_CURRENCY: false, JSMSG_INVALID_TIME_ZONE: false,
          JSMSG_DATE_NOT_FINITE: false, JSMSG_INVALID_KEYS_TYPE: false,
          JSMSG_INVALID_KEY: false,
@@ -21,6 +21,9 @@
          intl_availableCalendars: false,
          intl_patternForSkeleton: false,
          intl_FormatDateTime: false,
+         intl_SelectPluralRule: false,
+         intl_GetPluralCategories: false,
+         intl_GetCalendarInfo: false,
 */
 
 /*
@@ -839,6 +842,7 @@ function BestAvailableLocaleIgnoringDefault(availableLocales, locale) {
     return BestAvailableLocaleHelper(availableLocales, locale, false);
 }
 
+var noRelevantExtensionKeys = [];
 
 /**
  * Compares a BCP 47 language priority list against the set of locales in
@@ -1166,9 +1170,10 @@ function GetOption(options, property, type, values, fallback) {
  * Spec: ECMAScript Internationalization API Specification, 9.2.10.
  */
 function GetNumberOption(options, property, minimum, maximum, fallback) {
-    assert(typeof minimum === "number", "GetNumberOption");
-    assert(typeof maximum === "number", "GetNumberOption");
-    assert(fallback === undefined || (fallback >= minimum && fallback <= maximum), "GetNumberOption");
+    assert(typeof minimum === "number" && (minimum | 0) === minimum, "GetNumberOption");
+    assert(typeof maximum === "number" && (maximum | 0) === maximum, "GetNumberOption");
+    assert(typeof fallback === "number" && (fallback | 0) === fallback, "GetNumberOption");
+    assert(minimum <= fallback && fallback <= maximum, "GetNumberOption");
 
     // Step 1.
     var value = options[property];
@@ -1178,7 +1183,10 @@ function GetNumberOption(options, property, minimum, maximum, fallback) {
         value = ToNumber(value);
         if (Number_isNaN(value) || value < minimum || value > maximum)
             ThrowRangeError(JSMSG_INVALID_DIGITS_VALUE, value);
-        return std_Math_floor(value);
+
+        // Apply bitwise-or to convert -0 to +0 per ES2017, 5.2 and to ensure
+        // the result is an int32 value.
+        return std_Math_floor(value) | 0;
     }
 
     // Step 3.
@@ -1189,75 +1197,59 @@ function GetNumberOption(options, property, minimum, maximum, fallback) {
 /********** Property access for Intl objects **********/
 
 
+// Symbols in the self-hosting compartment can't be cloned, use a separate
+// object to hold the actual symbol value.
+// TODO: Can we add support to clone symbols?
+var intlFallbackSymbolHolder = { value: undefined };
+
 /**
- * Weak map used to track the initialize-as-Intl status (and, if an object has
- * been so initialized, the Intl-specific internal properties) of all objects.
- * Presence of an object as a key within this map indicates that the object has
- * its [[initializedIntlObject]] internal property set to true.  The associated
- * value is an object whose structure is documented in |initializeIntlObject|
- * below.
+ * The [[FallbackSymbol]] symbol of the %Intl% intrinsic object.
  *
- * Ideally we'd be using private symbols for internal properties, but
- * SpiderMonkey doesn't have those yet.
+ * This symbol is used to implement the legacy constructor semantics for
+ * Intl.DateTimeFormat and Intl.NumberFormat.
  */
-var internalsMap = new WeakMap();
-
-
-/**
- * Set the [[initializedIntlObject]] internal property of |obj| to true.
- */
-function initializeIntlObject(obj) {
-    assert(IsObject(obj), "Non-object passed to initializeIntlObject");
-
-    // Intl-initialized objects are weird.  They have [[initializedIntlObject]]
-    // set on them, but they don't *necessarily* have any other properties.
-
-    var internals = std_Object_create(null);
-
-    // The meaning of an internals object for an object |obj| is as follows.
-    //
-    // If the .type is "partial", |obj| has [[initializedIntlObject]] set but
-    // nothing else.  No other property of |internals| can be used.  (This
-    // occurs when InitializeCollator or similar marks an object as
-    // [[initializedIntlObject]] but fails before marking it as the appropriate
-    // more-specific type ["Collator", "DateTimeFormat", "NumberFormat"].)
-    //
-    // Otherwise, the .type indicates the type of Intl object that |obj| is:
-    // "Collator", "DateTimeFormat", or "NumberFormat" (likely with more coming
-    // in future Intl specs).  In these cases |obj| *conceptually* also has
-    // [[initializedCollator]] or similar set, and all the other properties
-    // implied by that.
-    //
-    // If |internals| doesn't have a "partial" .type, two additional properties
-    // have meaning.  The .lazyData property stores information needed to
-    // compute -- without observable side effects -- the actual internal Intl
-    // properties of |obj|.  If it is non-null, then the actual internal
-    // properties haven't been computed, and .lazyData must be processed by
-    // |setInternalProperties| before internal Intl property values are
-    // available.  If it is null, then the .internalProps property contains an
-    // object whose properties are the internal Intl properties of |obj|.
-
-    internals.type = "partial";
-    internals.lazyData = null;
-    internals.internalProps = null;
-
-    callFunction(std_WeakMap_set, internalsMap, obj, internals);
-    return internals;
+function intlFallbackSymbol() {
+    var fallbackSymbol = intlFallbackSymbolHolder.value;
+    if (!fallbackSymbol)
+        intlFallbackSymbolHolder.value = fallbackSymbol = std_Symbol();
+    return fallbackSymbol;
 }
 
 
 /**
- * Mark |internals| as having the given type and lazy data.
+ * Initializes the INTL_INTERNALS_OBJECT_SLOT of the given object.
  */
-function setLazyData(internals, type, lazyData)
-{
-    assert(internals.type === "partial", "can't set lazy data for anything but a newborn");
-    assert(type === "Collator" || type === "DateTimeFormat" || type == "NumberFormat", "bad type");
+function initializeIntlObject(obj, type, lazyData) {
+    assert(IsObject(obj), "Non-object passed to initializeIntlObject");
+    assert((type === "Collator" && IsCollator(obj)) ||
+           (type === "DateTimeFormat" && IsDateTimeFormat(obj)) ||
+           (type === "NumberFormat" && IsNumberFormat(obj)) ||
+           (type === "PluralRules" && IsPluralRules(obj)),
+           "type must match the object's class");
     assert(IsObject(lazyData), "non-object lazy data");
 
-    // Set in reverse order so that the .type change is a barrier.
-    internals.lazyData = lazyData;
+    // The meaning of an internals object for an object |obj| is as follows.
+    //
+    // The .type property indicates the type of Intl object that |obj| is:
+    // "Collator", "DateTimeFormat", "NumberFormat", or "PluralRules" (likely
+    // with more coming in future Intl specs).
+    //
+    // The .lazyData property stores information needed to compute -- without
+    // observable side effects -- the actual internal Intl properties of
+    // |obj|.  If it is non-null, then the actual internal properties haven't
+    // been computed, and .lazyData must be processed by
+    // |setInternalProperties| before internal Intl property values are
+    // available.  If it is null, then the .internalProps property contains an
+    // object whose properties are the internal Intl properties of |obj|.
+
+    var internals = std_Object_create(null);
     internals.type = type;
+    internals.lazyData = lazyData;
+    internals.internalProps = null;
+
+    assert(UnsafeGetReservedSlot(obj, INTL_INTERNALS_OBJECT_SLOT) === null,
+           "Internal slot already initialized?");
+    UnsafeSetReservedSlot(obj, INTL_INTERNALS_OBJECT_SLOT, internals);
 }
 
 
@@ -1265,9 +1257,7 @@ function setLazyData(internals, type, lazyData)
  * Set the internal properties object for an |internals| object previously
  * associated with lazy data.
  */
-function setInternalProperties(internals, internalProps)
-{
-    assert(internals.type !== "partial", "newborn internals can't have computed internals");
+function setInternalProperties(internals, internalProps) {
     assert(IsObject(internals.lazyData), "lazy data must exist already");
     assert(IsObject(internalProps), "internalProps argument should be an object");
 
@@ -1281,10 +1271,8 @@ function setInternalProperties(internals, internalProps)
  * Get the existing internal properties out of a non-newborn |internals|, or
  * null if none have been computed.
  */
-function maybeInternalProperties(internals)
-{
+function maybeInternalProperties(internals) {
     assert(IsObject(internals), "non-object passed to maybeInternalProperties");
-    assert(internals.type !== "partial", "maybeInternalProperties must only be used on completely-initialized internals objects");
     var lazyData = internals.lazyData;
     if (lazyData)
         return null;
@@ -1294,45 +1282,31 @@ function maybeInternalProperties(internals)
 
 
 /**
- * Return whether |obj| has an[[initializedIntlObject]] property set to true.
- */
-function isInitializedIntlObject(obj) {
-#ifdef DEBUG
-    var internals = callFunction(std_WeakMap_get, internalsMap, obj);
-    if (IsObject(internals)) {
-        assert(callFunction(std_Object_hasOwnProperty, internals, "type"), "missing type");
-        var type = internals.type;
-        assert(type === "partial" || type === "Collator" || type === "DateTimeFormat" || type === "NumberFormat", "unexpected type");
-        assert(callFunction(std_Object_hasOwnProperty, internals, "lazyData"), "missing lazyData");
-        assert(callFunction(std_Object_hasOwnProperty, internals, "internalProps"), "missing internalProps");
-    } else {
-        assert(internals === undefined, "bad mapping for |obj|");
-    }
-#endif
-    return callFunction(std_WeakMap_has, internalsMap, obj);
-}
-
-
-/**
- * Check that |obj| meets the requirements for "this Collator object", "this
- * NumberFormat object", or "this DateTimeFormat object" as used in the method
- * with the given name.  Throw a TypeError if |obj| doesn't meet these
- * requirements.  But if it does, return |obj|'s internals object (*not* the
- * object holding its internal properties!), associated with it by
- * |internalsMap|, with structure specified above.
+ * Return |obj|'s internals object (*not* the object holding its internal
+ * properties!), with structure specified above.
  *
  * Spec: ECMAScript Internationalization API Specification, 10.3.
  * Spec: ECMAScript Internationalization API Specification, 11.3.
  * Spec: ECMAScript Internationalization API Specification, 12.3.
  */
-function getIntlObjectInternals(obj, className, methodName) {
-    assert(typeof className === "string", "bad className for getIntlObjectInternals");
+function getIntlObjectInternals(obj) {
+    assert(IsObject(obj), "getIntlObjectInternals called with non-Object");
+    assert(IsCollator(obj) || IsDateTimeFormat(obj) || IsNumberFormat(obj) || IsPluralRules(obj),
+           "getIntlObjectInternals called with non-Intl object");
 
-    var internals = callFunction(std_WeakMap_get, internalsMap, obj);
-    assert(internals === undefined || isInitializedIntlObject(obj), "bad mapping in internalsMap");
+    var internals = UnsafeGetReservedSlot(obj, INTL_INTERNALS_OBJECT_SLOT);
 
-    if (internals === undefined || internals.type !== className)
-        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, className, methodName, className);
+    assert(IsObject(internals), "internals not an object");
+    assert(callFunction(std_Object_hasOwnProperty, internals, "type"), "missing type");
+    assert((internals.type === "Collator" && IsCollator(obj)) ||
+           (internals.type === "DateTimeFormat" && IsDateTimeFormat(obj)) ||
+           (internals.type === "NumberFormat" && IsNumberFormat(obj)) ||
+           (internals.type === "PluralRules" && IsPluralRules(obj)),
+           "type must match the object's class");
+    assert(callFunction(std_Object_hasOwnProperty, internals, "lazyData"),
+           "missing lazyData");
+    assert(callFunction(std_Object_hasOwnProperty, internals, "internalProps"),
+           "missing internalProps");
 
     return internals;
 }
@@ -1342,25 +1316,24 @@ function getIntlObjectInternals(obj, className, methodName) {
  * Get the internal properties of known-Intl object |obj|.  For use only by
  * C++ code that knows what it's doing!
  */
-function getInternals(obj)
-{
-    assert(isInitializedIntlObject(obj), "for use only on guaranteed Intl objects");
+function getInternals(obj) {
+    var internals = getIntlObjectInternals(obj);
 
-    var internals = callFunction(std_WeakMap_get, internalsMap, obj);
+    // If internal properties have already been computed, use them.
+    var internalProps = maybeInternalProperties(internals);
+    if (internalProps)
+        return internalProps;
 
-    assert(internals.type !== "partial", "must have been successfully initialized");
-    var lazyData = internals.lazyData;
-    if (!lazyData)
-        return internals.internalProps;
-
-    var internalProps;
+    // Otherwise it's time to fully create them.
     var type = internals.type;
     if (type === "Collator")
-        internalProps = resolveCollatorInternals(lazyData)
+        internalProps = resolveCollatorInternals(internals.lazyData)
     else if (type === "DateTimeFormat")
-        internalProps = resolveDateTimeFormatInternals(lazyData)
+        internalProps = resolveDateTimeFormatInternals(internals.lazyData)
+    else if (type === "NumberFormat")
+        internalProps = resolveNumberFormatInternals(internals.lazyData);
     else
-        internalProps = resolveNumberFormatInternals(lazyData);
+        internalProps = resolvePluralRulesInternals(internals.lazyData)
     setInternalProperties(internals, internalProps);
     return internalProps;
 }
@@ -1384,8 +1357,7 @@ var collatorKeyMappings = {
 /**
  * Compute an internal properties object from |lazyCollatorData|.
  */
-function resolveCollatorInternals(lazyCollatorData)
-{
+function resolveCollatorInternals(lazyCollatorData) {
     assert(IsObject(lazyCollatorData), "lazy data not an object?");
 
     var internalProps = std_Object_create(null);
@@ -1471,11 +1443,13 @@ function resolveCollatorInternals(lazyCollatorData)
 
 
 /**
- * Returns an object containing the Collator internal properties of |obj|, or
- * throws a TypeError if |obj| isn't Collator-initialized.
+ * Returns an object containing the Collator internal properties of |obj|.
  */
-function getCollatorInternals(obj, methodName) {
-    var internals = getIntlObjectInternals(obj, "Collator", methodName);
+function getCollatorInternals(obj) {
+    assert(IsObject(obj), "getCollatorInternals called with non-object");
+    assert(IsCollator(obj), "getCollatorInternals called with non-Collator");
+
+    var internals = getIntlObjectInternals(obj);
     assert(internals.type === "Collator", "bad type escaped getIntlObjectInternals");
 
     // If internal properties have already been computed, use them.
@@ -1502,14 +1476,11 @@ function getCollatorInternals(obj, methodName) {
  * Spec: ECMAScript Internationalization API Specification, 10.1.1.
  */
 function InitializeCollator(collator, locales, options) {
-    assert(IsObject(collator), "InitializeCollator");
+    assert(IsObject(collator), "InitializeCollator called with non-object");
+    assert(IsCollator(collator), "InitializeCollator called with non-Collator");
 
-    // Step 1.
-    if (isInitializedIntlObject(collator))
-        ThrowTypeError(JSMSG_INTL_OBJECT_REINITED);
-
-    // Step 2.
-    var internals = initializeIntlObject(collator);
+    // Steps 1-2 (These steps are no longer required and should be removed
+    // from the spec; https://github.com/tc39/ecma402/issues/115).
 
     // Lazy Collator data has the following structure:
     //
@@ -1583,7 +1554,7 @@ function InitializeCollator(collator, locales, options) {
     //
     // We've done everything that must be done now: mark the lazy data as fully
     // computed and install it.
-    setLazyData(internals, "Collator", lazyCollatorData);
+    initializeIntlObject(collator, "Collator", lazyCollatorData);
 }
 
 
@@ -1675,14 +1646,17 @@ function collatorCompareToBind(x, y) {
  */
 function Intl_Collator_compare_get() {
     // Check "this Collator object" per introduction of section 10.3.
-    var internals = getCollatorInternals(this, "compare");
+    if (!IsObject(this) || !IsCollator(this))
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "Collator", "compare", "Collator");
+
+    var internals = getCollatorInternals(this);
 
     // Step 1.
     if (internals.boundCompare === undefined) {
         // Step 1.a.
         var F = collatorCompareToBind;
 
-        // Step 1.b-d.
+        // Steps 1.b-d.
         var bc = callFunction(FunctionBind, F, this);
         internals.boundCompare = bc;
     }
@@ -1690,6 +1664,7 @@ function Intl_Collator_compare_get() {
     // Step 2.
     return internals.boundCompare;
 }
+_SetCanonicalName(Intl_Collator_compare_get, "get compare");
 
 
 /**
@@ -1699,7 +1674,10 @@ function Intl_Collator_compare_get() {
  */
 function Intl_Collator_resolvedOptions() {
     // Check "this Collator object" per introduction of section 10.3.
-    var internals = getCollatorInternals(this, "resolvedOptions");
+    if (!IsObject(this) || !IsCollator(this))
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "Collator", "resolvedOptions", "Collator");
+
+    var internals = getCollatorInternals(this);
 
     var result = {
         locale: internals.locale,
@@ -1758,45 +1736,37 @@ function resolveNumberFormatInternals(lazyNumberFormatData) {
     // Step 6.
     var opt = lazyNumberFormatData.opt;
 
-    // Compute effective locale.
-    // Step 9.
     var NumberFormat = numberFormatInternalProperties;
 
-    // Step 10.
+    // Step 9.
     var localeData = NumberFormat.localeData;
 
-    // Step 11.
+    // Step 10.
     var r = ResolveLocale(callFunction(NumberFormat.availableLocales, NumberFormat),
                           lazyNumberFormatData.requestedLocales,
                           lazyNumberFormatData.opt,
                           NumberFormat.relevantExtensionKeys,
                           localeData);
 
-    // Steps 12-13.  (Step 14 is not relevant to our implementation.)
+    // Steps 11-12.  (Step 13 is not relevant to our implementation.)
     internalProps.locale = r.locale;
     internalProps.numberingSystem = r.nu;
 
     // Compute formatting options.
-    // Step 16.
-    var s = lazyNumberFormatData.style;
-    internalProps.style = s;
+    // Step 15.
+    var style = lazyNumberFormatData.style;
+    internalProps.style = style;
 
-    // Steps 20, 22.
-    if (s === "currency") {
+    // Steps 19, 21.
+    if (style === "currency") {
         internalProps.currency = lazyNumberFormatData.currency;
         internalProps.currencyDisplay = lazyNumberFormatData.currencyDisplay;
     }
 
-    // Step 24.
     internalProps.minimumIntegerDigits = lazyNumberFormatData.minimumIntegerDigits;
-
-    // Steps 27.
     internalProps.minimumFractionDigits = lazyNumberFormatData.minimumFractionDigits;
-
-    // Step 30.
     internalProps.maximumFractionDigits = lazyNumberFormatData.maximumFractionDigits;
 
-    // Step 33.
     if ("minimumSignificantDigits" in lazyNumberFormatData) {
         // Note: Intl.NumberFormat.prototype.resolvedOptions() exposes the
         // actual presence (versus undefined-ness) of these properties.
@@ -1805,10 +1775,10 @@ function resolveNumberFormatInternals(lazyNumberFormatData) {
         internalProps.maximumSignificantDigits = lazyNumberFormatData.maximumSignificantDigits;
     }
 
-    // Step 35.
+    // Step 27.
     internalProps.useGrouping = lazyNumberFormatData.useGrouping;
 
-    // Step 42.
+    // Step 34.
     internalProps.boundFormat = undefined;
 
     // The caller is responsible for associating |internalProps| with the right
@@ -1818,11 +1788,13 @@ function resolveNumberFormatInternals(lazyNumberFormatData) {
 
 
 /**
- * Returns an object containing the NumberFormat internal properties of |obj|,
- * or throws a TypeError if |obj| isn't NumberFormat-initialized.
+ * Returns an object containing the NumberFormat internal properties of |obj|.
  */
-function getNumberFormatInternals(obj, methodName) {
-    var internals = getIntlObjectInternals(obj, "NumberFormat", methodName);
+function getNumberFormatInternals(obj) {
+    assert(IsObject(obj), "getNumberFormatInternals called with non-object");
+    assert(IsNumberFormat(obj), "getNumberFormatInternals called with non-NumberFormat");
+
+    var internals = getIntlObjectInternals(obj);
     assert(internals.type === "NumberFormat", "bad type escaped getIntlObjectInternals");
 
     // If internal properties have already been computed, use them.
@@ -1838,6 +1810,63 @@ function getNumberFormatInternals(obj, methodName) {
 
 
 /**
+ * UnwrapNumberFormat(nf)
+ */
+function UnwrapNumberFormat(nf, methodName) {
+    // Step 1.
+    if ((!IsObject(nf) || !IsNumberFormat(nf)) && nf instanceof GetNumberFormatConstructor()) {
+        nf = nf[intlFallbackSymbol()];
+    }
+
+    // Step 2.
+    if (!IsObject(nf) || !IsNumberFormat(nf))
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "NumberFormat", methodName, "NumberFormat");
+
+    // Step 3.
+    return nf;
+}
+
+
+/**
+ * Applies digit options used for number formatting onto the intl object.
+ *
+ * Spec: ECMAScript Internationalization API Specification, 11.1.1.
+ */
+function SetNumberFormatDigitOptions(lazyData, options, mnfdDefault, mxfdDefault) {
+    // We skip Step 1 because we set the properties on a lazyData object.
+
+    // Step 2-3.
+    assert(IsObject(options), "SetNumberFormatDigitOptions");
+    assert(typeof mnfdDefault === "number", "SetNumberFormatDigitOptions");
+    assert(typeof mxfdDefault === "number", "SetNumberFormatDigitOptions");
+    assert(mnfdDefault <= mxfdDefault, "SetNumberFormatDigitOptions");
+
+    // Steps 4-6.
+    const mnid = GetNumberOption(options, "minimumIntegerDigits", 1, 21, 1);
+    const mnfd = GetNumberOption(options, "minimumFractionDigits", 0, 20, mnfdDefault);
+    const mxfdActualDefault = std_Math_max(mnfd, mxfdDefault);
+    const mxfd = GetNumberOption(options, "maximumFractionDigits", mnfd, 20, mxfdActualDefault);
+
+    // Steps 7-8.
+    let mnsd = options.minimumSignificantDigits;
+    let mxsd = options.maximumSignificantDigits;
+
+    // Steps 9-11.
+    lazyData.minimumIntegerDigits = mnid;
+    lazyData.minimumFractionDigits = mnfd;
+    lazyData.maximumFractionDigits = mxfd;
+
+    // Step 12.
+    if (mnsd !== undefined || mxsd !== undefined) {
+        mnsd = GetNumberOption(options, "minimumSignificantDigits", 1, 21, 1);
+        mxsd = GetNumberOption(options, "maximumSignificantDigits", mnsd, 21, 21);
+        lazyData.minimumSignificantDigits = mnsd;
+        lazyData.maximumSignificantDigits = mxsd;
+    }
+}
+
+
+/**
  * Initializes an object as a NumberFormat.
  *
  * This method is complicated a moderate bit by its implementing initialization
@@ -1848,15 +1877,12 @@ function getNumberFormatInternals(obj, methodName) {
  *
  * Spec: ECMAScript Internationalization API Specification, 11.1.1.
  */
-function InitializeNumberFormat(numberFormat, locales, options) {
-    assert(IsObject(numberFormat), "InitializeNumberFormat");
+function InitializeNumberFormat(numberFormat, thisValue, locales, options) {
+    assert(IsObject(numberFormat), "InitializeNumberFormat called with non-object");
+    assert(IsNumberFormat(numberFormat), "InitializeNumberFormat called with non-NumberFormat");
 
-    // Step 1.
-    if (isInitializedIntlObject(numberFormat))
-        ThrowTypeError(JSMSG_INTL_OBJECT_REINITED);
-
-    // Step 2.
-    var internals = initializeIntlObject(numberFormat);
+    // Steps 1-2 (These steps are no longer required and should be removed
+    // from the spec; https://github.com/tc39/ecma402/issues/115).
 
     // Lazy NumberFormat data has the following structure:
     //
@@ -1885,7 +1911,7 @@ function InitializeNumberFormat(numberFormat, locales, options) {
     //   }
     //
     // Note that lazy data is only installed as a final step of initialization,
-    // so every Collator lazy data object has *all* these properties, never a
+    // so every NumberFormat lazy data object has *all* these properties, never a
     // subset of them.
     var lazyNumberFormatData = std_Object_create(null);
 
@@ -1915,109 +1941,63 @@ function InitializeNumberFormat(numberFormat, locales, options) {
     opt.localeMatcher = matcher;
 
     // Compute formatting options.
-    // Step 15.
-    var s = GetOption(options, "style", "string", ["decimal", "percent", "currency"], "decimal");
-    lazyNumberFormatData.style = s;
+    // Step 14.
+    var style = GetOption(options, "style", "string", ["decimal", "percent", "currency"], "decimal");
+    lazyNumberFormatData.style = style;
 
-    // Steps 17-20.
+    // Steps 16-19.
     var c = GetOption(options, "currency", "string", undefined, undefined);
     if (c !== undefined && !IsWellFormedCurrencyCode(c))
         ThrowRangeError(JSMSG_INVALID_CURRENCY_CODE, c);
     var cDigits;
-    if (s === "currency") {
+    if (style === "currency") {
         if (c === undefined)
             ThrowTypeError(JSMSG_UNDEFINED_CURRENCY);
 
-        // Steps 20.a-c.
+        // Steps 19.a-c.
         c = toASCIIUpperCase(c);
         lazyNumberFormatData.currency = c;
         cDigits = CurrencyDigits(c);
     }
 
-    // Step 21.
+    // Step 20.
     var cd = GetOption(options, "currencyDisplay", "string", ["code", "symbol", "name"], "symbol");
-    if (s === "currency")
+    if (style === "currency")
         lazyNumberFormatData.currencyDisplay = cd;
 
-    // Step 23.
-    var mnid = GetNumberOption(options, "minimumIntegerDigits", 1, 21, 1);
-    lazyNumberFormatData.minimumIntegerDigits = mnid;
-
-    // Steps 25-26.
-    var mnfdDefault = (s === "currency") ? cDigits : 0;
-    var mnfd = GetNumberOption(options, "minimumFractionDigits", 0, 20, mnfdDefault);
-    lazyNumberFormatData.minimumFractionDigits = mnfd;
-
-    // Steps 28-29.
-    var mxfdDefault;
-    if (s === "currency")
-        mxfdDefault = std_Math_max(mnfd, cDigits);
-    else if (s === "percent")
-        mxfdDefault = std_Math_max(mnfd, 0);
-    else
-        mxfdDefault = std_Math_max(mnfd, 3);
-    var mxfd = GetNumberOption(options, "maximumFractionDigits", mnfd, 20, mxfdDefault);
-    lazyNumberFormatData.maximumFractionDigits = mxfd;
-
-    // Steps 31-32.
-    var mnsd = options.minimumSignificantDigits;
-    var mxsd = options.maximumSignificantDigits;
-
-    // Step 33.
-    if (mnsd !== undefined || mxsd !== undefined) {
-        mnsd = GetNumberOption(options, "minimumSignificantDigits", 1, 21, 1);
-        mxsd = GetNumberOption(options, "maximumSignificantDigits", mnsd, 21, 21);
-        lazyNumberFormatData.minimumSignificantDigits = mnsd;
-        lazyNumberFormatData.maximumSignificantDigits = mxsd;
+    // Steps 22-25.
+    var mnfdDefault, mxfdDefault;
+    if (style === "currency") {
+        mnfdDefault = cDigits;
+        mxfdDefault = cDigits;
+    } else {
+        mnfdDefault = 0;
+        mxfdDefault = style === "percent" ? 0 : 3;
     }
+    SetNumberFormatDigitOptions(lazyNumberFormatData, options, mnfdDefault, mxfdDefault);
 
-    // Step 34.
+    // Steps 26.
     var g = GetOption(options, "useGrouping", "boolean", undefined, true);
     lazyNumberFormatData.useGrouping = g;
 
-    // Step 43.
+    // Steps 35-36.
     //
     // We've done everything that must be done now: mark the lazy data as fully
     // computed and install it.
-    setLazyData(internals, "NumberFormat", lazyNumberFormatData);
+    initializeIntlObject(numberFormat, "NumberFormat", lazyNumberFormatData);
+
+    if (numberFormat !== thisValue && thisValue instanceof GetNumberFormatConstructor()) {
+        if (!IsObject(thisValue))
+            ThrowTypeError(JSMSG_NOT_NONNULL_OBJECT, typeof thisValue);
+
+        _DefineDataProperty(thisValue, intlFallbackSymbol(), numberFormat,
+                            ATTR_NONENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
+
+        return thisValue;
+    }
+
+    return numberFormat;
 }
-
-
-/**
- * Mapping from currency codes to the number of decimal digits used for them.
- * Default is 2 digits.
- *
- * Spec: ISO 4217 Currency and Funds Code List.
- * http://www.currency-iso.org/en/home/tables/table-a1.html
- */
-var currencyDigits = {
-    BHD: 3,
-    BIF: 0,
-    BYR: 0,
-    CLF: 4,
-    CLP: 0,
-    DJF: 0,
-    GNF: 0,
-    IQD: 3,
-    ISK: 0,
-    JOD: 3,
-    JPY: 0,
-    KMF: 0,
-    KRW: 0,
-    KWD: 3,
-    LYD: 3,
-    OMR: 3,
-    PYG: 0,
-    RWF: 0,
-    TND: 3,
-    UGX: 0,
-    UYI: 0,
-    VND: 0,
-    VUV: 0,
-    XAF: 0,
-    XOF: 0,
-    XPF: 0
-};
 
 
 /**
@@ -2101,7 +2081,7 @@ function numberFormatFormatToBind(value) {
 
     // Step 1.a.ii-iii.
     var x = ToNumber(value);
-    return intl_FormatNumber(this, x);
+    return intl_FormatNumber(this, x, /* formatToParts = */ false);
 }
 
 
@@ -2113,20 +2093,39 @@ function numberFormatFormatToBind(value) {
  * Spec: ECMAScript Internationalization API Specification, 11.3.2.
  */
 function Intl_NumberFormat_format_get() {
-    // Check "this NumberFormat object" per introduction of section 11.3.
-    var internals = getNumberFormatInternals(this, "format");
+    // Steps 1-3.
+    var nf = UnwrapNumberFormat(this, "format");
 
-    // Step 1.
+    var internals = getNumberFormatInternals(nf);
+
+    // Step 4.
     if (internals.boundFormat === undefined) {
-        // Step 1.a.
+        // Step 4.a.
         var F = numberFormatFormatToBind;
 
-        // Step 1.b-d.
-        var bf = callFunction(FunctionBind, F, this);
+        // Steps 4.b-d.
+        var bf = callFunction(FunctionBind, F, nf);
         internals.boundFormat = bf;
     }
-    // Step 2.
+
+    // Step 5.
     return internals.boundFormat;
+}
+_SetCanonicalName(Intl_NumberFormat_format_get, "get format");
+
+
+function Intl_NumberFormat_formatToParts(value) {
+    // Steps 1-3.
+    var nf = UnwrapNumberFormat(this, "formatToParts");
+
+    // Ensure the NumberFormat internals are resolved.
+    getNumberFormatInternals(nf);
+
+    // Step 4.
+    var x = ToNumber(value);
+
+    // Step 5.
+    return intl_FormatNumber(nf, x, /* formatToParts = */ true);
 }
 
 
@@ -2136,8 +2135,10 @@ function Intl_NumberFormat_format_get() {
  * Spec: ECMAScript Internationalization API Specification, 11.3.3 and 11.4.
  */
 function Intl_NumberFormat_resolvedOptions() {
-    // Check "this NumberFormat object" per introduction of section 11.3.
-    var internals = getNumberFormatInternals(this, "resolvedOptions");
+    // Invoke |UnwrapNumberFormat| per introduction of section 11.3.
+    var nf = UnwrapNumberFormat(this, "resolvedOptions");
+
+    var internals = getNumberFormatInternals(nf);
 
     var result = {
         locale: internals.locale,
@@ -2246,11 +2247,13 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
 
 
 /**
- * Returns an object containing the DateTimeFormat internal properties of |obj|,
- * or throws a TypeError if |obj| isn't DateTimeFormat-initialized.
+ * Returns an object containing the DateTimeFormat internal properties of |obj|.
  */
-function getDateTimeFormatInternals(obj, methodName) {
-    var internals = getIntlObjectInternals(obj, "DateTimeFormat", methodName);
+function getDateTimeFormatInternals(obj) {
+    assert(IsObject(obj), "getDateTimeFormatInternals called with non-object");
+    assert(IsDateTimeFormat(obj), "getDateTimeFormatInternals called with non-DateTimeFormat");
+
+    var internals = getIntlObjectInternals(obj);
     assert(internals.type === "DateTimeFormat", "bad type escaped getIntlObjectInternals");
 
     // If internal properties have already been computed, use them.
@@ -2264,25 +2267,27 @@ function getDateTimeFormatInternals(obj, methodName) {
     return internalProps;
 }
 
+
 /**
- * Components of date and time formats and their values.
- *
- * Spec: ECMAScript Internationalization API Specification, 12.1.1.
+ * UnwrapDateTimeFormat(dtf)
  */
-var dateTimeComponentValues = {
-    weekday: ["narrow", "short", "long"],
-    era: ["narrow", "short", "long"],
-    year: ["2-digit", "numeric"],
-    month: ["2-digit", "numeric", "narrow", "short", "long"],
-    day: ["2-digit", "numeric"],
-    hour: ["2-digit", "numeric"],
-    minute: ["2-digit", "numeric"],
-    second: ["2-digit", "numeric"],
-    timeZoneName: ["short", "long"]
-};
+function UnwrapDateTimeFormat(dtf, methodName) {
+    // Step 1.
+    if ((!IsObject(dtf) || !IsDateTimeFormat(dtf)) &&
+        dtf instanceof GetDateTimeFormatConstructor())
+    {
+        dtf = dtf[intlFallbackSymbol()];
+    }
 
+    // Step 2.
+    if (!IsObject(dtf) || !IsDateTimeFormat(dtf)) {
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "DateTimeFormat", methodName,
+                       "DateTimeFormat");
+    }
 
-var dateTimeComponents = std_Object_getOwnPropertyNames(dateTimeComponentValues);
+    // Step 3.
+    return dtf;
+}
 
 
 /**
@@ -2296,15 +2301,13 @@ var dateTimeComponents = std_Object_getOwnPropertyNames(dateTimeComponentValues)
  *
  * Spec: ECMAScript Internationalization API Specification, 12.1.1.
  */
-function InitializeDateTimeFormat(dateTimeFormat, locales, options) {
-    assert(IsObject(dateTimeFormat), "InitializeDateTimeFormat");
+function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options) {
+    assert(IsObject(dateTimeFormat), "InitializeDateTimeFormat called with non-Object");
+    assert(IsDateTimeFormat(dateTimeFormat),
+           "InitializeDateTimeFormat called with non-DateTimeFormat");
 
-    // Step 1.
-    if (isInitializedIntlObject(dateTimeFormat))
-        ThrowTypeError(JSMSG_INTL_OBJECT_REINITED);
-
-    // Step 2.
-    var internals = initializeIntlObject(dateTimeFormat);
+    // Steps 1-2 (These steps are no longer required and should be removed
+    // from the spec; https://github.com/tc39/ecma402/issues/115).
 
     // Lazy DateTimeFormat data has the following structure:
     //
@@ -2376,12 +2379,19 @@ function InitializeDateTimeFormat(dateTimeFormat, locales, options) {
     lazyDateTimeFormatData.formatOpt = formatOpt;
 
     // Step 19.
-    var i, prop;
-    for (i = 0; i < dateTimeComponents.length; i++) {
-        prop = dateTimeComponents[i];
-        var value = GetOption(options, prop, "string", dateTimeComponentValues[prop], undefined);
-        formatOpt[prop] = value;
-    }
+    // 12.1, Table 4: Components of date and time formats.
+    formatOpt.weekday = GetOption(options, "weekday", "string", ["narrow", "short", "long"],
+                                  undefined);
+    formatOpt.era = GetOption(options, "era", "string", ["narrow", "short", "long"], undefined);
+    formatOpt.year = GetOption(options, "year", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.month = GetOption(options, "month", "string",
+                                ["2-digit", "numeric", "narrow", "short", "long"], undefined);
+    formatOpt.day = GetOption(options, "day", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.hour = GetOption(options, "hour", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.minute = GetOption(options, "minute", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.second = GetOption(options, "second", "string", ["2-digit", "numeric"], undefined);
+    formatOpt.timeZoneName = GetOption(options, "timeZoneName", "string", ["short", "long"],
+                                       undefined);
 
     // Steps 20-21 provided by ICU - see comment after this function.
 
@@ -2408,7 +2418,19 @@ function InitializeDateTimeFormat(dateTimeFormat, locales, options) {
     //
     // We've done everything that must be done now: mark the lazy data as fully
     // computed and install it.
-    setLazyData(internals, "DateTimeFormat", lazyDateTimeFormatData);
+    initializeIntlObject(dateTimeFormat, "DateTimeFormat", lazyDateTimeFormatData);
+
+    if (dateTimeFormat !== thisValue && thisValue instanceof GetDateTimeFormatConstructor()) {
+        if (!IsObject(thisValue))
+            ThrowTypeError(JSMSG_NOT_NONNULL_OBJECT, typeof thisValue);
+
+        _DefineDataProperty(thisValue, intlFallbackSymbol(), dateTimeFormat,
+                            ATTR_NONENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
+
+        return thisValue;
+    }
+
+    return dateTimeFormat;
 }
 
 
@@ -2649,7 +2671,6 @@ function ToDateTimeOptions(options, required, defaults) {
     return options;
 }
 
-
 /**
  * Compares the date and time components requested by options with the available
  * date and time formats in formats, and selects the best match according
@@ -2808,7 +2829,7 @@ function dateTimeFormatFormatToBind() {
     var x = (date === undefined) ? std_Date_now() : ToNumber(date);
 
     // Step 1.a.iii.
-    return intl_FormatDateTime(this, x, false);
+    return intl_FormatDateTime(this, x, /* formatToParts = */ false);
 }
 
 /**
@@ -2819,34 +2840,40 @@ function dateTimeFormatFormatToBind() {
  * Spec: ECMAScript Internationalization API Specification, 12.3.2.
  */
 function Intl_DateTimeFormat_format_get() {
-    // Check "this DateTimeFormat object" per introduction of section 12.3.
-    var internals = getDateTimeFormatInternals(this, "format");
+    // Steps 1-3.
+    var dtf = UnwrapDateTimeFormat(this, "format");
 
-    // Step 1.
+    var internals = getDateTimeFormatInternals(dtf);
+
+    // Step 4.
     if (internals.boundFormat === undefined) {
-        // Step 1.a.
+        // Step 4.a.
         var F = dateTimeFormatFormatToBind;
 
-        // Step 1.b-d.
-        var bf = callFunction(FunctionBind, F, this);
+        // Steps 4.b-d.
+        var bf = callFunction(FunctionBind, F, dtf);
         internals.boundFormat = bf;
     }
 
-    // Step 2.
+    // Step 5.
     return internals.boundFormat;
 }
+_SetCanonicalName(Intl_DateTimeFormat_format_get, "get format");
 
 
 function Intl_DateTimeFormat_formatToParts() {
-    // Check "this DateTimeFormat object" per introduction of section 12.3.
-    getDateTimeFormatInternals(this, "formatToParts");
+    // Steps 1-3.
+    var dtf = UnwrapDateTimeFormat(this, "formatToParts");
 
-    // Steps 1.a.i-ii
+    // Ensure the DateTimeFormat internals are resolved.
+    getDateTimeFormatInternals(dtf);
+
+    // Steps 4-5.
     var date = arguments.length > 0 ? arguments[0] : undefined;
     var x = (date === undefined) ? std_Date_now() : ToNumber(date);
 
-    // Step 1.a.iii.
-    return intl_FormatDateTime(this, x, true);
+    // Step 6.
+    return intl_FormatDateTime(dtf, x, /* formatToParts = */ true);
 }
 
 
@@ -2856,8 +2883,10 @@ function Intl_DateTimeFormat_formatToParts() {
  * Spec: ECMAScript Internationalization API Specification, 12.3.3 and 12.4.
  */
 function Intl_DateTimeFormat_resolvedOptions() {
-    // Check "this DateTimeFormat object" per introduction of section 12.3.
-    var internals = getDateTimeFormatInternals(this, "resolvedOptions");
+    // Invoke |UnwrapDateTimeFormat| per introduction of section 12.3.
+    var dtf = UnwrapDateTimeFormat(this, "resolvedOptions");
+
+    var internals = getDateTimeFormatInternals(dtf);
 
     var result = {
         locale: internals.locale,
@@ -2970,45 +2999,322 @@ function resolveICUPattern(pattern, result) {
     }
 }
 
-function Intl_getCanonicalLocales(locales) {
-  let codes = CanonicalizeLocaleList(locales);
-  let result = [];
 
-  let len = codes.length;
-  let k = 0;
+/********** Intl.PluralRules **********/
 
-  while (k < len) {
-    _DefineDataProperty(result, k, codes[k]);
-    k++;
-  }
-  return result;
-}
 
-function Intl_getCalendarInfo(locales) {
-  const requestedLocales = CanonicalizeLocaleList(locales);
+/**
+ * PluralRules internal properties.
+ *
+ * Spec: ECMAScript 402 API, PluralRules, 1.3.3.
+ */
+var pluralRulesInternalProperties = {
+    _availableLocales: null,
+    availableLocales: function()
+    {
+        var locales = this._availableLocales;
+        if (locales)
+            return locales;
 
-  const DateTimeFormat = dateTimeFormatInternalProperties;
-  const localeData = DateTimeFormat.localeData;
+        locales = intl_PluralRules_availableLocales();
+        addSpecialMissingLanguageTags(locales);
+        return (this._availableLocales = locales);
+    }
+};
 
-  const localeOpt = new Record();
-  localeOpt.localeMatcher = "best fit";
+/**
+ * Compute an internal properties object from |lazyPluralRulesData|.
+ */
+function resolvePluralRulesInternals(lazyPluralRulesData) {
+    assert(IsObject(lazyPluralRulesData), "lazy data not an object?");
 
-  const r = ResolveLocale(callFunction(DateTimeFormat.availableLocales, DateTimeFormat),
-                          requestedLocales,
-                          localeOpt,
-                          DateTimeFormat.relevantExtensionKeys,
-                          localeData);
+    var internalProps = std_Object_create(null);
 
-  const result = intl_GetCalendarInfo(r.locale);
-  result.calendar = r.ca;
-  result.locale = r.locale;
+    var requestedLocales = lazyPluralRulesData.requestedLocales;
 
-  return result;
+    var PluralRules = pluralRulesInternalProperties;
+
+    // Step 13.
+    const r = ResolveLocale(callFunction(PluralRules.availableLocales, PluralRules),
+                          lazyPluralRulesData.requestedLocales,
+                          lazyPluralRulesData.opt,
+                          noRelevantExtensionKeys, undefined);
+
+    // Step 14.
+    internalProps.locale = r.locale;
+    internalProps.type = lazyPluralRulesData.type;
+
+    internalProps.pluralCategories = intl_GetPluralCategories(
+        internalProps.locale,
+        internalProps.type);
+
+    internalProps.minimumIntegerDigits = lazyPluralRulesData.minimumIntegerDigits;
+    internalProps.minimumFractionDigits = lazyPluralRulesData.minimumFractionDigits;
+    internalProps.maximumFractionDigits = lazyPluralRulesData.maximumFractionDigits;
+
+    if ("minimumSignificantDigits" in lazyPluralRulesData) {
+        assert("maximumSignificantDigits" in lazyPluralRulesData, "min/max sig digits mismatch");
+        internalProps.minimumSignificantDigits = lazyPluralRulesData.minimumSignificantDigits;
+        internalProps.maximumSignificantDigits = lazyPluralRulesData.maximumSignificantDigits;
+    }
+
+    return internalProps;
 }
 
 /**
- * This function is a custom method designed after Intl API, but currently
- * not part of the spec or spec proposal.
+ * Returns an object containing the PluralRules internal properties of |obj|.
+ */
+function getPluralRulesInternals(obj) {
+    assert(IsObject(obj), "getPluralRulesInternals called with non-object");
+    assert(IsPluralRules(obj), "getPluralRulesInternals called with non-PluralRules");
+
+    var internals = getIntlObjectInternals(obj);
+    assert(internals.type === "PluralRules", "bad type escaped getIntlObjectInternals");
+
+    var internalProps = maybeInternalProperties(internals);
+    if (internalProps)
+        return internalProps;
+
+    internalProps = resolvePluralRulesInternals(internals.lazyData);
+    setInternalProperties(internals, internalProps);
+    return internalProps;
+}
+
+/**
+ * Initializes an object as a PluralRules.
+ *
+ * This method is complicated a moderate bit by its implementing initialization
+ * as a *lazy* concept.  Everything that must happen now, does -- but we defer
+ * all the work we can until the object is actually used as a PluralRules.
+ * This later work occurs in |resolvePluralRulesInternals|; steps not noted
+ * here occur there.
+ *
+ * Spec: ECMAScript 402 API, PluralRules, 1.1.1.
+ */
+function InitializePluralRules(pluralRules, locales, options) {
+    assert(IsObject(pluralRules), "InitializePluralRules called with non-object");
+    assert(IsPluralRules(pluralRules), "InitializePluralRules called with non-PluralRules");
+
+    // Steps 1-2 (These steps are no longer required and should be removed
+    // from the spec; https://github.com/tc39/ecma402/issues/115).
+
+    // Lazy PluralRules data has the following structure:
+    //
+    //   {
+    //     requestedLocales: List of locales,
+    //     type: "cardinal" / "ordinal",
+    //
+    //     opt: // opt object computer in InitializePluralRules
+    //       {
+    //         localeMatcher: "lookup" / "best fit",
+    //       }
+    //
+    //     minimumIntegerDigits: integer ∈ [1, 21],
+    //     minimumFractionDigits: integer ∈ [0, 20],
+    //     maximumFractionDigits: integer ∈ [0, 20],
+    //
+    //     // optional
+    //     minimumSignificantDigits: integer ∈ [1, 21],
+    //     maximumSignificantDigits: integer ∈ [1, 21],
+    //   }
+    //
+    // Note that lazy data is only installed as a final step of initialization,
+    // so every PluralRules lazy data object has *all* these properties, never a
+    // subset of them.
+    const lazyPluralRulesData = std_Object_create(null);
+
+    // Step 3.
+    let requestedLocales = CanonicalizeLocaleList(locales);
+    lazyPluralRulesData.requestedLocales = requestedLocales;
+
+    // Steps 4-5.
+    if (options === undefined)
+        options = {};
+    else
+        options = ToObject(options);
+
+    // Step 6.
+    const type = GetOption(options, "type", "string", ["cardinal", "ordinal"], "cardinal");
+    lazyPluralRulesData.type = type;
+
+    // Step 8.
+    let opt = new Record();
+    lazyPluralRulesData.opt = opt;
+
+    // Steps 9-10.
+    let matcher = GetOption(options, "localeMatcher", "string", ["lookup", "best fit"], "best fit");
+    opt.localeMatcher = matcher;
+
+    // Steps 11-12.
+    SetNumberFormatDigitOptions(lazyPluralRulesData, options, 0, 3);
+
+    initializeIntlObject(pluralRules, "PluralRules", lazyPluralRulesData);
+}
+
+/**
+ * Returns the subset of the given locale list for which this locale list has a
+ * matching (possibly fallback) locale. Locales appear in the same order in the
+ * returned list as in the input list.
+ *
+ * Spec: ECMAScript 402 API, PluralRules, 1.3.2.
+ */
+function Intl_PluralRules_supportedLocalesOf(locales /*, options*/) {
+    var options = arguments.length > 1 ? arguments[1] : undefined;
+
+    // Step 1.
+    var availableLocales = callFunction(pluralRulesInternalProperties.availableLocales,
+                                        pluralRulesInternalProperties);
+    // Step 2.
+    let requestedLocales = CanonicalizeLocaleList(locales);
+
+    // Step 3.
+    return SupportedLocales(availableLocales, requestedLocales, options);
+}
+
+/**
+ * Returns a String value representing the plural category matching
+ * the number passed as value according to the
+ * effective locale and the formatting options of this PluralRules.
+ *
+ * Spec: ECMAScript 402 API, PluralRules, 1.4.3.
+ */
+function Intl_PluralRules_select(value) {
+    // Step 1.
+    let pluralRules = this;
+
+    // Step 2.
+    if (!IsObject(pluralRules) || !IsPluralRules(pluralRules))
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "PluralRules", "select", "PluralRules");
+
+    // Ensure the PluralRules internals are resolved.
+    getPluralRulesInternals(pluralRules);
+
+    // Steps 3-4.
+    let n = ToNumber(value);
+
+    // Step 5.
+    return intl_SelectPluralRule(pluralRules, n);
+}
+
+/**
+ * Returns the resolved options for a PluralRules object.
+ *
+ * Spec: ECMAScript 402 API, PluralRules, 1.4.4.
+ */
+function Intl_PluralRules_resolvedOptions() {
+    // Check "this PluralRules object" per introduction of section 1.4.
+    if (!IsObject(this) || !IsPluralRules(this)) {
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "PluralRules", "resolvedOptions",
+                       "PluralRules");
+    }
+
+    var internals = getPluralRulesInternals(this);
+
+    var result = {
+        locale: internals.locale,
+        type: internals.type,
+        pluralCategories: callFunction(std_Array_slice, internals.pluralCategories, 0),
+        minimumIntegerDigits: internals.minimumIntegerDigits,
+        minimumFractionDigits: internals.minimumFractionDigits,
+        maximumFractionDigits: internals.maximumFractionDigits,
+    };
+
+    var optionalProperties = [
+        "minimumSignificantDigits",
+        "maximumSignificantDigits"
+    ];
+
+    for (var i = 0; i < optionalProperties.length; i++) {
+        var p = optionalProperties[i];
+        if (callFunction(std_Object_hasOwnProperty, internals, p))
+            _DefineDataProperty(result, p, internals[p]);
+    }
+    return result;
+}
+
+
+/********** Intl **********/
+
+
+/**
+ * 8.2.1 Intl.getCanonicalLocales ( locales )
+ *
+ * ES2017 Intl draft rev 947aa9a0c853422824a0c9510d8f09be3eb416b9
+ */
+function Intl_getCanonicalLocales(locales) {
+    // Step 1.
+    var localeList = CanonicalizeLocaleList(locales);
+
+    // Step 2 (Inlined CreateArrayFromList).
+    var array = [];
+
+    for (var n = 0, len = localeList.length; n < len; n++)
+        _DefineDataProperty(array, n, localeList[n]);
+
+    return array;
+}
+
+/**
+ * This function is a custom function in the style of the standard Intl.*
+ * functions, that isn't part of any spec or proposal yet.
+ *
+ * Returns an object with the following properties:
+ *   locale:
+ *     The actual resolved locale.
+ *
+ *   calendar:
+ *     The default calendar of the resolved locale.
+ *
+ *   firstDayOfWeek:
+ *     The first day of the week for the resolved locale.
+ *
+ *   minDays:
+ *     The minimum number of days in a week for the resolved locale.
+ *
+ *   weekendStart:
+ *     The day considered the beginning of a weekend for the resolved locale.
+ *
+ *   weekendEnd:
+ *     The day considered the end of a weekend for the resolved locale.
+ *
+ * Days are encoded as integers in the range 1=Sunday to 7=Saturday.
+ */
+function Intl_getCalendarInfo(locales) {
+    // 1. Let requestLocales be ? CanonicalizeLocaleList(locales).
+    const requestedLocales = CanonicalizeLocaleList(locales);
+
+    const DateTimeFormat = dateTimeFormatInternalProperties;
+
+    // 2. Let localeData be %DateTimeFormat%.[[localeData]].
+    const localeData = DateTimeFormat.localeData;
+
+    // 3. Let localeOpt be a new Record.
+    const localeOpt = new Record();
+
+    // 4. Set localeOpt.[[localeMatcher]] to "best fit".
+    localeOpt.localeMatcher = "best fit";
+
+    // 5. Let r be ResolveLocale(%DateTimeFormat%.[[availableLocales]],
+    //    requestedLocales, localeOpt,
+    //    %DateTimeFormat%.[[relevantExtensionKeys]], localeData).
+    const r = ResolveLocale(callFunction(DateTimeFormat.availableLocales, DateTimeFormat),
+                            requestedLocales,
+                            localeOpt,
+                            DateTimeFormat.relevantExtensionKeys,
+                            localeData);
+
+    // 6. Let result be GetCalendarInfo(r.[[locale]]).
+    const result = intl_GetCalendarInfo(r.locale);
+    _DefineDataProperty(result, "calendar", r.ca);
+    _DefineDataProperty(result, "locale", r.locale);
+
+    // 7. Return result.
+    return result;
+}
+
+/**
+ * This function is a custom function in the style of the standard Intl.*
+ * functions, that isn't part of any spec or proposal yet.
  * We want to use it internally to retrieve translated values from CLDR in
  * order to ensure they're aligned with what Intl API returns.
  *
@@ -3054,8 +3360,9 @@ function Intl_getDisplayNames(locales, options) {
     // 4. Let localeData be %DateTimeFormat%.[[localeData]].
     const localeData = DateTimeFormat.localeData;
 
-    // 5. Let opt be a new Record.
+    // 5. Let localeOpt be a new Record.
     const localeOpt = new Record();
+
     // 6. Set localeOpt.[[localeMatcher]] to "best fit".
     localeOpt.localeMatcher = "best fit";
 
@@ -3069,6 +3376,7 @@ function Intl_getDisplayNames(locales, options) {
 
     // 8. Let style be ? GetOption(options, "style", "string", « "long", "short", "narrow" », "long").
     const style = GetOption(options, "style", "string", ["long", "short", "narrow"], "long");
+
     // 9. Let keys be ? Get(options, "keys").
     let keys = options.keys;
 
@@ -3087,8 +3395,10 @@ function Intl_getDisplayNames(locales, options) {
     // |intl_ComputeDisplayNames| may infallibly access the list's length via
     // |ArrayObject::length|.)
     let processedKeys = [];
+
     // 13. Let len be ? ToLength(? Get(keys, "length")).
     let len = ToLength(keys.length);
+
     // 14. Let i be 0.
     // 15. Repeat, while i < len
     for (let i = 0; i < len; i++) {

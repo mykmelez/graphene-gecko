@@ -321,6 +321,20 @@ int nr_ice_candidate_destroy(nr_ice_candidate **candp)
         break;
 #ifdef USE_TURN
       case RELAYED:
+        // record stats back to the ice ctx on destruction
+        if (cand->u.relayed.turn) {
+          nr_ice_accumulate_count(&(cand->ctx->stats.turn_401s), cand->u.relayed.turn->cnt_401s);
+          nr_ice_accumulate_count(&(cand->ctx->stats.turn_403s), cand->u.relayed.turn->cnt_403s);
+          nr_ice_accumulate_count(&(cand->ctx->stats.turn_438s), cand->u.relayed.turn->cnt_438s);
+
+          nr_turn_stun_ctx* stun_ctx;
+          stun_ctx = STAILQ_FIRST(&cand->u.relayed.turn->stun_ctxs);
+          while (stun_ctx) {
+            nr_ice_accumulate_count(&(cand->ctx->stats.stun_retransmits), stun_ctx->stun->retransmit_ct);
+
+            stun_ctx = STAILQ_NEXT(stun_ctx, entry);
+          }
+        }
         if (cand->u.relayed.turn_handle)
           nr_ice_socket_deregister(cand->isock, cand->u.relayed.turn_handle);
         if (cand->u.relayed.srvflx_candidate)
@@ -665,6 +679,14 @@ static int nr_ice_candidate_resolved_cb(void *cb_arg, nr_transport_addr *addr)
     /* Copy the address */
     if(r=nr_transport_addr_copy(&cand->stun_server_addr,addr))
       ABORT(r);
+
+    if (cand->stun_server->tls) {
+      /* Copy over the DNS name; needed for TLS. There is already a null at the
+       * end of the buffer, leave it there. */
+      strncpy(cand->stun_server_addr.tls_host,
+              cand->stun_server->u.dnsname.host,
+              sizeof(cand->stun_server_addr.tls_host) - 1);
+    }
 
     if (cand->tcp_type == TCP_TYPE_PASSIVE || cand->tcp_type == TCP_TYPE_SO){
       if (r=nr_socket_multi_tcp_stun_server_connect(cand->osock, addr))

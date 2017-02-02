@@ -174,9 +174,6 @@ public:
   virtual mozilla::ipc::IPCResult RecvReplyKeyEvent(const WidgetKeyboardEvent& aEvent) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvDispatchAfterKeyboardEvent(const WidgetKeyboardEvent& aEvent) override;
-
-  virtual mozilla::ipc::IPCResult
   RecvAccessKeyNotHandled(const WidgetKeyboardEvent& aEvent) override;
 
   virtual mozilla::ipc::IPCResult RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
@@ -371,6 +368,8 @@ public:
 
   void LoadURL(nsIURI* aURI);
 
+  void InitRenderFrame();
+
   // XXX/cjones: it's not clear what we gain by hiding these
   // message-sending functions under a layer of indirection and
   // eating the return values
@@ -455,17 +454,17 @@ public:
                     int32_t aCharCode, int32_t aModifiers,
                     bool aPreventDefault);
 
-  bool SendRealMouseEvent(mozilla::WidgetMouseEvent& event);
+  bool SendRealMouseEvent(mozilla::WidgetMouseEvent& aEvent);
 
   bool SendRealDragEvent(mozilla::WidgetDragEvent& aEvent,
                          uint32_t aDragAction,
                          uint32_t aDropEffect);
 
-  bool SendMouseWheelEvent(mozilla::WidgetWheelEvent& event);
+  bool SendMouseWheelEvent(mozilla::WidgetWheelEvent& aEvent);
 
-  bool SendRealKeyEvent(mozilla::WidgetKeyboardEvent& event);
+  bool SendRealKeyEvent(mozilla::WidgetKeyboardEvent& aEvent);
 
-  bool SendRealTouchEvent(WidgetTouchEvent& event);
+  bool SendRealTouchEvent(WidgetTouchEvent& aEvent);
 
   bool SendHandleTap(TapType aType,
                      const LayoutDevicePoint& aPoint,
@@ -513,9 +512,9 @@ public:
 
   bool HandleQueryContentEvent(mozilla::WidgetQueryContentEvent& aEvent);
 
-  bool SendCompositionEvent(mozilla::WidgetCompositionEvent& event);
+  bool SendCompositionEvent(mozilla::WidgetCompositionEvent& aEvent);
 
-  bool SendSelectionEvent(mozilla::WidgetSelectionEvent& event);
+  bool SendSelectionEvent(mozilla::WidgetSelectionEvent& aEvent);
 
   bool SendPasteTransferable(const IPCDataTransfer& aDataTransfer,
                              const bool& aIsPrivateData,
@@ -772,12 +771,6 @@ private:
   // If this flag is set, then the tab's layers will be preserved even when
   // the tab's docshell is inactive.
   bool mPreserveLayers;
-
-  // Normally we call ForceTabPaint when activating a tab. But we don't do this
-  // the first time we activate a tab. The tab is probably busy running the
-  // initial content scripts and we don't want to force painting then; they're
-  // probably quick and there's some cost to forcing painting.
-  bool mFirstActivate;
 
 public:
   static TabParent* GetTabParentFromLayersId(uint64_t aLayersId);

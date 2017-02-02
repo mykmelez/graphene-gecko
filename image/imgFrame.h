@@ -257,7 +257,8 @@ public:
   void SetRawAccessOnly();
 
   bool Draw(gfxContext* aContext, const ImageRegion& aRegion,
-            SamplingFilter aSamplingFilter, uint32_t aImageFlags);
+            SamplingFilter aSamplingFilter, uint32_t aImageFlags,
+            float aOpacity);
 
   nsresult ImageUpdated(const nsIntRect& aUpdateRect);
 
@@ -351,7 +352,6 @@ private: // methods
 
   nsresult LockImageData();
   nsresult UnlockImageData();
-  bool     CanOptimizeOpaqueImage();
   nsresult Optimize(gfx::DrawTarget* aTarget);
 
   void AssertImageDataLocked() const;
@@ -414,7 +414,6 @@ private: // data
   Maybe<IntRect> mBlendRect;
   SurfaceFormat  mFormat;
 
-  bool mHasNoAlpha;
   bool mAborted;
   bool mFinished;
   bool mOptimizable;
