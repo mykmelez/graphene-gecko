@@ -10,3 +10,10 @@ cd graphene-gecko
 ./mach build
 ./mach run https://mykmelez.github.io/browserhtml/
 ```
+
+Note that the following pref must be set for Browser API.
+
+```
+user_pref("dom.mozBrowserFramesEnabledForContent", true);
+```
+
